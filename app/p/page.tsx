@@ -36,10 +36,12 @@ function ProductInner() {
   return (
     <main className="px-6 py-10">
       <div className="mx-auto grid w-full max-w-4xl gap-8 sm:grid-cols-2">
-        <div className="aspect-square overflow-hidden rounded-2xl bg-stone-100">
+        {/* 3:4 — the shape of the product photography, so the whole shot shows
+            here even though the catalogue grid crops it square. */}
+        <div className="aspect-[3/4] overflow-hidden rounded-2xl bg-stone-100">
           {p.image_key ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={imageUrl(p.image_key)} alt={p.name} className="h-full w-full object-cover" />
+            <img src={imageUrl(p.image_key)} alt={p.name} className="h-full w-full object-cover object-top" />
           ) : (
             <div className="flex h-full items-center justify-center text-3xl font-bold tracking-widest text-stone-300">ELFIA</div>
           )}

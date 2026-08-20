@@ -1,9 +1,9 @@
-elfia-store v0.4.0 — 43 files
+elfia-store v0.5.0 — 53 files
 
-CHANGELOG.md	4674
-DEPLOY.bat	2430
-FILE-MANIFEST.txt	1152
-README.md	1116
+CHANGELOG.md	6804
+DEPLOY.bat	2720
+FILE-MANIFEST.txt	1707
+README.md	1429
 app/admin/page.tsx	18368
 app/cart/page.tsx	4639
 app/checkout/page.tsx	4094
@@ -11,18 +11,27 @@ app/globals.css	210
 app/icon.png	2280
 app/layout.tsx	2495
 app/order/page.tsx	8502
-app/p/page.tsx	3736
-app/page.tsx	6969
+app/p/page.tsx	3897
+app/page.tsx	7060
 app/policies/page.tsx	2251
-lib/config.ts	4240
+lib/config.ts	4458
 next-env.d.ts	262
 next.config.ts	222
 package.json	456
 postcss.config.mjs	94
 public/_headers	112
-public/collection/active.jpg	133773
-public/collection/collection.jpg	115540
-public/collection/corporate.jpg	101134
+public/collection/bawal-aurora.jpg	96593
+public/collection/bawal-dawn-blue.jpg	92463
+public/collection/bawal-dusty-rose.jpg	103160
+public/collection/bawal-lavender.jpg	101374
+public/collection/bawal-mauve-floral.jpg	109597
+public/collection/bawal-midnight-gold.jpg	104140
+public/collection/bawal-navy-gold.jpg	121288
+public/collection/bawal-olive-floral.jpg	136523
+public/collection/bawal-periwinkle.jpg	91912
+public/collection/bawal-silver-grey.jpg	93507
+public/collection/campaign-salon.jpg	216660
+public/collection/campaign-studio.jpg	131140
 public/collection/shawl-beige.jpg	87213
 public/collection/shawl-grey-back.jpg	50265
 public/collection/shawl-grey-front.jpg	90261
@@ -38,6 +47,7 @@ worker/migrations/0001_init.sql	1410
 worker/migrations/0002_collections.sql	1748
 worker/migrations/0003_billplz.sql	232
 worker/migrations/0004_all_bawal.sql	735
+worker/migrations/0005_bawal_range.sql	4349
 worker/package.json	358
 worker/src/billplz.ts	4277
 worker/src/index.ts	28071

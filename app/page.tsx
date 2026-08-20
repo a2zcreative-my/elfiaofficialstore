@@ -14,7 +14,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { BRAND_SLIDES, CATEGORIES, fmtRM, imageUrl, type Product } from "@/lib/config";
 
-interface Slide { image: string; title: string; subtitle: string; href?: string }
+interface Slide { image: string; title: string; subtitle: string; href?: string; position?: string }
 
 function Carousel({ slides }: { slides: Slide[] }) {
   const [idx, setIdx] = useState(0);
@@ -36,9 +36,11 @@ function Carousel({ slides }: { slides: Slide[] }) {
       <div className="flex transition-transform duration-700 ease-out" style={{ transform: `translateX(-${idx * 100}%)` }}>
         {slides.map((s, i) => {
           const inner = (
-            <div className="relative aspect-[16/10] w-full sm:aspect-[21/9]">
+            <div className="relative aspect-[16/10] w-full sm:aspect-[16/9]">
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={s.image} alt={s.title} className="h-full w-full object-cover object-top" loading={i === 0 ? "eager" : "lazy"} />
+              <img src={s.image} alt={s.title} className="h-full w-full object-cover"
+                style={{ objectPosition: s.position ?? "50% 0%" }}
+                loading={i === 0 ? "eager" : "lazy"} />
               <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/10 to-transparent" />
               <div className="absolute bottom-5 left-5 right-5 sm:bottom-8 sm:left-8">
                 <p className="text-xl font-bold text-white sm:text-3xl">{s.title}</p>

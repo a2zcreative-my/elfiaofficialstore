@@ -35,11 +35,15 @@ export const CATEGORIES = [
 ] as const;
 
 /* Hero carousel brand slides — the CEO's campaign shots, shipped with the
-   site. Featured products (admin toggle) are appended after these. */
+   site. Featured products (admin toggle) are appended after these.
+
+   `position` is the CSS object-position for the slide's crop. The campaign
+   shots are portrait group photos: cropped from the top they would show mostly
+   ceiling, so they sit lower in frame. Product slides keep the default "top",
+   which is where the hijab is. */
 export const BRAND_SLIDES = [
-  { image: "/collection/collection.jpg", title: "The Bawal Collection", subtitle: "Four shades. One standard." },
-  { image: "/collection/corporate.jpg", title: "Made for every day", subtitle: "Office-ready, live-tested." },
-  { image: "/collection/active.jpg", title: "Move freely", subtitle: "Light, breathable, opaque." },
+  { image: "/collection/campaign-studio.jpg", title: "The Bawal Collection", subtitle: "Ten shades. One standard.", position: "50% 45%" },
+  { image: "/collection/campaign-salon.jpg", title: "Made for every day", subtitle: "Office-ready, live-tested.", position: "50% 38%" },
 ] as const;
 
 export interface StoreConfig {

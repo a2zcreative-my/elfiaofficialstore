@@ -1,5 +1,37 @@
 # ELFIA OFFICIAL STORE — changelog
 
+## [0.5.0] — 20-08-2026 — the ten-piece Bawal range
+
+The CEO's new photo pack replaces the first one outright: ten Bawal designs
+shot individually plus two group campaign shots.
+
+- **LUMI001–LUMI010 are the catalogue now** (migration 0005). Named by colour
+  to stay easy to reconcile against the A2Zcreative stock list:
+  Dusty Rose, Periwinkle, Lavender, Silver Grey, Pastel Aurora, Dawn Blue
+  (RM 49) and Navy Gold, Midnight Gold, Olive Floral, Mauve Floral (RM 59 —
+  the four printed gold-line and floral designs). Dusty Rose, Pastel Aurora,
+  Navy Gold and Mauve Floral are ★ Featured, so they ride the hero carousel.
+- ⚠ **STOCK IS 0 ON EVERY DESIGN — the shop reads "Sold out" until you fix
+  that.** Deliberate: nothing can be oversold before the counts are real.
+  Open /admin → Products and type the numbers, or press "Sync stock from
+  portal" to pull them from A2Zcreative by SKU. Do this before announcing.
+- **The old placeholder rows are retired, not deleted** — set to hidden, and
+  their LUMI001–LUMI004 codes released so no two rows share a code (the
+  portal sync matches by SKU and must never see a duplicate). Scoped to rows
+  still carrying a first-pack photo (`/collection/shawl-*.jpg`): if you had
+  replaced a photo in /admin, that row is yours and is untouched. Hidden rows
+  can be restored or deleted by hand in /admin → Products.
+- **Two new hero slides** — the studio group shot and the salon group shot —
+  replace the three first-pack campaign slides, which are removed from the
+  build. Portrait group photos crop badly from the top (all ceiling), so each
+  brand slide now carries its own crop position. The first pack's *product*
+  photos stay in `public/collection/` (~460 KB) so a retired row still renders
+  if you unhide it; delete them once you are sure none will come back.
+- **Product pages show the whole photo.** The detail image is 3:4, the shape
+  of the photography, instead of a square centre-crop that clipped the top of
+  the hijab. The catalogue grid stays square for tidy rows.
+- Prices are live, not placeholders, for the first time. Stock is not.
+
 ## [0.4.0] — 20-08-2026 — the real logo, all-Bawal photos, and portal stock sync
 
 - **The ELFIA wordmark** (CEO's file) now heads every page and the footer,

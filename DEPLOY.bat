@@ -2,7 +2,7 @@
 setlocal EnableExtensions
 REM ============================================================
 REM  ELFIA OFFICIAL STORE - full deploy (site + API + database)
-REM  Version 0.3.0
+REM  Version 0.5.0
 REM
 REM  ONE-TIME before the first run:
 REM    1. wrangler login
@@ -57,6 +57,11 @@ echo Expect: "ok":true, "admin_key_configured":true, "bank_line_configured":true
 echo ============================================================
 echo   DEPLOY COMPLETE - elfiaofficialstore.my
 echo ============================================================
+echo.
+echo   v0.5.0 NOTE: the ten new Bawal designs ship with STOCK = 0, so the
+echo   whole shop reads "Sold out" until you set the counts. Open /admin
+echo   -^> Products and either type the real numbers or press
+echo   "Sync stock from portal" to pull them from A2Zcreative by SKU.
 goto :eof
 
 :fail
