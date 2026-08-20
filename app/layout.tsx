@@ -3,7 +3,7 @@ import Link from "next/link";
 
 import { STORE } from "@/lib/config";
 
-import { SiteHeader, WhatsAppButton } from "./chrome";
+import { ScrollTopButton, SiteHeader, WhatsAppButton } from "./chrome";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -28,6 +28,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <SiteHeader />
         {children}
         <WhatsAppButton />
+        <ScrollTopButton />
         <footer className="mt-24 border-t border-stone-200 bg-white px-6 py-12">
           <div className="mx-auto w-full max-w-5xl text-center">
             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -37,6 +38,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </p>
             <div className="mt-5 flex items-center justify-center gap-5 text-xs text-stone-500">
               <Link href="/" className="hover:text-[#7a2648]">Shop</Link>
+              <span className="text-stone-300">·</span>
+              <Link href="/track" className="hover:text-[#7a2648]">Track order</Link>
               <span className="text-stone-300">·</span>
               <Link href="/policies" className="hover:text-[#7a2648]">Delivery &amp; returns</Link>
               <span className="text-stone-300">·</span>

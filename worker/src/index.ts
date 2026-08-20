@@ -23,7 +23,10 @@
  * Stage B (Billplz FPX — the CEO's chosen gateway) lives in billplz.ts and
  * stays inert until both secrets exist — see that file's header.
  */
-import { billplzConfigured, billplzCreateBill, billplzVerifyPaid } from "./billplz";
+import { billplzCheck, billplzConfigured, billplzCreateBill, billplzVerifyPaid } from "./billplz";
+import {
+  flushStockEvents, getState, pullConfigured, pushConfigured, recordStockEvents, syncNow,
+} from "./portal";
 
 export interface Env {
   DB: D1Database;
@@ -42,11 +45,14 @@ export interface Env {
       repo); BRIDGE_KEY is a secret, same value as the portal side. Both
       unset = the Sync button reports "not configured" and nothing else. */
   BRIDGE_URL?: string;
+  /** v0.8.0 — where stock MOVEMENTS are posted back (store → portal), so a
+      web sale reaches the portal instead of only the other way round. */
+  BRIDGE_PUSH_URL?: string;
   BRIDGE_KEY?: string;
   STORE_ORIGIN?: string;     // override for local testing
 }
 
-const VERSION = "0.6.0";
+const VERSION = "0.9.0";
 const STATUSES = ["pending_payment", "payment_review", "paid", "shipped", "completed", "cancelled"] as const;
 type Status = (typeof STATUSES)[number];
 
@@ -111,6 +117,29 @@ async function orderNumber(env: Env): Promise<string> {
   return `ELF-${day.slice(6, 8)}${day.slice(4, 6)}${day.slice(2, 4)}-${row?.counter ?? 1}`;
 }
 
+/** v0.9.0 — one row per movement in an order's life. Written for EVERY
+    transition, including the ones the system makes on its own (a receipt
+    upload, an FPX payment verified against Billplz), because a history with
+    gaps is not a history. Never edited, never deleted. */
+async function recordOrderEvent(env: Env, orderId: number, status: string, note: string | null): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO order_events (order_id, status, note) VALUES (?1, ?2, ?3)`,
+  ).bind(orderId, status, note).run().catch(() => null); // pre-0009: no history, order still moves
+}
+
+/** Malaysian couriers the shop actually uses, so "Shipped" carries a working
+    link instead of a number the customer must paste somewhere themselves.
+    Anything not listed shows the number alone — a wrong link is worse than
+    none. */
+const COURIERS: Record<string, { label: string; url: (n: string) => string }> = {
+  jnt:      { label: "J&T Express", url: (n) => `https://www.jtexpress.my/tracking?billcode=${encodeURIComponent(n)}` },
+  ninjavan: { label: "Ninja Van",   url: (n) => `https://www.ninjavan.co/en-my/tracking?id=${encodeURIComponent(n)}` },
+  poslaju:  { label: "Pos Laju",    url: (n) => `https://track.pos.com.my/postal-services/quick-access/?track-trace=${encodeURIComponent(n)}` },
+  dhl:      { label: "DHL",         url: (n) => `https://www.dhl.com/my-en/home/tracking.html?tracking-id=${encodeURIComponent(n)}` },
+  flash:    { label: "Flash Express", url: (n) => `https://www.flashexpress.my/fle/tracking?se=${encodeURIComponent(n)}` },
+  citylink: { label: "City-Link",   url: (n) => `https://www.citylinkexpress.com/tracking-result/?track=${encodeURIComponent(n)}` },
+};
+
 interface OrderRow {
   id: number; order_number: string; token: string; customer_name: string; phone: string;
   address: string; email: string | null; notes: string | null; items: string;
@@ -120,7 +149,15 @@ interface OrderRow {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  /* v0.8.0 — the inventory sync runs on a schedule (see [triggers] in
+     wrangler.toml), not only when someone presses a button in /admin.
+     Deliver outstanding sales first, then refresh counts: pulling before
+     pushing would read numbers the portal computed without our sales. */
+  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(syncNow(env).then(() => undefined));
+  },
+
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname.replace(/^\/api\/v1/, "");
     const method = request.method;
@@ -137,7 +174,8 @@ export default {
         admin_key_configured: Boolean(env.ADMIN_KEY),
         bank_line_configured: !cfg.bank_line.startsWith("REPLACE"),
         gateway_configured: cfg.gateway,
-        bridge_configured: Boolean(env.BRIDGE_URL && env.BRIDGE_KEY && !env.BRIDGE_URL.startsWith("REPLACE")),
+        bridge_pull_configured: pullConfigured(env),
+        bridge_push_configured: pushConfigured(env),
       });
     }
 
@@ -149,7 +187,7 @@ export default {
       let results: Record<string, unknown>[];
       try {
         results = (await env.DB.prepare(
-          `SELECT id, name, description, price_cents, stock, image_key, active, sort, sku, category, featured
+          `SELECT id, name, description, price_cents, stock, image_key, active, sort, sku, category, featured, track_stock
            FROM products WHERE active = 1 ORDER BY sort, id DESC LIMIT 200`,
         ).all()).results;
       } catch {
@@ -166,7 +204,7 @@ export default {
       let product: unknown;
       try {
         product = await env.DB.prepare(
-          `SELECT id, name, description, price_cents, stock, image_key, active, sort, sku, category, featured
+          `SELECT id, name, description, price_cents, stock, image_key, active, sort, sku, category, featured, track_stock
            FROM products WHERE id = ?1 AND active = 1`,
         ).bind(prodMatch[1]).first();
       } catch {
@@ -247,16 +285,32 @@ export default {
 
       // Price from the database — never from the request.
       const ids = [...wanted.keys()];
-      const { results } = await env.DB.prepare(
-        `SELECT id, name, price_cents, stock FROM products
-         WHERE active = 1 AND id IN (${ids.map((_, i) => `?${i + 1}`).join(",")})`,
-      ).bind(...ids).all<{ id: number; name: string; price_cents: number; stock: number }>();
+      const placeholders = ids.map((_, i) => `?${i + 1}`).join(",");
+      type Line = { id: number; name: string; price_cents: number; stock: number; track_stock?: number; sku?: string | null };
+      let results: Line[];
+      try {
+        results = (await env.DB.prepare(
+          `SELECT id, name, price_cents, stock, track_stock, sku FROM products
+           WHERE active = 1 AND id IN (${placeholders})`,
+        ).bind(...ids).all<Line>()).results;
+      } catch {
+        // pre-0007 schema: everything counts stock, same as before.
+        results = (await env.DB.prepare(
+          `SELECT id, name, price_cents, stock, sku FROM products
+           WHERE active = 1 AND id IN (${placeholders})`,
+        ).bind(...ids).all<Line>()).results;
+      }
       if (results.length !== wanted.size) return err("invalid_input", "A product in your cart is no longer available — refresh and try again", 409);
 
-      // Reserve stock line by line; compensate on any miss.
+      /* Reserve stock line by line; compensate on any miss.
+         v0.7.0: a product with track_stock = 0 is "always available" — its
+         count is not maintained, so decrementing it would invent a shortage.
+         Those lines skip the reservation entirely and are never compensated,
+         which is why `taken` records only the tracked ones. */
       const taken: { id: number; qty: number }[] = [];
       for (const p of results) {
         const qty = wanted.get(p.id)!;
+        if ((p.track_stock ?? 1) === 0) continue;
         const res = await env.DB.prepare(
           `UPDATE products SET stock = stock - ?1 WHERE id = ?2 AND stock >= ?1`,
         ).bind(qty, p.id).run();
@@ -286,22 +340,97 @@ export default {
         JSON.stringify(items), subtotal, shipping, subtotal + shipping,
       ).run();
 
+      const created = await env.DB.prepare(`SELECT id FROM orders WHERE token = ?1`).bind(token).first<{ id: number }>();
+      if (created) await recordOrderEvent(env, created.id, "pending_payment", "Order placed");
+
+      /* v0.8.0 — tell the portal these pieces left the shelf. Written to the
+         outbox synchronously (so a crash between here and delivery loses
+         nothing) and delivered on the way out, without making the customer
+         wait for the portal to answer. Recorded for EVERY line, including
+         always-available ones: the store does not count its own pieces, but
+         the portal still needs to know they sold. */
+      await recordStockEvents(env, results.map((p) => ({ sku: p.sku, qty: wanted.get(p.id)! })), "order", number);
+      ctx.waitUntil(flushStockEvents(env).then(() => undefined));
+
       return json({ token, order_number: number }, 201);
     }
 
     /* ---- the customer's own order (token = auth) ---- */
     const tokMatch = path.match(/^\/orders\/([a-f0-9]{32})$/);
     if (tokMatch && method === "GET") {
-      const o = await env.DB.prepare(`SELECT * FROM orders WHERE token = ?1`).bind(tokMatch[1]).first<OrderRow>();
+      const o = await env.DB.prepare(`SELECT * FROM orders WHERE token = ?1`)
+        .bind(tokMatch[1]).first<OrderRow & { tracking_courier?: string | null }>();
       if (!o) return err("not_found", "Order not found", 404);
+      /* v0.9.0 — the order's own history, oldest first, so the page can show
+         WHEN each step happened rather than only which one is current. */
+      const { results: events } = await env.DB.prepare(
+        `SELECT status, note, created_at FROM order_events WHERE order_id = ?1 ORDER BY created_at, id`,
+      ).bind(o.id).all<{ status: string; note: string | null; created_at: string }>()
+        .catch(() => ({ results: [] as { status: string; note: string | null; created_at: string }[] }));
+      const courier = o.tracking_courier && COURIERS[o.tracking_courier] ? COURIERS[o.tracking_courier]! : null;
       return json({
         order_number: o.order_number, status: o.status,
         customer_name: o.customer_name, phone: o.phone, address: o.address,
         items: JSON.parse(o.items) as unknown[],
         subtotal_cents: o.subtotal_cents, shipping_cents: o.shipping_cents, total_cents: o.total_cents,
         receipt_uploaded: Boolean(o.receipt_key), tracking_no: o.tracking_no,
+        tracking_courier: courier?.label ?? null,
+        tracking_url: courier && o.tracking_no ? courier.url(o.tracking_no) : null,
+        events,
         created_at: o.created_at, config: storeConfig(env),
       });
+    }
+
+    /* ---- "Track my order" (v0.9.0) ----
+       Most customers lose the link from checkout. Order number + the phone
+       they gave finds it again.
+
+       This is a guessing surface — ELF-DDMMYY-1, -2, -3 is a sequence — so:
+         * the phone must match too, compared on digits alone (0123456789,
+           +60 12-345 6789 and 60123456789 are the same person);
+         * a wrong number and a wrong order number produce the SAME answer,
+           so nobody can use it to learn how many orders the shop has;
+         * eight misses in fifteen minutes and that IP is turned away. */
+    if (path === "/orders/lookup" && method === "POST") {
+      const origin = request.headers.get("Origin");
+      if (origin && !ALLOWED_ORIGINS.has(origin) && origin !== env.STORE_ORIGIN) {
+        return err("forbidden", "Bad origin", 403);
+      }
+      const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
+      const gate = await env.DB.prepare(
+        `SELECT fails, window_start FROM lookup_attempts WHERE ip = ?1`,
+      ).bind(ip).first<{ fails: number; window_start: string }>().catch(() => null);
+      const fresh = gate && (Date.now() - Date.parse(`${gate.window_start.replace(" ", "T")}Z`)) < 15 * 60 * 1000;
+      if (fresh && gate!.fails >= 8) {
+        return err("too_many", "Too many attempts — wait fifteen minutes, or WhatsApp us and we will find your order.", 429);
+      }
+
+      const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
+      const number = str(body?.order_number, 40)?.toUpperCase().trim() ?? "";
+      const phone = (str(body?.phone, 40) ?? "").replace(/\D/g, "");
+      const miss = async (): Promise<Response> => {
+        await env.DB.prepare(
+          `INSERT INTO lookup_attempts (ip, fails, window_start) VALUES (?1, 1, datetime('now'))
+           ON CONFLICT(ip) DO UPDATE SET
+             fails = CASE WHEN ?2 THEN lookup_attempts.fails + 1 ELSE 1 END,
+             window_start = CASE WHEN ?2 THEN lookup_attempts.window_start ELSE datetime('now') END`,
+        ).bind(ip, fresh ? 1 : 0).run().catch(() => null);
+        // Deliberately identical whether the order number exists or not.
+        return err("not_found", "We could not find that order. Check the order number and the phone number you used at checkout.", 404);
+      };
+      if (!number || phone.length < 9) return miss();
+
+      const o = await env.DB.prepare(`SELECT token, phone FROM orders WHERE order_number = ?1`)
+        .bind(number).first<{ token: string; phone: string }>();
+      if (!o) return miss();
+      const stored = o.phone.replace(/\D/g, "");
+      // Compare the last 9 digits: the same number written with or without
+      // the 60 country code must still match.
+      const same = stored.slice(-9) === phone.slice(-9) && phone.slice(-9).length === 9;
+      if (!same) return miss();
+
+      await env.DB.prepare(`DELETE FROM lookup_attempts WHERE ip = ?1`).bind(ip).run().catch(() => null);
+      return json({ token: o.token });
     }
 
     const rcptMatch = path.match(/^\/orders\/([a-f0-9]{32})\/receipt$/);
@@ -327,6 +456,7 @@ export default {
       await env.DB.prepare(
         `UPDATE orders SET receipt_key = ?1, status = 'payment_review', updated_at = datetime('now') WHERE id = ?2`,
       ).bind(key, o.id).run();
+      await recordOrderEvent(env, o.id, "payment_review", "Receipt uploaded — we are checking it");
       return json({ ok: true }, 201);
     }
 
@@ -352,6 +482,32 @@ export default {
       return json({ url: bill.url });
     }
 
+    /* v0.7.0 — the customer's own "did my payment land?" check.
+       Billplz redirects the payer back to /order?t=… immediately, but the
+       server-to-server callback can arrive a moment later (or get lost). The
+       order page calls this a few times after a redirect; it re-queries
+       Billplz with our secret — the same authenticated read the callback
+       uses — so the answer is never taken from the browser's URL. Safe to
+       call at any time: it can only move an unpaid order to paid. */
+    const verifyMatch = path.match(/^\/orders\/([a-f0-9]{32})\/verify-payment$/);
+    if (verifyMatch && method === "POST") {
+      const o = await env.DB.prepare(`SELECT * FROM orders WHERE token = ?1`).bind(verifyMatch[1]).first<OrderRow & { bill_id?: string | null }>();
+      if (!o) return err("not_found", "Order not found", 404);
+      if (o.status !== "pending_payment" && o.status !== "payment_review") {
+        return json({ status: o.status, paid: o.status !== "cancelled" });
+      }
+      if (!billplzConfigured(env) || !o.bill_id) return json({ status: o.status, paid: false });
+      if (await billplzVerifyPaid(env, o.bill_id)) {
+        await env.DB.prepare(
+          `UPDATE orders SET status = 'paid', payment_method = 'fpx', updated_at = datetime('now')
+           WHERE id = ?1 AND status IN ('pending_payment', 'payment_review')`,
+        ).bind(o.id).run();
+        await recordOrderEvent(env, o.id, "paid", "Paid online (FPX) — confirmed with the bank");
+        return json({ status: "paid", paid: true });
+      }
+      return json({ status: o.status, paid: false });
+    }
+
     if (path === "/payments/billplz/callback" && (method === "POST" || method === "GET")) {
       if (!billplzConfigured(env)) return err("not_configured", "Not enabled", 501);
       /* NEVER trust callback parameters. Billplz POSTs billplz[id],
@@ -366,6 +522,10 @@ export default {
           `UPDATE orders SET status = 'paid', payment_method = 'fpx', updated_at = datetime('now')
            WHERE bill_id = ?1 AND status IN ('pending_payment', 'payment_review')`,
         ).bind(billId).run().catch(() => null);
+        if (res && res.meta.changes > 0) {
+          const paidRow = await env.DB.prepare(`SELECT id FROM orders WHERE bill_id = ?1`).bind(billId).first<{ id: number }>();
+          if (paidRow) await recordOrderEvent(env, paidRow.id, "paid", "Paid online (FPX) — confirmed with the bank");
+        }
         if (!res || res.meta.changes === 0) {
           /* pre-0003 schema or bill created before the column existed: fall
              back to the order number Billplz echoes back in reference_1 —
@@ -376,6 +536,8 @@ export default {
               `UPDATE orders SET status = 'paid', payment_method = 'fpx', updated_at = datetime('now')
                WHERE order_number = ?1 AND status IN ('pending_payment', 'payment_review')`,
             ).bind(ref).run();
+            const refRow = await env.DB.prepare(`SELECT id FROM orders WHERE order_number = ?1`).bind(ref).first<{ id: number }>();
+            if (refRow) await recordOrderEvent(env, refRow.id, "paid", "Paid online (FPX) — confirmed with the bank");
           }
         }
       }
@@ -398,11 +560,12 @@ export default {
         if (!name || !Number.isFinite(price) || price <= 0) return err("invalid_input", "name and a positive price_cents are required", 400);
         const category = body?.category === "shawl" ? "shawl" : "bawal";
         const res = await env.DB.prepare(
-          `INSERT INTO products (name, description, price_cents, stock, active, sort, sku, category, featured)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) RETURNING id`,
+          `INSERT INTO products (name, description, price_cents, stock, active, sort, sku, category, featured, track_stock)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) RETURNING id`,
         ).bind(name, str(body?.description, 2000), price, Math.max(0, stock),
                body?.active === false ? 0 : 1, Math.round(Number(body?.sort ?? 100)),
-               str(body?.sku, 40), category, body?.featured ? 1 : 0).first<{ id: number }>();
+               str(body?.sku, 40), category, body?.featured ? 1 : 0,
+               body?.track_stock === false || body?.track_stock === 0 ? 0 : 1).first<{ id: number }>();
         return json({ id: res?.id }, 201);
       }
       const adminProd = path.match(/^\/admin\/products\/(\d+)$/);
@@ -419,6 +582,8 @@ export default {
         if (body?.sku !== undefined) push("sku", str(body.sku, 40));
         if (body?.category !== undefined) push("category", body.category === "shawl" ? "shawl" : "bawal");
         if (body?.featured !== undefined) push("featured", body.featured ? 1 : 0);
+        /* v0.7.0 — 0 = always available (stock ignored), 1 = count pieces. */
+        if (body?.track_stock !== undefined) push("track_stock", body.track_stock ? 1 : 0);
         if (sets.length === 0) return err("invalid_input", "Nothing to update", 400);
         await env.DB.prepare(`UPDATE products SET ${sets.join(", ")} WHERE id = ?${sets.length + 1}`)
           .bind(...vals, adminProd[1]!).run();
@@ -459,6 +624,12 @@ export default {
         return json({ ok: true });
       }
 
+      /* v0.7.0 — prove the gateway credentials without spending money.
+         Read-only: reads the collection, creates no bill. */
+      if (path === "/admin/billplz-test" && method === "POST") {
+        return json(await billplzCheck(env));
+      }
+
       if (path === "/admin/orders" && method === "GET") {
         const status = url.searchParams.get("status");
         const stmt = status && (STATUSES as readonly string[]).includes(status)
@@ -469,7 +640,7 @@ export default {
       }
 
       /* v0.4.0 (CEO: "how to update all the inventory to match with
-         inventory in A2Zcreative??"): PULL stock from the agency portal's
+         inventory in the portal??"): PULL stock from the agency portal's
          read-only bridge and update matching products BY SKU. Deliberate
          properties:
            - STOCK ONLY. Prices, names, photos, categories stay the store's
@@ -483,37 +654,46 @@ export default {
              portal's count is the truth (e.g. after a stocktake), not while
              a live session is actively selling. */
       if (path === "/admin/sync-stock" && method === "POST") {
-        if (!env.BRIDGE_URL || !env.BRIDGE_KEY || env.BRIDGE_URL.startsWith("REPLACE")) {
-          return err("not_configured", "Set BRIDGE_URL (wrangler.toml) and the BRIDGE_KEY secret first — see README", 501);
-        }
-        let items: { sku: string; name: string; stock: number }[];
-        try {
-          const r = await fetch(env.BRIDGE_URL, { headers: { "X-Bridge-Key": env.BRIDGE_KEY } });
-          if (!r.ok) return err("bridge_error", `Portal answered ${r.status} — check the key matches on both sides`, 502);
-          items = ((await r.json()) as { items: typeof items }).items ?? [];
-        } catch {
-          return err("bridge_error", "Could not reach the portal bridge", 502);
-        }
-        const { results: mine } = await env.DB.prepare(
-          `SELECT id, sku, stock FROM products WHERE sku IS NOT NULL`,
-        ).all<{ id: number; sku: string; stock: number }>();
-        const bySku = new Map(mine.map((m) => [m.sku.toUpperCase(), m]));
-        const updated: { sku: string; from: number; to: number }[] = [];
-        const unmatched_portal: string[] = [];
-        for (const it of items) {
-          const sku = String(it.sku ?? "").toUpperCase();
-          const stock = Math.max(0, Math.round(Number(it.stock)));
-          const m = sku ? bySku.get(sku) : undefined;
-          if (!m || !Number.isFinite(stock)) { if (sku) unmatched_portal.push(sku); continue; }
-          if (m.stock !== stock) {
-            await env.DB.prepare(`UPDATE products SET stock = ?1 WHERE id = ?2`).bind(stock, m.id).run();
-            updated.push({ sku: m.sku, from: m.stock, to: stock });
-          }
-          bySku.delete(sku);
-        }
-        const unmatched_store = [...bySku.values()].map((m) => m.sku);
-        return json({ updated, unchanged: items.length - updated.length - unmatched_portal.length,
-                      unmatched_portal, unmatched_store });
+        const r = await syncNow(env);
+        const status = r.pull.configured || r.push.configured ? 200 : 501;
+        return json(r, status);
+      }
+
+      /* v0.8.0 — is the sync actually alive? Unsent movements and the last
+         pull time are the two numbers that tell you the two systems still
+         agree; a sync that fails quietly is worse than no sync at all. */
+      if (path === "/admin/sync-status" && method === "GET") {
+        const state = await getState(env);
+        const row = await env.DB.prepare(
+          `SELECT COUNT(*) AS pending,
+                  SUM(CASE WHEN attempts >= 25 THEN 1 ELSE 0 END) AS stuck,
+                  MIN(created_at) AS oldest
+           FROM stock_events WHERE sent_at IS NULL`,
+        ).first<{ pending: number; stuck: number | null; oldest: string | null }>().catch(() => null);
+        const { results: recent } = await env.DB.prepare(
+          `SELECT sku, delta, reason, order_number, created_at, sent_at, attempts, last_error
+           FROM stock_events ORDER BY created_at DESC LIMIT 20`,
+        ).all().catch(() => ({ results: [] as unknown[] }));
+        return json({
+          pull_configured: pullConfigured(env),
+          push_configured: pushConfigured(env),
+          pending: row?.pending ?? 0,
+          stuck: row?.stuck ?? 0,
+          oldest_unsent: row?.oldest ?? null,
+          last_pull_at: state.last_pull_at ?? null,
+          last_pull_result: state.last_pull_result ?? null,
+          last_push_at: state.last_push_at ?? null,
+          last_push_error: state.last_push_error || null,
+          recent,
+        });
+      }
+
+      /* Give a stuck movement another go — after the SKU has been corrected
+         on one side or the other. It resets the attempt count, never the
+         event itself: the piece still moved. */
+      if (path === "/admin/sync-retry" && method === "POST") {
+        await env.DB.prepare(`UPDATE stock_events SET attempts = 0, last_error = NULL WHERE sent_at IS NULL`).run();
+        return json(await flushStockEvents(env));
       }
 
       const adminRcpt = path.match(/^\/admin\/orders\/(\d+)\/receipt$/);
@@ -548,17 +728,49 @@ export default {
             return err("invalid_input", `Cannot ${action} an order that is ${o.status}. Paid orders are refunded manually (WhatsApp), never silently cancelled.`, 409);
           }
           if (action === "cancel") {
-            // The order never got paid — its reservation goes back on the shelf.
+            /* The order never got paid — its reservation goes back on the
+               shelf. `track_stock = 1` mirrors checkout: an always-available
+               line never reserved anything, so putting stock back would
+               invent pieces that were never taken. */
             const items = JSON.parse(o.items) as { product_id: number; qty: number }[];
             for (const it of items) {
-              await env.DB.prepare(`UPDATE products SET stock = stock + ?1 WHERE id = ?2`).bind(it.qty, it.product_id).run();
+              await env.DB.prepare(`UPDATE products SET stock = stock + ?1 WHERE id = ?2 AND track_stock = 1`)
+                .bind(it.qty, it.product_id).run()
+                .catch(() => env.DB.prepare(`UPDATE products SET stock = stock + ?1 WHERE id = ?2`)
+                  .bind(it.qty, it.product_id).run()); // pre-0007 schema
             }
+            /* …and tell the portal the pieces came back, mirroring the
+               movement the order sent. SKUs are read now rather than from the
+               order snapshot, because a code can be corrected in /admin
+               between the order and the cancellation. */
+            const { results: skus } = await env.DB.prepare(
+              `SELECT id, sku FROM products WHERE id IN (${items.map((_, i) => `?${i + 1}`).join(",")})`,
+            ).bind(...items.map((it) => it.product_id)).all<{ id: number; sku: string | null }>();
+            await recordStockEvents(
+              env,
+              items.map((it) => ({ sku: skus.find((p) => p.id === it.product_id)?.sku, qty: it.qty })),
+              "cancel", o.order_number,
+            );
+            ctx.waitUntil(flushStockEvents(env).then(() => undefined));
           }
           const tracking = action === "ship" ? str(body?.tracking_no, 60) : null;
+          const courierKey = action === "ship" ? str(body?.tracking_courier, 20) : null;
+          const courier = courierKey && COURIERS[courierKey] ? courierKey : null;
           await env.DB.prepare(
             `UPDATE orders SET status = ?1, payment_method = COALESCE(payment_method, ?2),
                     tracking_no = COALESCE(?3, tracking_no), updated_at = datetime('now') WHERE id = ?4`,
           ).bind(mv.to, action === "confirm_paid" ? "bank_transfer" : null, tracking, o.id).run();
+          if (courier) {
+            await env.DB.prepare(`UPDATE orders SET tracking_courier = ?1 WHERE id = ?2`)
+              .bind(courier, o.id).run().catch(() => null); // pre-0009
+          }
+          const NOTES: Record<string, string> = {
+            confirm_paid: "Payment confirmed — we are packing your order",
+            ship: tracking ? `Handed to the courier — tracking ${tracking}` : "Handed to the courier",
+            complete: "Delivered",
+            cancel: "Order cancelled",
+          };
+          await recordOrderEvent(env, o.id, mv.to, NOTES[action] ?? null);
           return json({ ok: true, status: mv.to });
         }
         if (body?.admin_notes !== undefined) {

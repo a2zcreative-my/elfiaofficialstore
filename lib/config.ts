@@ -27,7 +27,24 @@ export interface Product {
   sku?: string | null;
   category?: string;
   featured?: number;
+  /* v0.7.0 — 0 = always available (the stock number is ignored and the
+     product never reads Sold out); 1 = count pieces. Absent on a worker
+     deployed ahead of migration 0007, where everything counted. */
+  track_stock?: number;
 }
+
+/** The single answer to "can this be bought right now?". Everything on the
+    storefront asks this rather than testing `stock <= 0` on its own — that
+    was the bug the CEO hit: ten in-stock designs all reading Sold out
+    because their counts were never filled in. */
+export const isSoldOut = (p: Product): boolean => (p.track_stock ?? 1) === 1 && p.stock <= 0;
+
+/** Show "only N left" only when N is a number somebody maintains. */
+export const lowStock = (p: Product): number | null =>
+  (p.track_stock ?? 1) === 1 && p.stock > 0 && p.stock <= 5 ? p.stock : null;
+
+/** Quantity ceiling for the pickers. Always-available products cap at 99. */
+export const maxQty = (p: Product): number => ((p.track_stock ?? 1) === 1 ? Math.min(99, p.stock) : 99);
 
 export const CATEGORIES = [
   { key: "bawal", label: "Bawal" },
@@ -54,6 +71,12 @@ export interface StoreConfig {
   gateway: boolean; // Stage B: true once the Billplz secrets are configured
 }
 
+export interface OrderEvent {
+  status: string;
+  note: string | null;
+  created_at: string;
+}
+
 export interface OrderView {
   order_number: string;
   status: string;
@@ -66,9 +89,26 @@ export interface OrderView {
   total_cents: number;
   receipt_uploaded: boolean;
   tracking_no: string | null;
+  /* v0.9.0 — progress. `events` is the order's own history, oldest first;
+     tracking_url is only present when the courier is one we have a link for. */
+  tracking_courier?: string | null;
+  tracking_url?: string | null;
+  events?: OrderEvent[];
   created_at: string;
   config: StoreConfig;
 }
+
+/** "20-08-2026 13:04" from the Worker's "2026-08-20 13:04:11" (UTC). Shown in
+    Malaysian time, because that is where every customer of this shop is. */
+export const fmtWhen = (iso: string | null | undefined): string => {
+  if (!iso) return "";
+  const t = Date.parse(iso.includes("T") ? iso : `${iso.replace(" ", "T")}Z`);
+  if (Number.isNaN(t)) return iso;
+  return new Date(t).toLocaleString("en-MY", {
+    timeZone: "Asia/Kuala_Lumpur", day: "2-digit", month: "short",
+    hour: "2-digit", minute: "2-digit", hour12: true,
+  });
+};
 
 export const fmtRM = (cents: number): string =>
   `RM ${(cents / 100).toLocaleString("en-MY", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -116,6 +156,7 @@ export const cartCount = (): number => readCart().reduce((n, l) => n + l.qty, 0)
 /* ---- navigation ---- */
 export const NAV_LINKS = [
   { href: "/", label: "Shop" },
+  { href: "/track", label: "Track order" },
   { href: "/policies", label: "Delivery & returns" },
 ] as const;
 

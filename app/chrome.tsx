@@ -138,6 +138,31 @@ export function SiteHeader() {
   );
 }
 
+/**
+ * Back-to-top button (v0.7.0, CEO: "I want to have a scroll up button same as
+ * A2Z"). Appears after a screen and a half of scrolling and sits above the
+ * WhatsApp bubble so the two never overlap.
+ */
+export function ScrollTopButton() {
+  const [show, setShow] = useState(false);
+  useEffect(() => {
+    const onScroll = () => setShow(window.scrollY > 600);
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+  return (
+    <button type="button" aria-label="Back to top" aria-hidden={!show} tabIndex={show ? 0 : -1}
+      onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+      className={`fixed right-4 bottom-22 z-40 flex h-12 w-12 items-center justify-center rounded-full border border-stone-200 bg-white text-[#7a2648] shadow-lg shadow-black/10 transition-all duration-200 hover:bg-stone-50 sm:right-6 sm:bottom-24 ${
+        show ? "translate-y-0 opacity-100" : "pointer-events-none translate-y-2 opacity-0"}`}>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M12 19V5" /><path d="m5 12 7-7 7 7" />
+      </svg>
+    </button>
+  );
+}
+
 /** The floating WhatsApp bubble. Hidden until a real number is configured —
     a bubble that opens a chat with 60000000000 is worse than no bubble. */
 export function WhatsAppButton() {

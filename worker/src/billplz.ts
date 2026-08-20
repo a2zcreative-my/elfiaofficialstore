@@ -77,6 +77,42 @@ export async function billplzCreateBill(
   }
 }
 
+/**
+ * v0.7.0 — credential check for /admin, so the gateway can be proved BEFORE a
+ * customer meets it. Reads the configured collection with the secret key:
+ *   200 → key and collection both good
+ *   401 → wrong secret key (or a sandbox key against production, or vice versa)
+ *   404 → key fine, collection id wrong for this account
+ * Read-only. It creates nothing, charges nothing and moves no money.
+ */
+export async function billplzCheck(env: Env): Promise<{ ok: boolean; status: number; sandbox: boolean; message: string }> {
+  const sandbox = env.BILLPLZ_SANDBOX === "1";
+  if (!billplzConfigured(env)) {
+    return { ok: false, status: 0, sandbox, message: "BILLPLZ_SECRET and BILLPLZ_COLLECTION are not both set — run `wrangler secret put` for each, then redeploy." };
+  }
+  try {
+    const r = await fetch(`${base(env)}/collections/${encodeURIComponent(env.BILLPLZ_COLLECTION!)}`, {
+      headers: { Authorization: authHeader(env) },
+    });
+    if (r.ok) {
+      const j = (await r.json()) as { title?: string; status?: string };
+      return {
+        ok: true, status: r.status, sandbox,
+        message: `Connected to the ${sandbox ? "SANDBOX" : "LIVE"} collection "${j.title ?? env.BILLPLZ_COLLECTION}"${j.status ? ` (${j.status})` : ""}.`,
+      };
+    }
+    if (r.status === 401) {
+      return { ok: false, status: 401, sandbox, message: `Billplz rejected the API Secret Key. Check it was copied whole, and that it is a ${sandbox ? "billplz-sandbox.com" : "billplz.com"} key — sandbox and live accounts are separate.` };
+    }
+    if (r.status === 404) {
+      return { ok: false, status: 404, sandbox, message: "The key works but that Collection ID does not exist in this account. Copy the id from the collection's page in the Billplz dashboard." };
+    }
+    return { ok: false, status: r.status, sandbox, message: `Billplz answered ${r.status}. Try again in a moment.` };
+  } catch {
+    return { ok: false, status: 0, sandbox, message: "Could not reach Billplz at all — network problem on their side or ours." };
+  }
+}
+
 /** Ask Billplz directly (authenticated) whether this bill is paid. */
 export async function billplzVerifyPaid(env: Env, billId: string): Promise<boolean> {
   // Bill ids are short alphanumerics — refuse anything else before it goes

@@ -9,7 +9,7 @@ import { join } from "node:path";
 const SKIP = new Set(["node_modules", ".next", "out", ".git", ".wrangler", "tests"]);
 const EXT = /\.(ts|tsx|js|mjs|css|sql|toml|json|md|bat|html)$/;
 const FORBIDDEN = [
-  [/A2Z\s+CREATIVE/i, "agency identity"],
+  [/A2Z\s*CREATIVE/i, "agency identity"],
   [/AZ\s?ONE\s+OFFICIAL/i, "consultancy identity"],
   [/202603003468|CA0414729/i, "agency registration"],
   [/202603168673|JM1046169/i, "consultancy registration"],

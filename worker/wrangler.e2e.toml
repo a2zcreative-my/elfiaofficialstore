@@ -1,27 +1,25 @@
+# LOCAL TEST CONFIG ONLY — never deployed. See scratch/store-sync-test.mjs.
 name = "elfia-api"
 main = "src/index.ts"
 compatibility_date = "2026-08-01"
 
-routes = [
-  { pattern = "elfiaofficialstore.my/api/*", zone_name = "elfiaofficialstore.my" },
-  { pattern = "www.elfiaofficialstore.my/api/*", zone_name = "elfiaofficialstore.my" },
-]
 
 # ---- store facts (public, safe in this file) ----
 # EDIT THESE before the first deploy:
 [vars]
-BANK_LINE = "REPLACE — e.g. MAYBANK 1234 5678 9012 — ELFIA"
-WHATSAPP_DIGITS = "60000000000"
+BANK_LINE = "MAYBANK 1234 5678 9012 — ELFIA"
+WHATSAPP_DIGITS = "60123456789"
 SHIPPING_CENTS = "1000"        # RM 10 flat
 FREE_ABOVE_CENTS = "15000"     # free delivery from RM 150
+STORE_ORIGIN = "http://127.0.0.1:8100"
 # Stock sync with the agency portal — paste the two bridge endpoints here.
 # Both live on the portal; see PORTAL-BRIDGE-SPEC.md for the contract.
 #   BRIDGE_URL       GET  — the portal's live inventory feed  (portal -> store)
 #   BRIDGE_PUSH_URL  POST — where this store reports its sales (store -> portal)
 # e.g. "https://<the portal domain>/api/v1/bridge/elfia-inventory"
 #      "https://<the portal domain>/api/v1/bridge/elfia-movements"
-BRIDGE_URL = "REPLACE — portal inventory feed URL"
-BRIDGE_PUSH_URL = "REPLACE — portal movements endpoint URL"
+BRIDGE_URL = "http://127.0.0.1:8200/bridge/elfia-inventory"
+BRIDGE_PUSH_URL = "http://127.0.0.1:8200/bridge/elfia-movements"
 
 # v0.8.0 — the inventory sync runs by itself every 5 minutes: it delivers any
 # sales the portal has not seen yet, then refreshes counts from the portal.
@@ -35,7 +33,7 @@ binding = "DB"
 database_name = "elfia-store"
 # ONE-TIME SETUP: run `wrangler d1 create elfia-store` and paste the
 # database_id it prints below.
-database_id = "d1e1bb9f-1360-417e-8932-0c9009f5115c"
+database_id = "local-e2e-test"
 
 [[r2_buckets]]
 binding = "MEDIA"

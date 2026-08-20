@@ -1,22 +1,106 @@
 "use client";
 
 /** Order page — /order?t=<token>. The token is the customer's key: shown
-    once after checkout and safe to bookmark. Bank details + WhatsApp +
-    receipt upload while unpaid; a live status timeline all the way. */
+    once after checkout, safe to bookmark, and findable again at /track.
+    Bank details + WhatsApp + receipt upload while unpaid; a progress
+    timeline all the way.
+
+    v0.9.0 — the timeline used to show WHICH step the order was on. It now
+    shows WHEN each step happened, from the order's own history
+    (`order_events`), plus a courier tracking link once it ships. A step with
+    no recorded time is drawn as still to come, never given a made-up one. */
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
-import { btnClass, fmtRM, type OrderView } from "@/lib/config";
+import Link from "next/link";
+
+import { btnClass, fmtRM, fmtWhen, type OrderEvent, type OrderView } from "@/lib/config";
 
 const STEPS = ["pending_payment", "payment_review", "paid", "shipped", "completed"] as const;
 const STEP_LABEL: Record<string, string> = {
-  pending_payment: "Awaiting payment",
+  pending_payment: "Order placed",
   payment_review: "Receipt received — checking",
   paid: "Payment confirmed",
   shipped: "Shipped",
   completed: "Delivered",
   cancelled: "Cancelled",
 };
+/** What the customer should expect next, per step. */
+const STEP_HINT: Record<string, string> = {
+  pending_payment: "Pay and upload your receipt below.",
+  payment_review: "We check receipts by hand, usually within a few hours.",
+  paid: "We are packing your order.",
+  shipped: "On its way to you.",
+  completed: "We hope you love it.",
+};
+
+/** The progress display. Steps the order has actually reached carry the time
+    they happened; the rest are drawn grey and empty. */
+function Progress({ order }: { order: OrderView }) {
+  const events: OrderEvent[] = order.events ?? [];
+  const firstAt = (status: string): OrderEvent | undefined => events.find((e) => e.status === status);
+  const stepIndex = STEPS.indexOf(order.status as (typeof STEPS)[number]);
+  /* payment_review is skipped entirely when someone pays online, so a paid
+     order should not show it half-lit as though something is outstanding. */
+  const shown = STEPS.filter((s) => s !== "payment_review" || firstAt(s) || order.status === "payment_review");
+  const doneCount = shown.filter((s) => STEPS.indexOf(s) <= stepIndex).length;
+  const pct = shown.length > 1 ? ((doneCount - 1) / (shown.length - 1)) * 100 : 0;
+
+  return (
+    <div className="rounded-2xl border border-stone-200 bg-white p-5">
+      <div className="mb-5 h-1.5 w-full overflow-hidden rounded-full bg-stone-100">
+        <div className="h-full rounded-full bg-[#7a2648] transition-all duration-700"
+          style={{ width: `${Math.max(0, Math.min(100, pct))}%` }} />
+      </div>
+      <ol className="space-y-4">
+        {shown.map((s, n) => {
+          const idx = STEPS.indexOf(s);
+          const reached = idx <= stepIndex;
+          const current = idx === stepIndex;
+          const ev = firstAt(s);
+          return (
+            <li key={s} className="flex gap-3">
+              {/* Numbered by position in what is SHOWN, not by index in the
+                  full list — a paid order that skipped "receipt received"
+                  must not count 1, 2, 4. */}
+              <span className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-bold ${
+                reached ? "bg-[#7a2648] text-white" : "bg-stone-100 text-stone-400"}`}>
+                {idx < stepIndex ? "✓" : n + 1}
+              </span>
+              <div className="min-w-0">
+                <p className={`text-sm ${current ? "font-bold text-[#7a2648]" : reached ? "font-semibold text-stone-800" : "text-stone-400"}`}>
+                  {STEP_LABEL[s]}
+                </p>
+                {ev && (
+                  <p className="text-xs text-stone-500">
+                    {fmtWhen(ev.created_at)}
+                    {/* the note only earns its place when it says something the
+                        label does not */}
+                    {ev.note && ev.note !== STEP_LABEL[s] ? ` · ${ev.note}` : ""}
+                  </p>
+                )}
+                {current && <p className="mt-0.5 text-xs text-stone-500">{STEP_HINT[s]}</p>}
+                {s === "shipped" && reached && order.tracking_no && (
+                  <p className="mt-1 text-xs">
+                    <span className="font-mono font-semibold text-stone-700">{order.tracking_no}</span>
+                    {order.tracking_courier && <span className="text-stone-500"> · {order.tracking_courier}</span>}
+                    {order.tracking_url && (
+                      <>
+                        {" "}
+                        <a href={order.tracking_url} target="_blank" rel="noopener noreferrer"
+                          className="font-semibold text-[#7a2648] underline">track parcel</a>
+                      </>
+                    )}
+                  </p>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
+}
 
 function OrderInner() {
   const params = useSearchParams();
@@ -33,6 +117,40 @@ function OrderInner() {
   }, [token]);
 
   useEffect(() => { void load(); }, [load]);
+
+  /* v0.7.0 — close the gap after an FPX payment. Billplz sends the payer
+     straight back here while its server-to-server callback is still in
+     flight (and that callback can be lost entirely). So we ask OUR worker to
+     re-check with Billplz: the answer comes from an authenticated read of the
+     bill, never from these URL parameters, which anyone could forge.
+     Returning from a payment (billplz[id] in the URL) polls for ~15s;
+     otherwise a single check on load is enough. */
+  const returnedFromGateway = params.has("billplz[id]") || params.has("billplz[paid]");
+  const [checking, setChecking] = useState(false);
+  useEffect(() => {
+    if (!token || order === null || order === "missing") return;
+    if (order.status !== "pending_payment" && order.status !== "payment_review") return;
+    if (!order.config.gateway) return;
+    let cancelled = false;
+    let attempts = 0;
+    const max = returnedFromGateway ? 6 : 1;
+    setChecking(returnedFromGateway);
+    const tick = async () => {
+      if (cancelled) return;
+      attempts += 1;
+      try {
+        const r = await fetch(`/api/v1/orders/${encodeURIComponent(token)}/verify-payment`, { method: "POST" });
+        const j = (await r.json()) as { paid?: boolean };
+        if (j.paid) { setChecking(false); void load(); return; }
+      } catch { /* offline — try again or give up quietly */ }
+      if (attempts >= max) { setChecking(false); return; }
+      setTimeout(() => void tick(), 3000);
+    };
+    void tick();
+    return () => { cancelled = true; };
+    // Runs once per status change; `load` is stable via useCallback.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, order === null || order === "missing" ? order : order.status]);
 
   /* Stage B (Billplz): visible only when the worker reports gateway:true.
      One tap -> the worker creates the bill -> the customer lands on
@@ -70,7 +188,6 @@ function OrderInner() {
     return <main className="px-6 py-16 text-center text-sm text-stone-500">Order not found — check the link from your checkout or WhatsApp us.</main>;
   }
 
-  const stepIndex = STEPS.indexOf(order.status as (typeof STEPS)[number]);
   const cancelled = order.status === "cancelled";
   const awaitingPayment = order.status === "pending_payment" || order.status === "payment_review";
   const waText = encodeURIComponent(`Hi ELFIA! My order ${order.order_number} — `);
@@ -81,30 +198,37 @@ function OrderInner() {
         <p className="text-xs font-semibold tracking-widest text-stone-400 uppercase">Order</p>
         <h1 className="text-2xl font-bold text-[#7a2648]">{order.order_number}</h1>
 
-        {/* status timeline */}
-        <div className="mt-5 rounded-xl border border-stone-200 bg-white p-4">
+        {(order.status === "paid" || order.status === "shipped" || order.status === "completed") && (
+          <div className="mt-4 rounded-xl border border-green-200 bg-green-50 p-4">
+            <p className="text-sm font-semibold text-green-900">Payment confirmed — thank you!</p>
+            <p className="mt-1 text-xs text-green-800">
+              {order.status === "completed" ? "Delivered. We hope you love it."
+                : order.status === "shipped" ? `On its way${order.tracking_no ? ` — tracking ${order.tracking_no}` : ""}.`
+                : "We're packing your order now. You'll get a tracking number on WhatsApp."}
+            </p>
+          </div>
+        )}
+
+        {/* progress */}
+        <div className="mt-5">
           {cancelled ? (
-            <p className="text-sm font-semibold text-red-700">This order was cancelled. WhatsApp us if that is unexpected.</p>
+            <div className="rounded-2xl border border-red-200 bg-red-50 p-5">
+              <p className="text-sm font-semibold text-red-800">This order was cancelled.</p>
+              <p className="mt-1 text-xs text-red-700">WhatsApp us if that is unexpected — we can place it again.</p>
+            </div>
           ) : (
-            <ol className="space-y-2">
-              {STEPS.map((s, i) => (
-                <li key={s} className="flex items-center gap-2.5 text-sm">
-                  <span className={`flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold ${i <= stepIndex ? "bg-[#7a2648] text-white" : "bg-stone-200 text-stone-400"}`}>
-                    {i < stepIndex ? "✓" : i + 1}
-                  </span>
-                  <span className={i <= stepIndex ? "font-semibold" : "text-stone-400"}>{STEP_LABEL[s]}</span>
-                  {s === "shipped" && order.tracking_no && i <= stepIndex && (
-                    <span className="text-xs text-stone-500">· tracking {order.tracking_no}</span>
-                  )}
-                </li>
-              ))}
-            </ol>
+            <Progress order={order} />
           )}
         </div>
 
         {/* payment instructions */}
         {awaitingPayment && !cancelled && (
           <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4">
+            {checking && (
+              <p className="mb-3 rounded-lg bg-white px-3 py-2 text-xs font-medium text-stone-600">
+                Checking your payment with the bank… this page updates by itself.
+              </p>
+            )}
             <p className="text-sm font-semibold text-amber-900">How to pay</p>
             {order.config.gateway && (
               <div className="mt-3">

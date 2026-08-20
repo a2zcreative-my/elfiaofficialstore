@@ -8,7 +8,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import {
-  btnClass, btnGhost, fmtRM, imageUrl, readCart, splitName, writeCart,
+  btnClass, fmtRM, imageUrl, maxQty, readCart, splitName, writeCart,
   type CartLine, type Product, type StoreConfig,
 } from "@/lib/config";
 
@@ -83,14 +83,14 @@ export default function Cart() {
                   {series && <p className="text-[10px] tracking-[0.15em] text-stone-400 uppercase">{product.sku ?? series}</p>}
                   <Link href={`/p?id=${product.id}`} className="block truncate text-sm font-medium hover:text-[#7a2648]">{shade}</Link>
                   <p className="text-sm font-bold text-[#7a2648]">{fmtRM(product.price_cents)}</p>
-                  {line.qty > product.stock && (
-                    <p className="text-xs font-medium text-red-600">Only {product.stock} in stock — reduce the quantity</p>
+                  {line.qty > maxQty(product) && (
+                    <p className="text-xs font-medium text-red-600">Only {maxQty(product)} available — reduce the quantity</p>
                   )}
                 </div>
                 <div className="flex items-center rounded-full border border-stone-300">
                   <button type="button" aria-label="Decrease quantity" className="h-9 w-9" onClick={() => setQty(line.id, line.qty - 1)}>−</button>
                   <span className="w-7 text-center text-sm font-semibold tabular-nums">{line.qty}</span>
-                  <button type="button" aria-label="Increase quantity" className="h-9 w-9" onClick={() => setQty(line.id, Math.min(99, line.qty + 1))}>+</button>
+                  <button type="button" aria-label="Increase quantity" className="h-9 w-9" onClick={() => setQty(line.id, Math.min(maxQty(product), line.qty + 1))}>+</button>
                 </div>
               </div>
             );

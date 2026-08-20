@@ -1,5 +1,137 @@
 # ELFIA OFFICIAL STORE — changelog
 
+## [0.9.0] — 20-08-2026 — order progress the customer can follow
+
+**CEO: "I want to have a progress order status for customer."**
+
+The page drew five steps but could only ever highlight the current one —
+there was nowhere to record *when* each step happened, and no way back to the
+page once the customer lost their checkout link. Both fixed.
+
+- **The order keeps its own history** (migration 0009, `order_events`). One
+  row per movement, written for every transition including the ones the system
+  makes by itself — a receipt upload, an FPX payment verified against Billplz.
+  Never edited, never deleted. Existing orders are backfilled with the two
+  facts that are actually known about them (placed, and reached its present
+  status); nothing in between is invented.
+- **The timeline now shows when, not just where.** Each reached step carries
+  its time in Malaysian time and what happened; the current step says what to
+  expect next ("We check receipts by hand, usually within a few hours"). Steps
+  not yet reached stay grey and empty rather than being given a made-up date.
+  A progress bar runs across the top, and an order paid online no longer shows
+  "receipt received" half-lit as though something were outstanding.
+- **Tracking that actually tracks.** When you mark an order shipped you can
+  pick the courier (J&T, Ninja Van, Pos Laju, Flash, City-Link, DHL) and the
+  customer gets a working "track parcel" link next to the number. A courier
+  we have no URL for shows the number alone — a wrong link is worse than none.
+- **"Track my order"** — a new page in the menu. Order number plus the phone
+  used at checkout finds their order page again. Because order numbers run in
+  a sequence, this is a guessing surface, so: the phone must match too
+  (compared on digits, so +60 12-345 6789 and 0123456789 are one person); a
+  wrong phone and a non-existent order number give the *same* answer, so
+  nobody can count the shop's orders; and eight misses in fifteen minutes
+  turns that address away without affecting anyone else.
+- **One-tap WhatsApp updates in /admin.** Every order now carries a button
+  with the right message already written for its current status — payment
+  reminder, receipt received, payment confirmed, tracking, delivered — each
+  including the link to that customer's own order page. You tap send.
+- Admin timestamps are shown in Malaysian time instead of raw UTC.
+- Tests grown to match: the API suite is now **59 assertions** (progress
+  history recorded in order, courier link, lookup by phone, identical answers
+  for wrong phone vs unknown order, rate limiting that stops a guesser without
+  locking out a real customer), and the browser journey walks the new /track
+  flow including a wrong phone number being refused. All suites pass.
+
+## [0.8.0] — 20-08-2026 — the inventory actually syncs
+
+**CEO: asked whether the inventory stays live and accurate against
+the agency portal.** It did not. It was a button nobody could press
+(the bridge URL was still a placeholder), it only ever ran when a human
+pressed it, and it only went one way — so every web sale left the portal
+believing scarves existed that had already been sold. Now:
+
+- **Sales are pushed to the portal.** The direction that was missing entirely.
+  Every reservation and every restock is written to a `stock_events` outbox
+  (migration 0008) in the same request that changed the order, then delivered.
+  If the portal is unreachable the row simply waits and the cron retries — a
+  network failure delays a sale, it never loses one.
+- **Each movement carries a UUID the portal must dedupe on.** The store
+  retries anything it does not see acknowledged, because losing a sale is
+  worse than sending it twice; the idempotency key is what makes the retry
+  safe. This is the one rule the portal side must not get wrong.
+- **The pull runs by itself every 5 minutes** (`[triggers] crons` +
+  a `scheduled` handler), not only when someone opens /admin.
+- **A stale count can no longer undo a sale.** If a SKU still has undelivered
+  movements, the pull *skips* that SKU rather than accepting a number the
+  portal computed before it heard about our orders. Without this the two
+  systems fight and the store silently puts sold pieces back on the shelf.
+- **Deltas out, counts in.** The store never sends the portal an absolute
+  number — the portal owns the true count. The store reports only what it
+  did: −2 sold, +2 cancelled.
+- **Always-available products still report their sales.** The store does not
+  gate on their count, but the portal still needs to know the pieces went.
+- **/admin → Products shows whether the sync is alive**: sales delivered vs
+  waiting, anything stuck, the last push and pull times, and the exact SKUs
+  that exist on one side but not the other — listed, never guessed. A sync
+  that fails quietly is worse than no sync at all.
+- **`PORTAL-BRIDGE-SPEC.md`** — the contract for the portal team: both
+  endpoints, auth, request/response shapes, the idempotency rule, what silence
+  means, and a switch-on checklist. The portal needs one new endpoint.
+- Two new config vars: `BRIDGE_URL` (renamed meaning: the inventory feed) and
+  `BRIDGE_PUSH_URL` (new). `/api/v1/health` now reports
+  `bridge_pull_configured` and `bridge_push_configured` separately, so a
+  half-configured sync is visible instead of looking fine.
+- **Tested against a stand-in portal** that implements the spec, including its
+  dedupe rule: `scratch/fake-portal.mjs` + `scratch/store-sync-test.mjs`, 24
+  assertions, all passing — sale reaches the portal, cancel returns it, a sale
+  made while the portal is DOWN is delivered later and not lost, a stale count
+  cannot overwrite it, a repeated movement moves the count once, and an
+  unknown SKU is reported rather than retried forever.
+
+## [0.7.0] — 20-08-2026 — open for orders
+
+**CEO: "stock become sold out which is it is incorrect. I want to have a
+scroll up button same as A2Z. Make this system e-commerce working well and
+customer can make the order directly to this store."**
+
+- **Nothing reads Sold out any more.** Migration 0007 adds an *always
+  available* mode: `track_stock = 0` means the piece count is ignored
+  entirely and the design can always be ordered. Every live product is
+  switched to it, because they were all seeded at 0 in 0005 and were hiding
+  in-stock shades behind a number nobody was maintaining.
+  Each product has its own tick-box in /admin → Products ("Count stock for
+  this product"), so counting can come back per design once the agency portal
+  numbers are synced. The two modes are honest about themselves: a counted
+  design still sells out at zero, restocks on an unpaid cancel, and refuses
+  to be oversold; an always-available one is never decremented and never
+  compensated, so a cancel cannot invent pieces that were never taken.
+- **Back-to-top button** — appears after a screen and a half of scrolling,
+  bottom-right, sitting above the WhatsApp bubble so the two never collide.
+- **Online payment (Billplz) is ready to switch on.**
+  - New in /admin → Orders: **Test online payment (Billplz)**. It reads your
+    collection with your secret key and says exactly what is wrong — wrong
+    key, wrong collection, sandbox key against live — *without creating a
+    bill or moving a sen*. Do this before a customer ever meets the button.
+  - New `POST /orders/:token/verify-payment`. Billplz sends the payer back to
+    the order page while its server-to-server callback is still in flight
+    (and that callback can be lost). The order page now re-checks for ~15
+    seconds after a return and flips itself to *Payment confirmed*. The
+    answer still comes only from an authenticated read of the bill — never
+    from the URL the browser arrived with.
+  - A paid order now opens with a green **Payment confirmed — thank you!**
+    panel instead of leaving the customer guessing.
+- **The whole shop is tested end to end, for real.** Two new harnesses in
+  `scratch/`, both driving the actual Worker against an actual (local) D1:
+  - `store-e2e-live.mjs` — 48 assertions covering server-side pricing against
+    a tampered cart, atomic stock, overselling, sell-out, restock-on-cancel,
+    always-available behaviour, free delivery at the threshold, the admin key,
+    the honeypot, the waitlist, and the gateway's own state. All 48 pass.
+  - `store-journey.mjs` — a real Chromium walk-through: home → product → add
+    to cart → cart totals → checkout → a genuine order on the order page with
+    bank details → the cart empties → the order appears in /admin. All pass.
+  - `serve-local.mjs` serves the built site and proxies `/api` to the local
+    worker so the browser sees one origin, exactly like production.
+
 ## [0.6.0] — 20-08-2026 — the shopfront
 
 **CEO, from her phone: "the navbar there seem like doesnt same like A2Z. I
@@ -42,7 +174,7 @@ The CEO's new photo pack replaces the first one outright: ten Bawal designs
 shot individually plus two group campaign shots.
 
 - **LUMI001–LUMI010 are the catalogue now** (migration 0005). Named by colour
-  to stay easy to reconcile against the A2Zcreative stock list:
+  to stay easy to reconcile against the portal's stock list:
   Dusty Rose, Periwinkle, Lavender, Silver Grey, Pastel Aurora, Dawn Blue
   (RM 49) and Navy Gold, Midnight Gold, Olive Floral, Mauve Floral (RM 59 —
   the four printed gold-line and floral designs). Dusty Rose, Pastel Aurora,
@@ -50,7 +182,7 @@ shot individually plus two group campaign shots.
 - ⚠ **STOCK IS 0 ON EVERY DESIGN — the shop reads "Sold out" until you fix
   that.** Deliberate: nothing can be oversold before the counts are real.
   Open /admin → Products and type the numbers, or press "Sync stock from
-  portal" to pull them from A2Zcreative by SKU. Do this before announcing.
+  portal" to pull them from the portal by SKU. Do this before announcing.
 - **The old placeholder rows are retired, not deleted** — set to hidden, and
   their LUMI001–LUMI004 codes released so no two rows share a code (the
   portal sync matches by SKU and must never see a duplicate). Scoped to rows
@@ -79,7 +211,7 @@ shot individually plus two group campaign shots.
   already edited in /admin, nothing changes. Shawl is now an empty
   collection awaiting its own products and code series.
 - **Sync stock from portal** (CEO: "how to update all the inventory to
-  match with inventory in A2Zcreative??") — a button in /admin → Products.
+  match with inventory in the portal??") — a button in /admin → Products.
   It pulls the live-session inventory counts from the agency portal's
   read-only bridge and updates matching products BY SKU (case-insensitive).
   Stock ONLY — prices, photos, descriptions and categories remain the

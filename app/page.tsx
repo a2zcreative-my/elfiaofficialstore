@@ -18,7 +18,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
-import { BRAND_SLIDES, CATEGORIES, fmtRM, imageUrl, splitName, type Product } from "@/lib/config";
+import { BRAND_SLIDES, CATEGORIES, fmtRM, imageUrl, isSoldOut, lowStock, splitName, type Product } from "@/lib/config";
 
 interface Slide { image: string; title: string; subtitle: string; href?: string; position?: string }
 
@@ -88,7 +88,8 @@ function Carousel({ slides }: { slides: Slide[] }) {
 /** One catalogue card. The whole tile is the link. */
 function ProductCard({ p }: { p: Product }) {
   const { series, shade } = splitName(p.name);
-  const out = p.stock <= 0;
+  const out = isSoldOut(p);
+  const low = lowStock(p);
   return (
     <Link href={`/p?id=${p.id}`} className="group block">
       <div className="relative aspect-[4/5] overflow-hidden rounded-2xl bg-stone-100 ring-1 ring-stone-200/70">
@@ -104,9 +105,9 @@ function ProductCard({ p }: { p: Product }) {
           <span className="absolute top-3 left-3 rounded-full bg-white/95 px-2.5 py-1 text-[10px] font-bold tracking-wider text-stone-700 uppercase">
             Sold out
           </span>
-        ) : p.stock <= 5 ? (
+        ) : low ? (
           <span className="absolute top-3 left-3 rounded-full bg-amber-500/95 px-2.5 py-1 text-[10px] font-bold tracking-wider text-white uppercase">
-            {p.stock} left
+            {low} left
           </span>
         ) : null}
       </div>

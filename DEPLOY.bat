@@ -2,7 +2,7 @@
 setlocal EnableExtensions
 REM ============================================================
 REM  ELFIA OFFICIAL STORE - full deploy (site + API + database)
-REM  Version 0.6.0
+REM  Version 0.9.0
 REM
 REM  ONE-TIME before the first run:
 REM    1. wrangler login
@@ -58,10 +58,17 @@ echo ============================================================
 echo   DEPLOY COMPLETE - elfiaofficialstore.my
 echo ============================================================
 echo.
-echo   v0.5.0 NOTE: the ten new Bawal designs ship with STOCK = 0, so the
-echo   whole shop reads "Sold out" until you set the counts. Open /admin
-echo   -^> Products and either type the real numbers or press
-echo   "Sync stock from portal" to pull them from A2Zcreative by SKU.
+echo   v0.7.0: the ten designs are ALWAYS AVAILABLE - the piece count is
+echo   ignored and customers can order any shade. To go back to counting
+echo   stock, tick "Count stock for this product" in /admin -^> Products.
+echo.
+echo   Online payment: after setting BILLPLZ_SECRET and BILLPLZ_COLLECTION,
+echo   open /admin -^> Orders and press "Test online payment (Billplz)".
+echo   It checks the credentials without creating a bill.
+echo.
+echo   Inventory sync: expect "bridge_pull_configured":true AND
+echo   "bridge_push_configured":true above. If either is false the portal
+echo   is NOT being kept in step - see PORTAL-BRIDGE-SPEC.md.
 goto :eof
 
 :fail

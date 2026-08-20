@@ -12,10 +12,11 @@
  */
 import { useCallback, useEffect, useState } from "react";
 
-import { btnClass, btnGhost, fmtRM, imageUrl, inputClass, labelClass, type Product } from "@/lib/config";
+import { btnClass, btnGhost, fmtRM, fmtWhen, imageUrl, inputClass, labelClass, type Product } from "@/lib/config";
 
 interface AdminOrder {
-  id: number; order_number: string; customer_name: string; phone: string; address: string;
+  id: number; order_number: string; token: string; customer_name: string; phone: string; address: string;
+  tracking_courier?: string | null;
   items: string; subtotal_cents: number; shipping_cents: number; total_cents: number;
   status: string; receipt_key: string | null; payment_method: string | null;
   tracking_no: string | null; admin_notes: string | null; created_at: string;
@@ -30,6 +31,52 @@ const STATUS_STYLE: Record<string, string> = {
   cancelled: "bg-red-100 text-red-800",
 };
 const FILTERS = ["all", "payment_review", "pending_payment", "paid", "shipped", "completed", "cancelled"] as const;
+
+/** Couriers the Worker knows how to build a tracking link for (v0.9.0).
+    Keys must match COURIERS in worker/src/index.ts. */
+const COURIERS = [
+  { key: "", label: "Courier (optional)" },
+  { key: "jnt", label: "J&T Express" },
+  { key: "ninjavan", label: "Ninja Van" },
+  { key: "poslaju", label: "Pos Laju" },
+  { key: "flash", label: "Flash Express" },
+  { key: "citylink", label: "City-Link" },
+  { key: "dhl", label: "DHL" },
+] as const;
+
+/**
+ * v0.9.0 — the message you send the customer when an order moves. Written
+ * out for you; you tap send. It always carries the link to their own order
+ * page, which is the thing that stops "where is my parcel?" messages.
+ */
+function waUpdate(o: AdminOrder, origin: string): { label: string; text: string } {
+  const link = `${origin}/order?t=${o.token}`;
+  const hi = `Hi ${o.customer_name}! ELFIA here about order ${o.order_number}.`;
+  switch (o.status) {
+    case "pending_payment":
+      return { label: "Send payment reminder", text: `${hi} We have your order and are holding it for you — once you have transferred, upload the receipt here and we will confirm: ${link}` };
+    case "payment_review":
+      return { label: "Send \"checking receipt\"", text: `${hi} We have received your receipt and are checking it now. You can follow your order here: ${link}` };
+    case "paid":
+      return { label: "Tell them it's confirmed", text: `${hi} Your payment is confirmed — thank you! We are packing your order now and will send the tracking number once it ships. Follow it here: ${link}` };
+    case "shipped":
+      return { label: "Send tracking", text: `${hi} Your order has shipped${o.tracking_no ? ` — tracking number ${o.tracking_no}` : ""}. Follow it here: ${link}` };
+    case "completed":
+      return { label: "Say thank you", text: `${hi} Your order has been delivered. We hope you love it — and thank you for shopping with ELFIA. ${link}` };
+    case "cancelled":
+      return { label: "Explain the cancellation", text: `${hi} Your order has been cancelled and nothing was charged. If that is unexpected, just reply here and we will sort it out.` };
+    default:
+      return { label: "WhatsApp", text: `${hi} ` };
+  }
+}
+
+/** v0.8.0 — health of the two-way inventory sync with the agency portal. */
+interface SyncStatus {
+  pull_configured: boolean; push_configured: boolean;
+  pending: number; stuck: number; oldest_unsent: string | null;
+  last_pull_at: string | null; last_pull_result: string | null;
+  last_push_at: string | null; last_push_error: string | null;
+}
 
 /** v0.6.0 — a "tell me when it's back" request from a sold-out product page. */
 interface NotifyRow {
@@ -48,11 +95,18 @@ export default function Admin() {
   const [filter, setFilter] = useState<(typeof FILTERS)[number]>("all");
   const [openOrder, setOpenOrder] = useState<number | null>(null);
   const [tracking, setTracking] = useState("");
+  const [courier, setCourier] = useState("");
+  /* Read once on the client — the WhatsApp message carries an absolute link
+     to the customer's order page, and this page is served from that origin. */
+  const [origin, setOrigin] = useState("");
+  useEffect(() => { setOrigin(window.location.origin); }, []);
 
   const [products, setProducts] = useState<Product[]>([]);
   const [waitlist, setWaitlist] = useState<NotifyRow[]>([]);
   const [editing, setEditing] = useState<number | null>(null);
-  const [pform, setPform] = useState({ name: "", description: "", price: "", stock: "", sku: "", category: "bawal", featured: false });
+  const BLANK_PRODUCT = { name: "", description: "", price: "", stock: "", sku: "", category: "bawal", featured: false, trackStock: false };
+  const [pform, setPform] = useState(BLANK_PRODUCT);
+  const [sync, setSync] = useState<SyncStatus | null>(null);
 
   const hdr = useCallback((k: string) => ({ "X-Admin-Key": k, "Content-Type": "application/json" }), []);
 
@@ -66,6 +120,8 @@ export default function Admin() {
        restock_requests table yet. The other two tabs must still work. */
     const rn = await fetch("/api/v1/admin/notify", { headers: { "X-Admin-Key": k } }).catch(() => null);
     if (rn?.ok) setWaitlist(((await rn.json()) as { requests: NotifyRow[] }).requests);
+    const rs = await fetch("/api/v1/admin/sync-status", { headers: { "X-Admin-Key": k } }).catch(() => null);
+    if (rs?.ok) setSync((await rs.json()) as SyncStatus);
     setError(""); return true;
   }, [filter]);
 
@@ -101,38 +157,73 @@ export default function Admin() {
       price_cents: Math.round(Number(pform.price) * 100),
       stock: Math.round(Number(pform.stock) || 0),
       sku: pform.sku, category: pform.category, featured: pform.featured,
+      track_stock: pform.trackStock,
     };
     if (!body.name.trim() || !(body.price_cents > 0)) return;
     const r = editing
       ? await fetch(`/api/v1/admin/products/${editing}`, { method: "PUT", headers: hdr(key), body: JSON.stringify(body) })
       : await fetch("/api/v1/admin/products", { method: "POST", headers: hdr(key), body: JSON.stringify(body) });
-    if (r.ok) { setPform({ name: "", description: "", price: "", stock: "", sku: "", category: "bawal", featured: false }); setEditing(null); void load(key); }
+    if (r.ok) { setPform(BLANK_PRODUCT); setEditing(null); void load(key); }
   };
 
+  /* v0.8.0 — two-way inventory sync. The cron does this by itself every five
+     minutes; this button is for when you want it NOW (after a stocktake). */
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState("");
-  const syncStock = async () => {
+
+  const syncStock = async (retry = false) => {
     setSyncing(true); setSyncMsg("");
     try {
-      const r = await fetch("/api/v1/admin/sync-stock", { method: "POST", headers: hdr(key) });
+      const r = await fetch(retry ? "/api/v1/admin/sync-retry" : "/api/v1/admin/sync-stock", { method: "POST", headers: hdr(key) });
       const j = (await r.json()) as {
-        updated?: { sku: string; from: number; to: number }[];
-        unchanged?: number; unmatched_portal?: string[]; unmatched_store?: string[];
-        error?: { message?: string };
+        push?: { configured: boolean; sent: number; pending: number; stuck: number; error?: string };
+        pull?: {
+          configured: boolean; updated: { sku: string; from: number; to: number }[]; unchanged: number;
+          unmatched_portal: string[]; unmatched_store: string[]; deferred: string[]; error?: string;
+        };
+        sent?: number; error?: { message?: string };
       };
-      if (!r.ok) { setSyncMsg(j.error?.message ?? "Sync failed"); }
-      else {
-        const lines = [
-          j.updated!.length === 0 ? "Already in sync — no stock changed."
-            : `Updated ${j.updated!.length}: ${j.updated!.map((u) => `${u.sku} ${u.from}→${u.to}`).join(", ")}`,
-        ];
-        if (j.unmatched_portal!.length) lines.push(`In portal but NOT in store (add them here with this SKU to sync): ${j.unmatched_portal!.join(", ")}`);
-        if (j.unmatched_store!.length) lines.push(`In store but NOT in portal (add the SKU there to sync): ${j.unmatched_store!.join(", ")}`);
-        setSyncMsg(lines.join("\n"));
+      const lines: string[] = [];
+      if (j.push) {
+        if (!j.push.configured) lines.push("↑ Sales are NOT being sent to the portal — BRIDGE_PUSH_URL / BRIDGE_KEY are not set.");
+        else if (j.push.error) lines.push(`↑ Could not deliver sales: ${j.push.error}`);
+        else lines.push(`↑ Sent ${j.push.sent} movement${j.push.sent === 1 ? "" : "s"} to the portal.`);
+        if (j.push.pending) lines.push(`↑ ${j.push.pending} still waiting to be delivered.`);
+        if (j.push.stuck) lines.push(`↑ ${j.push.stuck} stuck — fix the SKU on one side, then press Retry.`);
       }
+      if (j.pull) {
+        if (!j.pull.configured) lines.push(`↓ ${j.pull.error ?? "Pull not configured"}`);
+        else if (j.pull.error) lines.push(`↓ Could not read the portal: ${j.pull.error}`);
+        else {
+          lines.push(j.pull.updated.length === 0
+            ? `↓ Counts already match (${j.pull.unchanged} checked).`
+            : `↓ Updated ${j.pull.updated.length}: ${j.pull.updated.map((u) => `${u.sku} ${u.from}→${u.to}`).join(", ")}`);
+          if (j.pull.deferred.length) lines.push(`↓ Left alone until the portal has our sales: ${j.pull.deferred.join(", ")}`);
+          if (j.pull.unmatched_portal.length) lines.push(`In the portal but NOT here (add them with this SKU): ${j.pull.unmatched_portal.join(", ")}`);
+          if (j.pull.unmatched_store.length) lines.push(`Here but NOT in the portal (add the SKU there): ${j.pull.unmatched_store.join(", ")}`);
+        }
+      }
+      if (typeof j.sent === "number" && !j.push) lines.push(`Retried — ${j.sent} delivered.`);
+      if (j.error?.message) lines.push(j.error.message);
+      setSyncMsg(lines.join("\n"));
     } catch { setSyncMsg("Network problem — try again"); }
     setSyncing(false);
     void load(key);
+  };
+
+  /* v0.7.0 — prove the Billplz credentials before a customer meets them.
+     Read-only on Billplz's side: it reads the collection, never creates a
+     bill, never moves money. */
+  const [gwTesting, setGwTesting] = useState(false);
+  const [gwMsg, setGwMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const testGateway = async () => {
+    setGwTesting(true); setGwMsg(null);
+    try {
+      const r = await fetch("/api/v1/admin/billplz-test", { method: "POST", headers: hdr(key) });
+      const j = (await r.json()) as { ok?: boolean; message?: string; error?: { message?: string } };
+      setGwMsg({ ok: Boolean(j.ok), text: j.message ?? j.error?.message ?? `Error ${r.status}` });
+    } catch { setGwMsg({ ok: false, text: "Network problem — try again" }); }
+    setGwTesting(false);
   };
 
   const waitlistAct = async (id: number, done: boolean) => {
@@ -185,7 +276,22 @@ export default function Admin() {
 
         {tab === "orders" && (
           <>
-            <div className="mt-5 flex flex-wrap gap-1.5">
+            <div className="mt-5 rounded-xl border border-stone-200 bg-white p-4">
+              <div className="flex flex-wrap items-center gap-3">
+                <button type="button" className={btnGhost} disabled={gwTesting} onClick={() => void testGateway()}>
+                  {gwTesting ? "Checking…" : "Test online payment (Billplz)"}
+                </button>
+                <p className="text-xs text-stone-500">
+                  Checks the API Secret Key and Collection ID against Billplz. Reads only — no bill is created and no money moves.
+                </p>
+              </div>
+              {gwMsg && (
+                <p className={`mt-2 text-xs font-medium ${gwMsg.ok ? "text-green-700" : "text-red-700"}`}>
+                  {gwMsg.ok ? "✓ " : "✕ "}{gwMsg.text}
+                </p>
+              )}
+            </div>
+            <div className="mt-4 flex flex-wrap gap-1.5">
               {FILTERS.map((f) => (
                 <button key={f} type="button"
                   className={`rounded-full px-3 py-1 text-xs font-medium ${filter === f ? "bg-[#7a2648] text-white" : "bg-white hover:bg-stone-100"}`}
@@ -202,7 +308,7 @@ export default function Admin() {
                   <div key={o.id} className="rounded-xl border border-stone-200 bg-white p-4">
                     <div className="flex flex-wrap items-center gap-2">
                       <button type="button" className="font-semibold text-[#7a2648] underline-offset-2 hover:underline"
-                        onClick={() => { setOpenOrder(openOrder === o.id ? null : o.id); setTracking(o.tracking_no ?? ""); }}>
+                        onClick={() => { setOpenOrder(openOrder === o.id ? null : o.id); setTracking(o.tracking_no ?? ""); setCourier(o.tracking_courier ?? ""); }}>
                         {o.order_number}
                       </button>
                       <span className="text-sm text-stone-500">· {o.customer_name}</span>
@@ -211,7 +317,9 @@ export default function Admin() {
                         {o.status.replace("_", " ")}
                       </span>
                     </div>
-                    <p className="mt-1 text-xs text-stone-500">{o.created_at.slice(0, 16)} · {o.phone}</p>
+                    {/* Malaysian time — the Worker stores UTC, and an eight-hour lie about
+                        when an order arrived is worth avoiding. */}
+                    <p className="mt-1 text-xs text-stone-500">{fmtWhen(o.created_at)} · {o.phone}</p>
                     {openOrder === o.id && (
                       <div className="mt-3 border-t border-stone-100 pt-3 text-sm">
                         {items.map((it, i) => (
@@ -232,16 +340,24 @@ export default function Admin() {
                           )}
                           {o.status === "paid" && (
                             <>
-                              <input className={`${inputClass} max-w-44`} placeholder="Tracking no." value={tracking} onChange={(e) => setTracking(e.target.value)} />
-                              <button type="button" className={btnClass} onClick={() => void act(o.id, "ship", { tracking_no: tracking })}>Mark shipped</button>
+                              <input className={`${inputClass} max-w-40`} placeholder="Tracking no." value={tracking} onChange={(e) => setTracking(e.target.value)} />
+                              <select className={`${inputClass} max-w-40`} value={courier} onChange={(e) => setCourier(e.target.value)}>
+                                {COURIERS.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
+                              </select>
+                              <button type="button" className={btnClass}
+                                onClick={() => void act(o.id, "ship", { tracking_no: tracking, tracking_courier: courier })}>
+                                Mark shipped
+                              </button>
                             </>
                           )}
                           {o.status === "shipped" && (
                             <button type="button" className={btnClass} onClick={() => void act(o.id, "complete")}>Mark delivered</button>
                           )}
-                          <a className="ml-auto rounded-full bg-green-100 px-3 py-1.5 text-xs font-semibold text-green-900" rel="noopener"
-                            href={`https://wa.me/${o.phone.replace(/[^0-9]/g, "")}?text=${encodeURIComponent(`Hi ${o.customer_name}! ELFIA here about your order ${o.order_number} — `)}`}>
-                            WhatsApp
+                          {/* One tap, message already written, order link included. */}
+                          <a className="ml-auto inline-flex items-center gap-1.5 rounded-full bg-green-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-green-700"
+                            rel="noopener noreferrer" target="_blank"
+                            href={`https://wa.me/${o.phone.replace(/[^0-9]/g, "")}?text=${encodeURIComponent(waUpdate(o, origin).text)}`}>
+                            {waUpdate(o, origin).label}
                           </a>
                         </div>
                       </div>
@@ -255,22 +371,69 @@ export default function Admin() {
 
         {tab === "products" && (
           <>
-            {/* v0.4.0 — pull stock counts from the agency portal (matched by
-                SKU). Stock ONLY: prices, photos and descriptions stay this
-                store's own. Unmatched SKUs are listed, never guessed. */}
+            {/* v0.8.0 — two-way sync with the agency portal. Stock ONLY:
+                prices, photos and descriptions stay this store's own. The
+                numbers below are the ones that tell you the two systems still
+                agree; unmatched SKUs are listed, never guessed. */}
             <div className="mt-5 rounded-xl border border-stone-200 bg-white p-4">
               <div className="flex flex-wrap items-center gap-3">
                 <button type="button" className={btnGhost} disabled={syncing} onClick={() => void syncStock()}>
-                  {syncing ? "Syncing…" : "Sync stock from portal"}
+                  {syncing ? "Syncing…" : "Sync with portal now"}
                 </button>
-                <p className="text-xs text-stone-500">Updates stock by SKU (LUMI…/ELFIA…) from the live-session inventory. Prices and photos are never touched.</p>
+                <p className="text-xs text-stone-500">
+                  Runs by itself every 5 minutes. Sales are sent the moment an order is placed; this is for
+                  when you want it immediately (after a stocktake).
+                </p>
               </div>
-              {syncMsg && <p className="mt-2 text-xs font-medium whitespace-pre-wrap text-stone-700">{syncMsg}</p>}
+
+              {sync && (
+                <div className="mt-3 grid gap-2 border-t border-stone-100 pt-3 text-xs sm:grid-cols-2">
+                  <div>
+                    <p className="font-semibold text-stone-700">↑ Sales → portal</p>
+                    {!sync.push_configured ? (
+                      <p className="text-red-700">
+                        Not configured — sales are being recorded but the portal never hears about them.
+                        Set BRIDGE_PUSH_URL and the BRIDGE_KEY secret.
+                      </p>
+                    ) : (
+                      <>
+                        <p className={sync.pending > 0 ? "text-amber-700" : "text-green-700"}>
+                          {sync.pending === 0 ? "All sales delivered" : `${sync.pending} waiting to be delivered`}
+                          {sync.stuck > 0 && <span className="text-red-700"> · {sync.stuck} stuck</span>}
+                        </p>
+                        {sync.last_push_at && <p className="text-stone-500">last sent {sync.last_push_at.slice(0, 16).replace("T", " ")}</p>}
+                        {sync.last_push_error && <p className="text-red-700">{sync.last_push_error}</p>}
+                        {sync.oldest_unsent && sync.pending > 0 && (
+                          <p className="text-stone-500">oldest waiting since {sync.oldest_unsent.slice(0, 16)}</p>
+                        )}
+                        {sync.stuck > 0 && (
+                          <button type="button" className="mt-1 text-xs underline" disabled={syncing} onClick={() => void syncStock(true)}>
+                            retry stuck movements
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                  <div>
+                    <p className="font-semibold text-stone-700">↓ Counts ← portal</p>
+                    {!sync.pull_configured ? (
+                      <p className="text-red-700">Not configured — set BRIDGE_URL and the BRIDGE_KEY secret.</p>
+                    ) : (
+                      <>
+                        <p className="text-stone-600">{sync.last_pull_result ?? "not run yet"}</p>
+                        {sync.last_pull_at && <p className="text-stone-500">last read {sync.last_pull_at.slice(0, 16).replace("T", " ")}</p>}
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {syncMsg && <p className="mt-3 border-t border-stone-100 pt-3 text-xs font-medium whitespace-pre-wrap text-stone-700">{syncMsg}</p>}
             </div>
             <form onSubmit={saveProduct} className="mt-4 rounded-xl border border-stone-200 bg-white p-4">
               <p className="text-sm font-semibold text-[#7a2648]">
                 {editing ? `Editing #${editing}` : "Add product"}
-                {editing && <button type="button" className="ml-2 text-xs font-normal underline" onClick={() => { setEditing(null); setPform({ name: "", description: "", price: "", stock: "", sku: "", category: "bawal", featured: false }); }}>cancel</button>}
+                {editing && <button type="button" className="ml-2 text-xs font-normal underline" onClick={() => { setEditing(null); setPform(BLANK_PRODUCT); }}>cancel</button>}
               </p>
               <div className="mt-3 grid gap-3 sm:grid-cols-2">
                 <label className="block sm:col-span-2">
@@ -304,6 +467,20 @@ export default function Admin() {
                   <input type="checkbox" className="h-4 w-4 accent-[#7a2648]" checked={pform.featured} onChange={(e) => setPform((f) => ({ ...f, featured: e.target.checked }))} />
                   Feature in the home-page carousel
                 </label>
+                {/* v0.7.0 — availability. Unticked (the default for the ten
+                    designs) means the Stock number above is ignored entirely
+                    and the product can always be ordered. */}
+                <label className="flex items-start gap-2 text-sm sm:col-span-2">
+                  <input type="checkbox" className="mt-0.5 h-4 w-4 accent-[#7a2648]" checked={pform.trackStock} onChange={(e) => setPform((f) => ({ ...f, trackStock: e.target.checked }))} />
+                  <span>
+                    Count stock for this product
+                    <span className="mt-0.5 block text-xs text-stone-500">
+                      {pform.trackStock
+                        ? "Every order reduces the count above, and the shop shows Sold out at zero."
+                        : "Always available — the stock number is ignored and customers can always order."}
+                    </span>
+                  </span>
+                </label>
               </div>
               <button type="submit" className={`${btnClass} mt-3`}>{editing ? "Save changes" : "Add product"}</button>
             </form>
@@ -322,7 +499,10 @@ export default function Admin() {
                       {p.name} {p.active ? "" : <span className="text-xs text-stone-400">(hidden)</span>}
                     </p>
                     <p className="text-xs text-stone-500">
-                      {p.sku ? `${p.sku} · ` : ""}{(p.category ?? "bawal") === "shawl" ? "Shawl" : "Bawal"} · {fmtRM(p.price_cents)} · stock {p.stock}
+                      {p.sku ? `${p.sku} · ` : ""}{(p.category ?? "bawal") === "shawl" ? "Shawl" : "Bawal"} · {fmtRM(p.price_cents)} ·{" "}
+                      {(p.track_stock ?? 1) === 1
+                        ? <span className={p.stock <= 0 ? "font-semibold text-red-600" : ""}>stock {p.stock}</span>
+                        : <span className="font-medium text-green-700">always available</span>}
                     </p>
                   </div>
                   <label className="cursor-pointer text-xs text-stone-500 underline">
@@ -331,7 +511,7 @@ export default function Admin() {
                       onChange={(e) => { const f = e.target.files?.[0]; if (f) void uploadPhoto(p.id, f); }} />
                   </label>
                   <button type="button" className="text-xs underline"
-                    onClick={() => { setEditing(p.id); setPform({ name: p.name, description: p.description ?? "", price: String(p.price_cents / 100), stock: String(p.stock), sku: p.sku ?? "", category: p.category ?? "bawal", featured: p.featured === 1 }); window.scrollTo({ top: 0, behavior: "smooth" }); }}>
+                    onClick={() => { setEditing(p.id); setPform({ name: p.name, description: p.description ?? "", price: String(p.price_cents / 100), stock: String(p.stock), sku: p.sku ?? "", category: p.category ?? "bawal", featured: p.featured === 1, trackStock: (p.track_stock ?? 1) === 1 }); window.scrollTo({ top: 0, behavior: "smooth" }); }}>
                     edit
                   </button>
                   <button type="button" className="text-xs text-stone-500 underline"
@@ -364,8 +544,8 @@ export default function Admin() {
                         {w.name} <span className="font-normal text-stone-500">wants</span> {w.product_name ?? `#${w.product_id}`}
                       </p>
                       <p className="text-xs text-stone-500">
-                        {w.sku ? `${w.sku} · ` : ""}{w.phone} · asked {w.created_at.slice(0, 16)}
-                        {w.notified_at && <span className="ml-1 text-green-700">· told {w.notified_at.slice(0, 16)}</span>}
+                        {w.sku ? `${w.sku} · ` : ""}{w.phone} · asked {fmtWhen(w.created_at)}
+                        {w.notified_at && <span className="ml-1 text-green-700">· told {fmtWhen(w.notified_at)}</span>}
                       </p>
                     </div>
                     <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${back ? "bg-green-100 text-green-900" : "bg-amber-100 text-amber-900"}`}>

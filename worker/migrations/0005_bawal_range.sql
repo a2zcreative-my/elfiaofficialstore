@@ -33,7 +33,7 @@ WHERE active = 1
 -- STOCK: seeded at 0 ON PURPOSE — every design reads "Sold out" until the real
 -- counts arrive, so nothing can be oversold before the books are reconciled.
 -- Set them in /admin → Products, or press "Sync stock from portal" to pull the
--- live A2Zcreative counts by SKU. THE SHOP HAS NOTHING BUYABLE UNTIL THAT RUNS.
+-- live portal counts by SKU. THE SHOP HAS NOTHING BUYABLE UNTIL THAT RUNS.
 INSERT INTO products (name, description, price_cents, stock, image_key, active, sort, sku, category, featured) VALUES
   ('Bawal Premium — Dusty Rose',   'Soft rose gradient with pearl-white flow lines. Lightweight, opaque, holds its shape all day.',        4900, 0, '/collection/bawal-dusty-rose.jpg',    1,  10, 'LUMI001', 'bawal', 1),
   ('Bawal Premium — Periwinkle',   'Cool periwinkle blue washed with lilac. Lightweight, opaque, easy to style for work or weekend.',      4900, 0, '/collection/bawal-periwinkle.jpg',    1,  20, 'LUMI002', 'bawal', 0),

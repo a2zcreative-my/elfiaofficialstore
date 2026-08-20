@@ -8,7 +8,8 @@ import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
 import {
-  addToCart, btnClass, btnGhost, fmtRM, imageUrl, inputClass, labelClass, splitName, type Product,
+  addToCart, btnClass, btnGhost, fmtRM, imageUrl, inputClass, isSoldOut, labelClass, lowStock,
+  maxQty, splitName, type Product,
 } from "@/lib/config";
 
 function NotifyMe({ product }: { product: Product }) {
@@ -103,7 +104,8 @@ function ProductInner() {
     );
   }
 
-  const out = p.stock <= 0;
+  const out = isSoldOut(p);
+  const low = lowStock(p);
   const { series, shade } = splitName(p.name);
   const collection = (p.category ?? "bawal") === "shawl" ? "Shawl" : "Bawal";
 
@@ -145,9 +147,9 @@ function ProductInner() {
               <p className="mt-5 text-sm leading-relaxed whitespace-pre-wrap text-stone-600">{p.description}</p>
             )}
 
-            <p className={`mt-4 text-xs font-medium ${out ? "text-stone-500" : p.stock <= 5 ? "text-amber-700" : "text-green-700"}`}>
+            <p className={`mt-4 text-xs font-medium ${out ? "text-stone-500" : low ? "text-amber-700" : "text-green-700"}`}>
               {out ? "Sold out — join the list below and we'll tell you first."
-                : p.stock <= 5 ? `Only ${p.stock} left` : "In stock — ready to ship"}
+                : low ? `Only ${low} left` : "In stock — ready to ship"}
             </p>
 
             {!out && (
@@ -155,7 +157,7 @@ function ProductInner() {
                 <div className="flex items-center rounded-full border border-stone-300 bg-white">
                   <button type="button" aria-label="Decrease quantity" className="h-11 w-11 text-lg" onClick={() => setQty((q) => Math.max(1, q - 1))}>−</button>
                   <span className="w-8 text-center text-sm font-semibold tabular-nums">{qty}</span>
-                  <button type="button" aria-label="Increase quantity" className="h-11 w-11 text-lg" onClick={() => setQty((q) => Math.min(Math.min(99, p.stock), q + 1))}>+</button>
+                  <button type="button" aria-label="Increase quantity" className="h-11 w-11 text-lg" onClick={() => setQty((q) => Math.min(maxQty(p), q + 1))}>+</button>
                 </div>
                 <button type="button" className={`${btnClass} flex-1 sm:flex-none`} onClick={() => { addToCart(p.id, qty); setAdded(true); }}>
                   Add to cart
