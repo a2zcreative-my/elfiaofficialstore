@@ -1,0 +1,42 @@
+name = "elfia-api"
+main = "src/index.ts"
+compatibility_date = "2026-08-01"
+
+routes = [
+  { pattern = "elfiaofficialstore.my/api/*", zone_name = "elfiaofficialstore.my" },
+  { pattern = "www.elfiaofficialstore.my/api/*", zone_name = "elfiaofficialstore.my" },
+]
+
+# ---- store facts (public, safe in this file) ----
+# EDIT THESE before the first deploy:
+[vars]
+BANK_LINE = "REPLACE — e.g. MAYBANK 1234 5678 9012 — ELFIA"
+WHATSAPP_DIGITS = "60000000000"
+SHIPPING_CENTS = "1000"        # RM 10 flat
+FREE_ABOVE_CENTS = "15000"     # free delivery from RM 150
+# v0.4.0 stock sync — paste the agency portal's bridge endpoint here, e.g.
+# "https://<the portal domain>/api/v1/bridge/elfia-inventory"
+BRIDGE_URL = "REPLACE — portal bridge endpoint URL"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "elfia-store"
+# ONE-TIME SETUP: run `wrangler d1 create elfia-store` and paste the
+# database_id it prints below.
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+
+[[r2_buckets]]
+binding = "MEDIA"
+bucket_name = "elfia-media"
+# ONE-TIME SETUP: run `wrangler r2 bucket create elfia-media`
+
+# Secrets (never in this file):
+#   wrangler secret put ADMIN_KEY           <- the /admin passcode
+#   wrangler secret put BRIDGE_KEY          <- stock-sync secret; MUST equal
+#                                              ELFIA_BRIDGE_KEY on the portal
+# Stage B (online FPX payment) — when the Billplz account is approved:
+#   wrangler secret put BILLPLZ_SECRET      <- API Secret Key (Billplz dashboard -> Settings)
+#   wrangler secret put BILLPLZ_COLLECTION  <- the Collection ID you create there
+# To TEST against the Billplz sandbox first (separate account at
+# billplz-sandbox.com), add under [vars]:  BILLPLZ_SANDBOX = "1"
+# and use the sandbox account's secret/collection. Remove it for production.
