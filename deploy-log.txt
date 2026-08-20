@@ -1,0 +1,51 @@
+ELFIA deploy - Thu 20/08/2026 23:57:39.38 
+[1/9] Checking Node.js and npm 
+      node v24.15.0 
+[2/9] Checking worker\wrangler.toml 
+STOPPED while checking wrangler.toml for placeholders: worker\wrangler.toml still says REPLACE_WITH_D1_DATABASE_ID.  Fix: cd worker  then  npx wrangler d1 create elfia-store  and paste the database_id it prints into worker\wrangler.toml 
+WARNING: WHATSAPP_DIGITS is still the dummy number - the floating WhatsApp button will stay hidden. 
+[3/9] Checking Cloudflare login 
+
+ ⛅️ wrangler 4.117.0
+────────────────────
+Getting User settings...
+👋 You are logged in with an OAuth Token, associated with the email aliffarhan1997@gmail.com.
+🔐 Credentials are stored in: C:\Users\Alif\AppData\Roaming\xdg.config\.wrangler\config\default.toml
+┌──────────────┬──────────────────────────────────┐
+│ Account Name │ Account ID                       │
+├──────────────┼──────────────────────────────────┤
+│ A2Z Creative │ 39fe816a63f159da3b17cc254a89d105 │
+└──────────────┴──────────────────────────────────┘
+🔓 Token Permissions:
+Scope (Access)
+- account (read)
+- user (read)
+- workers (write)
+- workers_kv (write)
+- workers_routes (write)
+- workers_scripts (write)
+- workers_tail (read)
+- d1 (write)
+- pages (write)
+- zone (read)
+- ssl_certs (write)
+- ai (write)
+- ai-search (write)
+- ai-search (run)
+- websearch.run 
+- agent-memory (write)
+- queues (write)
+- pipelines (write)
+- secrets_store (write)
+- artifacts (write)
+- flagship (write)
+- containers (write)
+- cloudchamber (write)
+- connectivity (admin)
+- email_routing (write)
+- email_sending (write)
+- browser (write)
+- challenge-widgets.write 
+- offline_access 
+      logged in 
+[4/9] Installing site dependencies (first run takes a few minutes) 

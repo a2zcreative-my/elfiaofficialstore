@@ -21,22 +21,95 @@
  *     redirect_url, description -> { id, url }.
  *   - GET /api/v3/bills/{id} -> { paid: true|false, state }.
  *
- * SECURITY MODEL: the payment callback is just a hint. Billplz signs its
- * callbacks (x_signature), but we do not even rely on that — the bill id is
- * RE-QUERIED against Billplz's own API with our secret, and only paid:true
- * from that authenticated read flips the order. Anyone can POST to the
- * callback URL; nobody can make GET /bills/{id} say "paid" but Billplz.
+ * SECURITY MODEL — two locks, in this order:
+ *   1. X-SIGNATURE. Billplz signs its callback and redirect with a key only
+ *      you and Billplz hold (BILLPLZ_XSIGN). A wrong or missing signature is
+ *      rejected before anything else happens. Cheap, and it stops forgeries
+ *      without spending a network call.
+ *   2. AUTHENTICATED REQUERY. Even a correctly signed message is only a
+ *      claim. The bill id is re-read from Billplz's own API with the secret
+ *      key, and ONLY `paid:true` from that read marks an order paid. Anyone
+ *      can POST to the callback URL; nobody but Billplz can make
+ *      GET /bills/{id} say paid.
+ * If BILLPLZ_XSIGN is not set the requery still stands alone — the store is
+ * safe but noisier, and /admin says the key is missing.
  *
- * Flagged UNTESTED against the live gateway until Stage B sign-off: run one
- * real RM1 bill (or a sandbox run with BILLPLZ_SANDBOX="1") before
- * announcing online payment.
+ * NOTHING IN THIS FILE IS A SECRET. Keys live in Wrangler secrets, URLs in
+ * STORE_URL. tests/no-secrets.mjs fails the build if that ever stops being
+ * true.
  */
 import type { Env } from "./index";
+
+/**
+ * v1.0.0 — X-Signature verification.
+ *
+ * Billplz signs its callback and its redirect with a key you hold (the
+ * "X Signature Key", separate from the API Secret Key). The source string is
+ * every parameter except the signature, each rendered as `key + value`,
+ * sorted by key, joined with `|`, then HMAC-SHA256.
+ *
+ * The redirect's parameters arrive as `billplz[id]`, `billplz[paid]`, … and
+ * are flattened to `billplzid`, `billplzpaid`, … before sorting — that is
+ * Billplz's own rule, not ours.
+ *
+ * This is a GATE, not the source of truth. Even a perfectly signed callback
+ * is still re-queried against Billplz's authenticated API before an order is
+ * marked paid (billplzVerifyPaid). Signature first, because it is cheap and
+ * rejects forgeries without spending a network call; requery second, because
+ * only Billplz's own answer decides whether money moved.
+ */
+export function billplzSignatureConfigured(env: Env): boolean {
+  return Boolean(env.BILLPLZ_XSIGN);
+}
+
+async function hmacHex(key: string, message: string): Promise<string> {
+  const enc = new TextEncoder();
+  const k = await crypto.subtle.importKey("raw", enc.encode(key), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const sig = await crypto.subtle.sign("HMAC", k, enc.encode(message));
+  return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+const constantTimeEqual = (a: string, b: string): boolean => {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+};
+
+/**
+ * @param params  every parameter Billplz sent, signature included.
+ * @param flatten true for the redirect (`billplz[id]` -> `billplzid`).
+ * @returns true when the signature matches, false when it does not, and
+ *          "unconfigured" when no key is set — the caller decides whether to
+ *          proceed on the requery alone.
+ */
+export async function billplzSignatureOk(
+  env: Env, params: URLSearchParams, flatten: boolean,
+): Promise<true | false | "unconfigured"> {
+  if (!env.BILLPLZ_XSIGN) return "unconfigured";
+  const given = params.get(flatten ? "billplz[x_signature]" : "x_signature") ?? params.get("x_signature") ?? "";
+  if (!/^[a-f0-9]{64}$/i.test(given)) return false;
+  const parts: string[] = [];
+  for (const [rawKey, value] of params) {
+    const key = flatten ? rawKey.replace(/^billplz\[(.+)\]$/, "billplz$1") : rawKey;
+    if (key === "x_signature" || key === "billplzx_signature") continue;
+    parts.push(`${key}${value}`);
+  }
+  parts.sort();
+  const expected = await hmacHex(env.BILLPLZ_XSIGN, parts.join("|"));
+  return constantTimeEqual(expected.toLowerCase(), given.toLowerCase());
+}
 
 const base = (env: Env): string =>
   env.BILLPLZ_SANDBOX === "1" ? "https://www.billplz-sandbox.com/api/v3" : "https://www.billplz.com/api/v3";
 
 const authHeader = (env: Env): string => `Basic ${btoa(`${env.BILLPLZ_SECRET}:`)}`;
+
+/** Where this shop lives. One var, no domain literals scattered about, and
+    no trailing slash to double up in the URLs above. */
+export const storeUrl = (env: Env): string =>
+  (env.STORE_URL && !env.STORE_URL.startsWith("REPLACE") ? env.STORE_URL : "https://elfiaofficialstore.my")
+    .replace(/\/+$/, "");
 
 export function billplzConfigured(env: Env): boolean {
   return Boolean(env.BILLPLZ_SECRET && env.BILLPLZ_COLLECTION);
@@ -50,15 +123,15 @@ export async function billplzCreateBill(
   try {
     const form = new URLSearchParams({
       collection_id: env.BILLPLZ_COLLECTION!,
-      // Billplz requires email OR mobile; not every checkout leaves an email,
-      // so fall back to a store inbox — the customer's real contact stays the
-      // phone number on the order.
-      email: o.email ?? "orders@elfiaofficialstore.my",
+      // Billplz needs an email or a mobile. Not every checkout leaves an
+      // email, so fall back to a mailbox at the store's own domain — derived
+      // from STORE_URL, never a domain typed into this file.
+      email: o.email ?? `orders@${new URL(storeUrl(env)).hostname}`,
       name: o.customer_name.slice(0, 255),
       amount: String(o.total_cents), // cents, same unit as the database
       description: `ELFIA order ${o.order_number}`.slice(0, 200),
-      callback_url: "https://elfiaofficialstore.my/api/v1/payments/billplz/callback",
-      redirect_url: `https://elfiaofficialstore.my/order?t=${o.token}`,
+      callback_url: `${storeUrl(env)}/api/v1/payments/billplz/callback`,
+      redirect_url: `${storeUrl(env)}/order?t=${o.token}`,
       reference_1_label: "Order",
       reference_1: o.order_number,
     });

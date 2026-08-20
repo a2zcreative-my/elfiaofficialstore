@@ -14,7 +14,18 @@ import { useSearchParams } from "next/navigation";
 
 import Link from "next/link";
 
-import { btnClass, fmtRM, fmtWhen, type OrderEvent, type OrderView } from "@/lib/config";
+import { btnClass, fmtRM, fmtWhen, rememberOrder, type OrderEvent, type OrderView } from "@/lib/config";
+
+/** "3 hours 12 minutes" / "18 minutes" / "" once it has passed. */
+function timeLeft(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const ms = Date.parse(iso.includes("T") ? iso : `${iso.replace(" ", "T")}Z`) - Date.now();
+  if (!Number.isFinite(ms) || ms <= 0) return "";
+  const mins = Math.floor(ms / 60000);
+  const h = Math.floor(mins / 60), m = mins % 60;
+  if (h === 0) return `${m} minute${m === 1 ? "" : "s"}`;
+  return `${h} hour${h === 1 ? "" : "s"}${m ? ` ${m} minute${m === 1 ? "" : "s"}` : ""}`;
+}
 
 const STEPS = ["pending_payment", "payment_review", "paid", "shipped", "completed"] as const;
 const STEP_LABEL: Record<string, string> = {
@@ -117,6 +128,19 @@ function OrderInner() {
   }, [token]);
 
   useEffect(() => { void load(); }, [load]);
+
+  /* This device now knows about the order, so /track can offer it even if the
+     link is lost. Only the token — no personal data leaves the page. */
+  useEffect(() => {
+    if (order && order !== "missing") rememberOrder(order.order_number, token);
+  }, [order, token]);
+
+  /* Re-render once a minute so the payment countdown stays honest. */
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => tick((n) => n + 1), 60_000);
+    return () => clearInterval(t);
+  }, []);
 
   /* v0.7.0 — close the gap after an FPX payment. Billplz sends the payer
      straight back here while its server-to-server callback is still in
@@ -230,6 +254,22 @@ function OrderInner() {
               </p>
             )}
             <p className="text-sm font-semibold text-amber-900">How to pay</p>
+            {/* The hold is real: the cron cancels the order and puts the stock
+                back. Saying so plainly is fairer than a silent cancellation,
+                and it is what stops an order sitting unpaid for a week. */}
+            {order.expires_at && (
+              timeLeft(order.expires_at)
+                ? (
+                  <p className="mt-1.5 rounded-lg bg-white/70 px-3 py-2 text-xs font-medium text-amber-900">
+                    Please pay within <span className="font-bold">{timeLeft(order.expires_at)}</span> (by {fmtWhen(order.expires_at)}).
+                    After that we release these pieces for someone else — you can always order again.
+                  </p>
+                ) : (
+                  <p className="mt-1.5 rounded-lg bg-white/70 px-3 py-2 text-xs font-medium text-amber-900">
+                    This order is past its payment window and may be released at any moment. Pay now, or WhatsApp us and we will hold it.
+                  </p>
+                )
+            )}
             {order.config.gateway && (
               <div className="mt-3">
                 <button type="button" onClick={() => void payOnline()} disabled={paying}

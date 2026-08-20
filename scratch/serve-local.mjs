@@ -26,7 +26,15 @@ http.createServer(async (req, res) => {
       headers,
       body: ['GET', 'HEAD'].includes(req.method) ? undefined : Buffer.concat(chunks),
     });
-    res.writeHead(r.status, { 'content-type': r.headers.get('content-type') ?? 'application/json' });
+    // Forward Set-Cookie too — the session cookie lives there, and dropping
+    // it made the local rig look like a broken sign-in when the product was
+    // fine. getSetCookie() keeps multiple cookies separate.
+    const out = { 'content-type': r.headers.get('content-type') ?? 'application/json' };
+    const cookies = typeof r.headers.getSetCookie === 'function'
+      ? r.headers.getSetCookie()
+      : (r.headers.get('set-cookie') ? [r.headers.get('set-cookie')] : []);
+    if (cookies.length) out['set-cookie'] = cookies;
+    res.writeHead(r.status, out);
     res.end(Buffer.from(await r.arrayBuffer()));
     return;
   }

@@ -15,7 +15,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
-import { btnClass, inputClass, labelClass, waLink, type StoreConfig } from "@/lib/config";
+import { btnClass, fmtWhen, inputClass, labelClass, readRecent, waLink, type RecentOrder, type StoreConfig } from "@/lib/config";
 
 export default function Track() {
   const router = useRouter();
@@ -23,6 +23,9 @@ export default function Track() {
   const [state, setState] = useState<"idle" | "searching">("idle");
   const [error, setError] = useState("");
   const [config, setConfig] = useState<StoreConfig | null>(null);
+  const [recent, setRecent] = useState<RecentOrder[]>([]);
+
+  useEffect(() => { setRecent(readRecent()); }, []);
 
   useEffect(() => {
     void fetch("/api/v1/store-config").then((r) => (r.ok ? r.json() : null))
@@ -60,7 +63,24 @@ export default function Track() {
           Enter the order number from your receipt and the phone number you used at checkout.
         </p>
 
-        <form onSubmit={submit} className="mt-7 rounded-2xl border border-stone-200 bg-white p-5">
+        {/* Orders placed on THIS device — no sign-in, no lookup. The commonest
+            case is a customer who simply refreshed and lost the tab. */}
+        {recent.length > 0 && (
+          <div className="mt-7 rounded-2xl border border-stone-200 bg-white p-5">
+            <p className="text-sm font-semibold text-stone-800">Orders from this device</p>
+            <div className="mt-2 space-y-1">
+              {recent.map((o) => (
+                <Link key={o.token} href={`/order?t=${o.token}`}
+                  className="flex items-center justify-between rounded-lg px-2 py-2 text-sm hover:bg-stone-50">
+                  <span className="font-semibold text-[#7a2648]">{o.order_number}</span>
+                  <span className="text-xs text-stone-500">{fmtWhen(o.at)}</span>
+                </Link>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <form onSubmit={submit} className="mt-5 rounded-2xl border border-stone-200 bg-white p-5">
           <label className="block">
             <span className={labelClass}>Order number</span>
             <input className={`${inputClass} font-mono tracking-wide uppercase`} value={form.order_number}
@@ -90,6 +110,11 @@ export default function Track() {
             <>Message us and we will find it for you.</>
           )}{" "}
           or <Link href="/" className="underline hover:text-[#7a2648]">keep shopping</Link>.
+        </p>
+        <p className="mt-2 text-center text-xs text-stone-500">
+          Ordering often?{" "}
+          <Link href="/account" className="underline hover:text-[#7a2648]">Create an account</Link>{" "}
+          and every order stays in one place.
         </p>
       </div>
     </main>

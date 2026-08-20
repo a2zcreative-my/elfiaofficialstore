@@ -1,5 +1,87 @@
 # ELFIA OFFICIAL STORE — changelog
 
+## [1.0.0] — 20-08-2026 — no joy buyers, real Billplz, no secrets in the code
+
+**CEO: "ensure that there is no joy buyer … fully integrate with Billplz …
+no hardcoded API since I need my system secure from attacking … DEPLOY.bat not
+functioning well"** — and, mid-build: **"when customer half way make the order,
+they refresh to main page it missing their order. I think we should make the
+sign up/sign in page."**
+
+### No joy buyers
+- **An unpaid order now expires.** Twelve hours (`ORDER_HOLD_HOURS`), after
+  which the cron cancels it, puts the stock back and tells the portal — the
+  same path an admin cancel takes, so nothing is a special case. The customer's
+  page shows a live countdown ("Please pay within 11 hours 59 minutes") and,
+  afterwards, an event saying exactly why it was released and that they may
+  order again. A silent cancellation would be worse than the joy buyer.
+- **One phone may hold two unpaid orders** (`MAX_OPEN_ORDERS`). The third is
+  refused with a message that tells them where to find the first two rather
+  than just saying no.
+- **Eight orders an hour from one address.** Stops scripted order spam without
+  touching anybody real.
+
+### Billplz, completed
+- **X-Signature verification** on both the callback and the redirect
+  (`BILLPLZ_XSIGN`). A forged callback is rejected with 403 before it costs a
+  network call. The authenticated re-query still stands behind it: a signature
+  proves who sent the message, only Billplz's own API proves money moved. Both
+  locks are tested — a forged signature is refused, a correct one is accepted
+  *and still does not mark the order paid*.
+- **No domain is hardcoded any more.** `STORE_URL` builds the callback and
+  redirect URLs and the allowed origins.
+
+### Nothing secret in the code
+- **`tests/no-secrets.mjs` — a build gate**, run by DEPLOY.bat before anything
+  is uploaded. It fails on a secret-looking name assigned a literal, on the
+  shapes real keys take (a Billplz key is a UUID; an X-Signature key is 128 hex
+  characters), and on any `_KEY`/`_SECRET` entry under `[vars]`, which is
+  committed. Verified by pasting a real-looking key into a file and watching
+  the build stop.
+- Every credential is a Wrangler secret: `ADMIN_KEY`, `BRIDGE_KEY`,
+  `BILLPLZ_SECRET`, `BILLPLZ_COLLECTION`, `BILLPLZ_XSIGN`.
+
+### Harder to attack
+- **The admin passcode is rate-limited** — ten wrong keys in fifteen minutes
+  and that address is refused, right or wrong, until the window passes. A
+  correct key clears the count, and an admin on another connection is
+  unaffected.
+- One rate limiter for the whole API (order placement, sign-in, sign-up, order
+  lookup, order claiming, the admin key), keyed per rule per address.
+- **Security headers**: a content security policy that allows only this origin
+  plus Billplz for form posts, `frame-ancestors 'none'`, HSTS, a permissions
+  policy, and `no-store`/`noindex` on /admin, /order and /account.
+
+### Accounts — optional, never in the way
+- **Sign up / sign in** at /account: order history that follows the customer to
+  a new phone, and a saved address that fills in the next checkout.
+  **Guest checkout is untouched** — forcing sign-up in front of payment is how
+  a small shop loses the sale.
+- Passwords are PBKDF2-SHA256, 210,000 iterations, per-user salt, with the
+  iteration count stored beside the hash so it can be raised later. Sessions
+  are HttpOnly cookies whose value is stored only as a hash — a leaked database
+  cannot sign in as anybody.
+- **Past guest orders are never auto-claimed by phone number.** That would hand
+  one customer another's history. They are added deliberately, proved the same
+  way /track proves it: order number plus the phone that placed it.
+- **The reported bug, fixed for everyone — account or not.** The checkout form
+  is kept on the device as it is typed, so a refresh no longer loses it, and
+  every order placed on that device is offered again on /track.
+
+### DEPLOY.bat, rewritten
+It never closes without saying why, writes `deploy-log.txt`, and checks
+everything *before* touching Cloudflare: Node present, project files intact,
+`wrangler.toml` placeholders, that you are logged in. Each failure names the
+exact command that fixes it. It refuses to deploy if the secret gate, the
+typecheck or the brand check fails, and ends by printing which secrets are
+still missing with the command to set each one.
+
+### Tested
+85 API assertions, 25 sync assertions and a 16-step browser journey — all
+passing, all repeatable. New coverage: order expiry driven through the real
+scheduled handler, the open-order cap, sign-up/sign-in/session/claim, forged
+vs signed Billplz callbacks, and admin brute-force lockout.
+
 ## [0.9.0] — 20-08-2026 — order progress the customer can follow
 
 **CEO: "I want to have a progress order status for customer."**

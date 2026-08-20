@@ -15,6 +15,24 @@ the link — **/track**, which finds it again from their order number and the
 phone they used. Each time you move an order forward, /admin hands you a
 WhatsApp message already written, with that link in it.
 
+## Secrets — none of them live in this repo
+
+Set each from your own machine; the value is never written to a file:
+
+```
+cd worker
+npx wrangler secret put ADMIN_KEY            # the /admin passcode
+npx wrangler secret put BILLPLZ_SECRET       # Billplz API Secret Key
+npx wrangler secret put BILLPLZ_COLLECTION   # Billplz Collection ID
+npx wrangler secret put BILLPLZ_XSIGN        # Billplz X Signature Key
+npx wrangler secret put BRIDGE_KEY           # shared with the portal
+```
+
+`node tests/no-secrets.mjs` fails the build if a credential is ever committed —
+DEPLOY.bat runs it before anything is uploaded. If a key has ever been pasted
+into a chat, an email or a screenshot, rotate it in the Billplz dashboard and
+set the new one here.
+
 ## Before you announce the shop
 
 Set these in `worker/wrangler.toml` [vars] and redeploy — each one changes what
@@ -25,6 +43,8 @@ customers see:
 | `BANK_LINE` | The order page shows "REPLACE — …" instead of your account |
 | `WHATSAPP_DIGITS` | The floating chat button stays hidden |
 | `SHIPPING_CENTS` / `FREE_ABOVE_CENTS` | Delivery charge and the free-delivery bar |
+| `STORE_URL` | Billplz callback/redirect URLs and the allowed origins |
+| `ORDER_HOLD_HOURS` / `MAX_OPEN_ORDERS` | How long an unpaid order holds stock, and how many one phone may hold |
 
 ## Availability — why nothing says "Sold out"
 
@@ -88,6 +108,15 @@ says so in red rather than pretending everything is fine.
 The customer's order page shows "Pay online now — RM xx.xx (FPX / online
 banking)" the moment both secrets exist; bank transfer stays underneath.
 
+## Accounts, and unpaid orders
+
+- **Accounts are optional.** /account gives a customer their order history and
+  a saved address; guests still buy without one. A half-filled checkout is kept
+  on the device either way, so a refresh loses nothing.
+- **An unpaid order expires after 12 hours** — the stock goes back, the portal
+  is told, and the customer sees a countdown before it happens and a plain
+  explanation after. One phone may hold two unpaid orders at a time.
+
 ## The rules this system will not bend
 
 - Prices and stock are decided by the Worker — the browser is never trusted.
@@ -97,15 +126,22 @@ banking)" the moment both secrets exist; bank transfer stays underneath.
   against Billplz's own API — never from a callback's parameters, and never
   from the URL the customer came back with.
 - Paid orders cannot be silently cancelled; a refund is a human decision.
+- A Billplz callback must carry a valid X-Signature *and* survive an
+  authenticated re-query before an order is marked paid.
+- Passwords are never stored, only PBKDF2 hashes; session cookies are stored
+  as hashes too, so reading the database grants nobody a login.
+- Guessing costs: order lookup, sign-in, sign-up and the admin passcode are all
+  rate-limited per address.
 
 ## Testing it yourself
 
 Three harnesses, all running the real Worker against a local D1 — see each
 file's header for the setup:
 
-- `scratch/store-e2e-live.mjs` — 59 API assertions (pricing, stock, orders,
-  progress history, order lookup and its rate limiting)
-- `scratch/store-journey.mjs` — a real browser purchase, start to finish
+- `scratch/store-e2e-live.mjs` — 85 API assertions (pricing, stock, orders,
+  progress, lookup, order expiry, accounts, signatures, rate limits)
+- `scratch/store-journey.mjs` — a real browser purchase, a refresh mid-checkout,
+  /track, and creating an account
 - `scratch/store-sync-test.mjs` + `scratch/fake-portal.mjs` — 24 assertions on
   the two-way inventory sync, including the portal being offline mid-sale
 

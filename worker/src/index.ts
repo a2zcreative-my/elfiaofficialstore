@@ -23,7 +23,15 @@
  * Stage B (Billplz FPX — the CEO's chosen gateway) lives in billplz.ts and
  * stays inert until both secrets exist — see that file's header.
  */
-import { billplzCheck, billplzConfigured, billplzCreateBill, billplzVerifyPaid } from "./billplz";
+import {
+  billplzCheck, billplzConfigured, billplzCreateBill, billplzSignatureConfigured,
+  billplzSignatureOk, billplzVerifyPaid, storeUrl,
+} from "./billplz";
+import {
+  callerIp, clearLimit, createSession, currentCustomer, destroySession, hashPassword, hitLimit,
+  looksLikeEmail, normaliseEmail, normalisePhone, sessionCookie, clearCookie, sweepAuth,
+  verifyPassword, type Customer,
+} from "./auth";
 import {
   flushStockEvents, getState, pullConfigured, pushConfigured, recordStockEvents, syncNow,
 } from "./portal";
@@ -39,6 +47,19 @@ export interface Env {
   BILLPLZ_SECRET?: string;     // Stage B — wrangler secret put (API Secret Key)
   BILLPLZ_COLLECTION?: string; // Stage B — wrangler secret put (Collection ID)
   BILLPLZ_SANDBOX?: string;    // wrangler.toml var — "1" = sandbox account
+  /** v1.0.0 — the X Signature Key from the Billplz dashboard. Used to verify
+      that a callback or redirect really came from Billplz before the order is
+      re-queried. `wrangler secret put BILLPLZ_XSIGN`. */
+  BILLPLZ_XSIGN?: string;
+  /** v1.0.0 — this shop's public origin, e.g. "https://elfiaofficialstore.my".
+      Billplz callback/redirect URLs are built from it, so no domain is
+      hardcoded in the source. */
+  STORE_URL?: string;
+  /** v1.0.0 — hours an unpaid order holds its stock before the cron releases
+      it. Default 12. */
+  ORDER_HOLD_HOURS?: string;
+  /** v1.0.0 — how many unpaid orders one phone number may hold. Default 2. */
+  MAX_OPEN_ORDERS?: string;
   /** v0.4.0 — stock sync from the agency portal that runs ELFIA's live
       sessions. BRIDGE_URL is a wrangler.toml var (the portal's bridge
       endpoint, pasted at setup so no other company's domain lives in this
@@ -52,15 +73,24 @@ export interface Env {
   STORE_ORIGIN?: string;     // override for local testing
 }
 
-const VERSION = "0.9.0";
+const VERSION = "1.0.0";
 const STATUSES = ["pending_payment", "payment_review", "paid", "shipped", "completed", "cancelled"] as const;
 type Status = (typeof STATUSES)[number];
 
-const ALLOWED_ORIGINS = new Set([
-  "https://elfiaofficialstore.my",
-  "https://www.elfiaofficialstore.my",
-  "http://localhost:3000",
-]);
+/** Origins allowed to POST. STORE_URL (and its www. twin) is the real one;
+    the rest are for local work. STORE_ORIGIN adds one more for a test rig. */
+function originAllowed(origin: string | null, env: Env): boolean {
+  if (!origin) return true;                       // server-to-server, curl
+  const store = storeUrl(env);
+  const host = new URL(store).host;
+  const allowed = new Set([
+    store,
+    `https://www.${host.replace(/^www\./, "")}`,
+    "http://localhost:3000",
+    env.STORE_ORIGIN ?? "",
+  ]);
+  return allowed.has(origin);
+}
 
 const json = (data: unknown, status = 200): Response =>
   new Response(JSON.stringify(data), {
@@ -101,6 +131,7 @@ function storeConfig(env: Env) {
     shipping_cents: intVar(env.SHIPPING_CENTS, 1000),
     free_above_cents: intVar(env.FREE_ABOVE_CENTS, 15000),
     gateway: billplzConfigured(env),
+    hold_hours: intVar(env.ORDER_HOLD_HOURS, 12),
   };
 }
 
@@ -125,6 +156,50 @@ async function recordOrderEvent(env: Env, orderId: number, status: string, note:
   await env.DB.prepare(
     `INSERT INTO order_events (order_id, status, note) VALUES (?1, ?2, ?3)`,
   ).bind(orderId, status, note).run().catch(() => null); // pre-0009: no history, order still moves
+}
+
+/**
+ * v1.0.0 — release unpaid orders whose hold has run out ("no joy buyer").
+ *
+ * This is the same code path as an admin cancelling: stock goes back (only
+ * for products that count it), the portal is told, and the order records why
+ * it moved. It is NOT a separate silent status, because a customer who comes
+ * back must be able to see what happened and re-order.
+ *
+ * Only pending_payment and payment_review are eligible. An order whose
+ * receipt is sitting in payment_review is included on purpose — a receipt
+ * nobody could match is still an unpaid order — but the note says so, and
+ * twelve hours is long enough for the shop to have looked.
+ */
+async function releaseExpiredOrders(env: Env): Promise<number> {
+  const { results: due } = await env.DB.prepare(
+    `SELECT id, order_number, items FROM orders
+     WHERE status IN ('pending_payment', 'payment_review')
+       AND expires_at IS NOT NULL AND expires_at <= datetime('now')
+     LIMIT 50`,
+  ).all<{ id: number; order_number: string; items: string }>().catch(() => ({ results: [] as { id: number; order_number: string; items: string }[] }));
+
+  for (const o of due) {
+    const items = JSON.parse(o.items) as { product_id: number; qty: number }[];
+    for (const it of items) {
+      await env.DB.prepare(`UPDATE products SET stock = stock + ?1 WHERE id = ?2 AND track_stock = 1`)
+        .bind(it.qty, it.product_id).run().catch(() => null);
+    }
+    const { results: skus } = await env.DB.prepare(
+      `SELECT id, sku FROM products WHERE id IN (${items.map((_, i) => `?${i + 1}`).join(",")})`,
+    ).bind(...items.map((it) => it.product_id)).all<{ id: number; sku: string | null }>()
+      .catch(() => ({ results: [] as { id: number; sku: string | null }[] }));
+    await recordStockEvents(
+      env,
+      items.map((it) => ({ sku: skus.find((p) => p.id === it.product_id)?.sku, qty: it.qty })),
+      "cancel", o.order_number,
+    );
+    await env.DB.prepare(
+      `UPDATE orders SET status = 'cancelled', updated_at = datetime('now') WHERE id = ?1`,
+    ).bind(o.id).run();
+    await recordOrderEvent(env, o.id, "cancelled", "Released — payment was not received in time. You are welcome to order again.");
+  }
+  return due.length;
 }
 
 /** Malaysian couriers the shop actually uses, so "Shipped" carries a working
@@ -154,7 +229,13 @@ export default {
      Deliver outstanding sales first, then refresh counts: pulling before
      pushing would read numbers the portal computed without our sales. */
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-    ctx.waitUntil(syncNow(env).then(() => undefined));
+    ctx.waitUntil((async () => {
+      /* Release first: an expired order puts stock back, and that movement
+         should be in the outbox before the push runs. */
+      await releaseExpiredOrders(env);
+      await sweepAuth(env);
+      await syncNow(env);
+    })());
   },
 
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -174,6 +255,9 @@ export default {
         admin_key_configured: Boolean(env.ADMIN_KEY),
         bank_line_configured: !cfg.bank_line.startsWith("REPLACE"),
         gateway_configured: cfg.gateway,
+        gateway_signature_configured: billplzSignatureConfigured(env),
+        store_url: storeUrl(env),
+        order_hold_hours: intVar(env.ORDER_HOLD_HOURS, 12),
         bridge_pull_configured: pullConfigured(env),
         bridge_push_configured: pushConfigured(env),
       });
@@ -238,10 +322,7 @@ export default {
        list. Nothing is ever sent from here — the shop messages people by
        hand from /admin, which is also why no email address is collected. */
     if (path === "/notify" && method === "POST") {
-      const origin = request.headers.get("Origin");
-      if (origin && !ALLOWED_ORIGINS.has(origin) && origin !== env.STORE_ORIGIN) {
-        return err("forbidden", "Bad origin", 403);
-      }
+      if (!originAllowed(request.headers.get("Origin"), env)) return err("forbidden", "Bad origin", 403);
       let body: Record<string, unknown>;
       try { body = (await request.json()) as Record<string, unknown>; } catch { return err("invalid_input", "JSON body required", 400); }
       if (str(body.website, 500)) return json({ ok: true }); // honeypot
@@ -263,10 +344,7 @@ export default {
 
     /* ---- place an order ---- */
     if (path === "/orders" && method === "POST") {
-      const origin = request.headers.get("Origin");
-      if (origin && !ALLOWED_ORIGINS.has(origin) && origin !== env.STORE_ORIGIN) {
-        return err("forbidden", "Bad origin", 403);
-      }
+      if (!originAllowed(request.headers.get("Origin"), env)) return err("forbidden", "Bad origin", 403);
       let body: { customer?: Record<string, unknown>; items?: { id?: unknown; qty?: unknown }[] };
       try { body = (await request.json()) as typeof body; } catch { return err("invalid_input", "JSON body required", 400); }
       if (str(body.customer?.website, 500)) return json({ ok: true }); // honeypot
@@ -274,6 +352,27 @@ export default {
       const phone = str(body.customer?.phone, 40);
       const address = str(body.customer?.address, 500);
       if (!name || !phone || !address) return err("invalid_input", "Name, phone and address are required", 400);
+
+      /* v1.0.0 — the two rules that stop an order costing the shop nothing to
+         place. Neither can touch a customer who is actually buying. */
+      const ip = callerIp(request);
+      const burst = await hitLimit(env, `order:${ip}`, 8, 60);
+      if (!burst.allowed) {
+        return err("too_many", "That is a lot of orders in one hour. Finish the ones you have, or WhatsApp us and we will help.", 429);
+      }
+      const phoneDigits = normalisePhone(phone);
+      const maxOpen = intVar(env.MAX_OPEN_ORDERS, 2);
+      const open = await env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM orders
+         WHERE phone_digits = ?1 AND status IN ('pending_payment', 'payment_review')`,
+      ).bind(phoneDigits).first<{ n: number }>().catch(() => null);
+      if ((open?.n ?? 0) >= maxOpen) {
+        return err(
+          "open_orders",
+          `You already have ${open!.n} unpaid order${open!.n === 1 ? "" : "s"} waiting. Pay for ${open!.n === 1 ? "it" : "them"} first — find ${open!.n === 1 ? "it" : "them"} under Track order — and this one will go through.`,
+          409,
+        );
+      }
 
       // Normalise lines: positive ids, qty 1..99, max 20 distinct, merged.
       const wanted = new Map<number, number>();
@@ -330,14 +429,21 @@ export default {
       const number = await orderNumber(env);
       const token = crypto.randomUUID().replace(/-/g, "");
 
+      /* An account is optional. If the buyer happens to be signed in the order
+         remembers them, so it shows up in their history on any device. */
+      const signedIn = await currentCustomer(env, request);
+      const holdHours = intVar(env.ORDER_HOLD_HOURS, 12);
       await env.DB.prepare(
-        `INSERT INTO orders (order_number, token, customer_name, phone, address, email, notes,
-                             items, subtotal_cents, shipping_cents, total_cents, status)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'pending_payment')`,
+        `INSERT INTO orders (order_number, token, customer_name, phone, phone_digits, address, email, notes,
+                             items, subtotal_cents, shipping_cents, total_cents, status,
+                             customer_id, expires_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'pending_payment', ?13,
+                 datetime('now', ?14))`,
       ).bind(
-        number, token, name, phone, address,
+        number, token, name, phone, phoneDigits, address,
         str(body.customer?.email, 200), str(body.customer?.notes, 300),
         JSON.stringify(items), subtotal, shipping, subtotal + shipping,
+        signedIn?.id ?? null, `+${holdHours} hours`,
       ).run();
 
       const created = await env.DB.prepare(`SELECT id FROM orders WHERE token = ?1`).bind(token).first<{ id: number }>();
@@ -374,11 +480,158 @@ export default {
         items: JSON.parse(o.items) as unknown[],
         subtotal_cents: o.subtotal_cents, shipping_cents: o.shipping_cents, total_cents: o.total_cents,
         receipt_uploaded: Boolean(o.receipt_key), tracking_no: o.tracking_no,
+        /* When an unpaid order releases its stock. The page turns this into a
+           countdown; the cron turns it into a cancellation. */
+        expires_at: (o as { expires_at?: string | null }).expires_at ?? null,
         tracking_courier: courier?.label ?? null,
         tracking_url: courier && o.tracking_no ? courier.url(o.tracking_no) : null,
         events,
         created_at: o.created_at, config: storeConfig(env),
       });
+    }
+
+    /* ---------------- customer accounts (v1.0.0) ----------------
+       An account is optional everywhere. Nothing below is required to buy;
+       it exists so a customer's address and order history survive a new
+       phone, and so a half-finished checkout is not lost on refresh. */
+
+    if (path === "/auth/signup" && method === "POST") {
+      if (!originAllowed(request.headers.get("Origin"), env)) return err("forbidden", "Bad origin", 403);
+      const gate = await hitLimit(env, `signup:${callerIp(request)}`, 5, 60);
+      if (!gate.allowed) return err("too_many", "Too many sign-ups from here. Try again later.", 429);
+
+      const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
+      if (str(body?.website, 500)) return json({ ok: true });        // honeypot
+      const email = normaliseEmail(str(body?.email, 200) ?? "");
+      const name = str(body?.name, 120);
+      const password = typeof body?.password === "string" ? body.password : "";
+      if (!looksLikeEmail(email)) return err("invalid_input", "That email address does not look right.", 400);
+      if (!name) return err("invalid_input", "Please tell us your name.", 400);
+      if (password.length < 8) return err("invalid_input", "Please use a password of at least 8 characters.", 400);
+      if (password.length > 200) return err("invalid_input", "That password is too long.", 400);
+
+      const phone = str(body?.phone, 40);
+      const { hash, salt, iter } = await hashPassword(password);
+      let created: { id: number } | null = null;
+      try {
+        created = await env.DB.prepare(
+          `INSERT INTO customers (email, name, phone, phone_digits, address, pw_hash, pw_salt, pw_iter)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) RETURNING id`,
+        ).bind(email, name, phone, normalisePhone(phone), str(body?.address, 500), hash, salt, iter)
+         .first<{ id: number }>();
+      } catch {
+        // UNIQUE(email). Say so plainly: an attacker can discover the same
+        // fact by trying to sign in, so hiding it only confuses real people.
+        return err("email_taken", "There is already an account with that email. Sign in instead.", 409);
+      }
+      if (!created) return err("server_error", "Could not create the account — please try again.", 500);
+
+      const token = await createSession(env, created.id, request.headers.get("User-Agent"));
+      return new Response(JSON.stringify({ customer: { id: created.id, email, name, phone, address: str(body?.address, 500) } }), {
+        status: 201,
+        headers: { "Content-Type": "application/json", "Cache-Control": "no-store", "Set-Cookie": sessionCookie(token, url) },
+      });
+    }
+
+    if (path === "/auth/login" && method === "POST") {
+      if (!originAllowed(request.headers.get("Origin"), env)) return err("forbidden", "Bad origin", 403);
+      const ip = callerIp(request);
+      /* Counts every attempt, not just the failures: a limit that forgives a
+         correct guess is not a limit. */
+      const gate = await hitLimit(env, `login:${ip}`, 10, 15);
+      if (!gate.allowed) return err("too_many", "Too many attempts — wait fifteen minutes.", 429);
+
+      const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
+      const email = normaliseEmail(str(body?.email, 200) ?? "");
+      const password = typeof body?.password === "string" ? body.password : "";
+      const row = await env.DB.prepare(
+        `SELECT id, email, name, phone, phone_digits, address, created_at, pw_hash, pw_salt, pw_iter
+         FROM customers WHERE email = ?1`,
+      ).bind(email).first<Customer & { pw_hash: string; pw_salt: string; pw_iter: number }>().catch(() => null);
+
+      /* Same answer for "no such account" and "wrong password", and the hash
+         is still computed when the account does not exist so the two take the
+         same time. */
+      const okPassword = row
+        ? await verifyPassword(password, row.pw_hash, row.pw_salt, row.pw_iter)
+        : await verifyPassword(password, "0".repeat(64), "00", 210_000);
+      if (!row || !okPassword) return err("bad_login", "That email and password do not match.", 401);
+
+      await env.DB.prepare(`UPDATE customers SET last_login_at = datetime('now') WHERE id = ?1`).bind(row.id).run();
+      await clearLimit(env, `login:${ip}`);
+      const token = await createSession(env, row.id, request.headers.get("User-Agent"));
+      return new Response(JSON.stringify({
+        customer: { id: row.id, email: row.email, name: row.name, phone: row.phone, address: row.address },
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json", "Cache-Control": "no-store", "Set-Cookie": sessionCookie(token, url) },
+      });
+    }
+
+    if (path === "/auth/logout" && method === "POST") {
+      await destroySession(env, request);
+      return new Response(JSON.stringify({ ok: true }), {
+        headers: { "Content-Type": "application/json", "Cache-Control": "no-store", "Set-Cookie": clearCookie(url) },
+      });
+    }
+
+    if (path === "/auth/me" && method === "GET") {
+      const me = await currentCustomer(env, request);
+      if (!me) return err("unauthorized", "Not signed in", 401);
+      return json({ customer: { id: me.id, email: me.email, name: me.name, phone: me.phone, address: me.address } });
+    }
+
+    if (path === "/auth/me" && method === "PUT") {
+      if (!originAllowed(request.headers.get("Origin"), env)) return err("forbidden", "Bad origin", 403);
+      const me = await currentCustomer(env, request);
+      if (!me) return err("unauthorized", "Not signed in", 401);
+      const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
+      const name = str(body?.name, 120) ?? me.name;
+      const phone = body?.phone === undefined ? me.phone : str(body.phone, 40);
+      const address = body?.address === undefined ? me.address : str(body.address, 500);
+      await env.DB.prepare(
+        `UPDATE customers SET name = ?1, phone = ?2, phone_digits = ?3, address = ?4 WHERE id = ?5`,
+      ).bind(name, phone, normalisePhone(phone), address, me.id).run();
+      return json({ customer: { id: me.id, email: me.email, name, phone, address } });
+    }
+
+    /* The customer's own orders. Only ever their own: the query is keyed on
+       the session's customer id, never on anything the browser sent. */
+    if (path === "/auth/orders" && method === "GET") {
+      const me = await currentCustomer(env, request);
+      if (!me) return err("unauthorized", "Not signed in", 401);
+      const { results } = await env.DB.prepare(
+        `SELECT order_number, token, status, total_cents, created_at, tracking_no
+         FROM orders WHERE customer_id = ?1 ORDER BY created_at DESC LIMIT 100`,
+      ).bind(me.id).all();
+      return json({ orders: results });
+    }
+
+    /* Attach a guest order to the signed-in account — proved the same way
+       /track proves it: order number plus the phone that placed it. Orders
+       are never auto-claimed by matching a phone number, because that hands
+       one customer another customer's history. */
+    if (path === "/auth/claim" && method === "POST") {
+      if (!originAllowed(request.headers.get("Origin"), env)) return err("forbidden", "Bad origin", 403);
+      const me = await currentCustomer(env, request);
+      if (!me) return err("unauthorized", "Not signed in", 401);
+      const ip = callerIp(request);
+      const gate = await hitLimit(env, `claim:${ip}`, 8, 15);
+      if (!gate.allowed) return err("too_many", "Too many attempts — wait fifteen minutes.", 429);
+
+      const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
+      const number = str(body?.order_number, 40)?.toUpperCase().trim() ?? "";
+      const phone = normalisePhone(str(body?.phone, 40) ?? "");
+      const nope = err("not_found", "We could not find that order. Check the order number and the phone number used at checkout.", 404);
+      if (!number || phone.length < 9) return nope;
+      const o = await env.DB.prepare(`SELECT id, phone, customer_id FROM orders WHERE order_number = ?1`)
+        .bind(number).first<{ id: number; phone: string; customer_id: number | null }>();
+      if (!o) return nope;
+      if (normalisePhone(o.phone).slice(-9) !== phone.slice(-9)) return nope;
+      if (o.customer_id && o.customer_id !== me.id) return err("already_claimed", "That order already belongs to another account.", 409);
+      await env.DB.prepare(`UPDATE orders SET customer_id = ?1 WHERE id = ?2`).bind(me.id, o.id).run();
+      await clearLimit(env, `claim:${ip}`);
+      return json({ ok: true, order_number: number });
     }
 
     /* ---- "Track my order" (v0.9.0) ----
@@ -392,32 +645,20 @@ export default {
            so nobody can use it to learn how many orders the shop has;
          * eight misses in fifteen minutes and that IP is turned away. */
     if (path === "/orders/lookup" && method === "POST") {
-      const origin = request.headers.get("Origin");
-      if (origin && !ALLOWED_ORIGINS.has(origin) && origin !== env.STORE_ORIGIN) {
-        return err("forbidden", "Bad origin", 403);
-      }
-      const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
-      const gate = await env.DB.prepare(
-        `SELECT fails, window_start FROM lookup_attempts WHERE ip = ?1`,
-      ).bind(ip).first<{ fails: number; window_start: string }>().catch(() => null);
-      const fresh = gate && (Date.now() - Date.parse(`${gate.window_start.replace(" ", "T")}Z`)) < 15 * 60 * 1000;
-      if (fresh && gate!.fails >= 8) {
+      if (!originAllowed(request.headers.get("Origin"), env)) return err("forbidden", "Bad origin", 403);
+      const ip = callerIp(request);
+      const gate = await hitLimit(env, `lookup:${ip}`, 8, 15);
+      if (!gate.allowed) {
         return err("too_many", "Too many attempts — wait fifteen minutes, or WhatsApp us and we will find your order.", 429);
       }
 
       const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
       const number = str(body?.order_number, 40)?.toUpperCase().trim() ?? "";
       const phone = (str(body?.phone, 40) ?? "").replace(/\D/g, "");
-      const miss = async (): Promise<Response> => {
-        await env.DB.prepare(
-          `INSERT INTO lookup_attempts (ip, fails, window_start) VALUES (?1, 1, datetime('now'))
-           ON CONFLICT(ip) DO UPDATE SET
-             fails = CASE WHEN ?2 THEN lookup_attempts.fails + 1 ELSE 1 END,
-             window_start = CASE WHEN ?2 THEN lookup_attempts.window_start ELSE datetime('now') END`,
-        ).bind(ip, fresh ? 1 : 0).run().catch(() => null);
-        // Deliberately identical whether the order number exists or not.
-        return err("not_found", "We could not find that order. Check the order number and the phone number you used at checkout.", 404);
-      };
+      // Deliberately identical whether the order number exists or not — this
+      // endpoint must never reveal which order numbers are real.
+      const miss = (): Response =>
+        err("not_found", "We could not find that order. Check the order number and the phone number you used at checkout.", 404);
       if (!number || phone.length < 9) return miss();
 
       const o = await env.DB.prepare(`SELECT token, phone FROM orders WHERE order_number = ?1`)
@@ -429,7 +670,7 @@ export default {
       const same = stored.slice(-9) === phone.slice(-9) && phone.slice(-9).length === 9;
       if (!same) return miss();
 
-      await env.DB.prepare(`DELETE FROM lookup_attempts WHERE ip = ?1`).bind(ip).run().catch(() => null);
+      await clearLimit(env, `lookup:${ip}`);   // a customer who found their own order is not a guesser
       return json({ token: o.token });
     }
 
@@ -516,7 +757,17 @@ export default {
          paid (billplz.ts). Anyone can POST here; only Billplz can make
          GET /bills/{id} answer paid:true. */
       const params = method === "GET" ? url.searchParams : new URLSearchParams(await request.text());
+
+      /* LOCK 1 — X-Signature. A GET here is the browser redirect (parameters
+         arrive as billplz[id]); a POST is Billplz's server callback (flat
+         parameters). Either way a bad signature is thrown out before we spend
+         a network call on it. With no key configured we fall through to the
+         requery alone, which is still safe — just noisier. */
+      const sig = await billplzSignatureOk(env, params, method === "GET");
+      if (sig === false) return err("forbidden", "Bad signature", 403);
+
       const billId = params.get("billplz[id]") ?? params.get("id") ?? "";
+      /* LOCK 2 — only Billplz's own authenticated answer marks an order paid. */
       if (billId && (await billplzVerifyPaid(env, billId))) {
         const res = await env.DB.prepare(
           `UPDATE orders SET status = 'paid', payment_method = 'fpx', updated_at = datetime('now')
@@ -546,7 +797,18 @@ export default {
 
     /* ---------------- admin ---------------- */
     if (path.startsWith("/admin/")) {
-      if (!(await keyOk(request, env))) return err("unauthorized", "Bad key", 401);
+      /* v1.0.0 — the admin passcode is the one secret protecting every order
+         in the shop, so guessing it must cost something. Ten wrong keys in
+         fifteen minutes and this address is refused until the window passes.
+         A correct key clears the count. */
+      const adminIp = callerIp(request);
+      if (!(await keyOk(request, env))) {
+        const gate = await hitLimit(env, `admin:${adminIp}`, 10, 15);
+        return gate.allowed
+          ? err("unauthorized", "Bad key", 401)
+          : err("too_many", "Too many attempts — wait fifteen minutes.", 429);
+      }
+      await clearLimit(env, `admin:${adminIp}`);
 
       if (path === "/admin/products" && method === "GET") {
         const { results } = await env.DB.prepare(`SELECT * FROM products ORDER BY sort, id DESC LIMIT 500`).all();
@@ -664,12 +926,16 @@ export default {
          agree; a sync that fails quietly is worse than no sync at all. */
       if (path === "/admin/sync-status" && method === "GET") {
         const state = await getState(env);
+        /* `pending` means "still being retried" and `stuck` means "given up on
+           until a human helps" — the same split flushStockEvents reports, so
+           the two never disagree. Counting stuck rows in both made the numbers
+           look twice as bad as they were. */
         const row = await env.DB.prepare(
-          `SELECT COUNT(*) AS pending,
+          `SELECT SUM(CASE WHEN attempts <  25 THEN 1 ELSE 0 END) AS pending,
                   SUM(CASE WHEN attempts >= 25 THEN 1 ELSE 0 END) AS stuck,
                   MIN(created_at) AS oldest
            FROM stock_events WHERE sent_at IS NULL`,
-        ).first<{ pending: number; stuck: number | null; oldest: string | null }>().catch(() => null);
+        ).first<{ pending: number | null; stuck: number | null; oldest: string | null }>().catch(() => null);
         const { results: recent } = await env.DB.prepare(
           `SELECT sku, delta, reason, order_number, created_at, sent_at, attempts, last_error
            FROM stock_events ORDER BY created_at DESC LIMIT 20`,

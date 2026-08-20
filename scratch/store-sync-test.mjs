@@ -37,11 +37,22 @@ const portalSet = (sku, stock) => fetch(`${PORTAL}/_set`, { method: "POST", body
 const portalDown = (down) => fetch(`${PORTAL}/_down`, { method: "POST", body: JSON.stringify({ down }) });
 const syncNow = () => admin("/admin/sync-stock", { method: "POST" }).then((r) => r.json());
 const status = () => admin("/admin/sync-status").then((r) => r.json());
-const order = (id, qty, name = "Sync Test") =>
-  jget(`${API}/orders`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ customer: { name, phone: "0123456789", address: "1 Jalan Sync" }, items: [{ id, qty }] }),
+/* v1.0.0 — the store now caps unpaid orders per phone and orders per IP, so
+   this harness gives every order its own caller and its own number. They are
+   different customers, which is the truth of what is being tested. */
+const RUN = Math.floor(Math.random() * 250) + 1;
+let n = 0;
+const order = (id, qty, name = "Sync Test") => {
+  n += 1;
+  return jget(`${API}/orders`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "CF-Connecting-IP": `100.66.${RUN}.${n}` },
+    body: JSON.stringify({
+      customer: { name, phone: `01${String(RUN).padStart(3, "0")}${String(n).padStart(5, "0")}`, address: "1 Jalan Sync" },
+      items: [{ id, qty }],
+    }),
   });
+};
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 step("both directions are configured");
@@ -50,6 +61,21 @@ step("both directions are configured");
   ok("store can read the portal", h.bridge_pull_configured === true);
   ok("store can report to the portal", h.bridge_push_configured === true);
   await portalDown(false);
+}
+
+step("start from a settled outbox");
+{
+  /* Deliver anything left over from earlier work before measuring, so the
+     assertions below are about THIS run. Each call sends a batch of 50. */
+  const retry = () => admin("/admin/sync-retry", { method: "POST" }).then((r) => r.json());
+  let st = await status();
+  for (let i = 0; i < 25 && (st.pending > 0 || st.stuck > 0); i++) {
+    if (st.stuck > 0) await retry();      // give up-on rows one more chance
+    await syncNow();
+    st = await status();
+  }
+  ok("no sales are waiting to be delivered", st.pending === 0 && st.stuck === 0,
+     `${st.pending} pending, ${st.stuck} stuck`);
 }
 
 let products, target;

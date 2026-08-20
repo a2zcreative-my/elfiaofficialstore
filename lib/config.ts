@@ -69,6 +69,28 @@ export interface StoreConfig {
   shipping_cents: number;
   free_above_cents: number;
   gateway: boolean; // Stage B: true once the Billplz secrets are configured
+  /** v1.0.0 — hours an unpaid order holds its stock before it is released. */
+  hold_hours?: number;
+}
+
+/* ---- customer accounts (v1.0.0) ----
+   Optional everywhere: a guest can buy without one. */
+
+export interface Account {
+  id: number;
+  email: string;
+  name: string;
+  phone: string | null;
+  address: string | null;
+}
+
+export interface AccountOrder {
+  order_number: string;
+  token: string;
+  status: string;
+  total_cents: number;
+  created_at: string;
+  tracking_no: string | null;
 }
 
 export interface OrderEvent {
@@ -94,6 +116,8 @@ export interface OrderView {
   tracking_courier?: string | null;
   tracking_url?: string | null;
   events?: OrderEvent[];
+  /** When an unpaid order releases its stock (v1.0.0). */
+  expires_at?: string | null;
   created_at: string;
   config: StoreConfig;
 }
@@ -157,8 +181,47 @@ export const cartCount = (): number => readCart().reduce((n, l) => n + l.qty, 0)
 export const NAV_LINKS = [
   { href: "/", label: "Shop" },
   { href: "/track", label: "Track order" },
+  { href: "/account", label: "Account" },
   { href: "/policies", label: "Delivery & returns" },
 ] as const;
+
+/* ---- what this device remembers (v1.0.0) ----
+   The CEO watched a customer refresh mid-checkout and lose everything. An
+   account fixes that across devices; these two fix it on THIS device, for
+   everyone, with no sign-up. Both are conveniences only — the server still
+   owns every price, every total and every order. */
+
+const DRAFT_KEY = "elfia-checkout-draft";
+const RECENT_KEY = "elfia-recent-orders";
+
+export interface CheckoutDraft { name: string; phone: string; address: string; email: string; notes: string }
+
+export const readDraft = (): Partial<CheckoutDraft> => {
+  try { return JSON.parse(localStorage.getItem(DRAFT_KEY) ?? "{}") as Partial<CheckoutDraft>; }
+  catch { return {}; }
+};
+export const writeDraft = (d: Partial<CheckoutDraft>): void => {
+  try { localStorage.setItem(DRAFT_KEY, JSON.stringify(d)); } catch { /* private mode */ }
+};
+export const clearDraft = (): void => {
+  try { localStorage.removeItem(DRAFT_KEY); } catch { /* private mode */ }
+};
+
+export interface RecentOrder { order_number: string; token: string; at: string }
+
+export const readRecent = (): RecentOrder[] => {
+  try {
+    const v = JSON.parse(localStorage.getItem(RECENT_KEY) ?? "[]") as RecentOrder[];
+    return Array.isArray(v) ? v.filter((o) => o?.token && o?.order_number).slice(0, 10) : [];
+  } catch { return []; }
+};
+export const rememberOrder = (order_number: string, token: string): void => {
+  try {
+    const next = [{ order_number, token, at: new Date().toISOString() },
+                  ...readRecent().filter((o) => o.token !== token)].slice(0, 10);
+    localStorage.setItem(RECENT_KEY, JSON.stringify(next));
+  } catch { /* private mode */ }
+};
 
 /** Product names read "Bawal Premium — Dusty Rose". On a card the series
     prefix is repeated noise, so the grid shows the shade large and the series
