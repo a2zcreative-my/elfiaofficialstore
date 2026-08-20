@@ -23,7 +23,7 @@ binding = "DB"
 database_name = "elfia-store"
 # ONE-TIME SETUP: run `wrangler d1 create elfia-store` and paste the
 # database_id it prints below.
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "d1e1bb9f-1360-417e-8932-0c9009f5115c"
 
 [[r2_buckets]]
 binding = "MEDIA"
