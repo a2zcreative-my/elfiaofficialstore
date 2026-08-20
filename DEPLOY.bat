@@ -2,7 +2,7 @@
 setlocal EnableExtensions
 REM ============================================================
 REM  ELFIA OFFICIAL STORE - full deploy (site + API + database)
-REM  Version 0.5.0
+REM  Version 0.6.0
 REM
 REM  ONE-TIME before the first run:
 REM    1. wrangler login

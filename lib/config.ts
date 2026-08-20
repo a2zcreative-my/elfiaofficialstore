@@ -94,8 +94,13 @@ export const readCart = (): CartLine[] => {
   } catch { return []; }
 };
 
+/* The header's cart badge listens for this. `storage` only fires in OTHER
+   tabs, so a same-tab "Add to cart" needs its own nudge. */
+export const CART_EVENT = "elfia-cart-changed";
+
 export const writeCart = (lines: CartLine[]): void => {
   try { localStorage.setItem(CART_KEY, JSON.stringify(lines.slice(0, 20))); } catch { /* private mode */ }
+  try { window.dispatchEvent(new Event(CART_EVENT)); } catch { /* SSR */ }
 };
 
 export const addToCart = (id: number, qty: number): void => {
@@ -108,11 +113,30 @@ export const addToCart = (id: number, qty: number): void => {
 
 export const cartCount = (): number => readCart().reduce((n, l) => n + l.qty, 0);
 
+/* ---- navigation ---- */
+export const NAV_LINKS = [
+  { href: "/", label: "Shop" },
+  { href: "/policies", label: "Delivery & returns" },
+] as const;
+
+/** Product names read "Bawal Premium — Dusty Rose". On a card the series
+    prefix is repeated noise, so the grid shows the shade large and the series
+    small. Names without the em dash come back whole. */
+export const splitName = (name: string): { series: string | null; shade: string } => {
+  const i = name.indexOf(" — ");
+  return i > 0 ? { series: name.slice(0, i), shade: name.slice(i + 3) } : { series: null, shade: name };
+};
+
+/** wa.me link for the store's own number. Digits only — wa.me rejects
+    spaces, "+" and dashes. */
+export const waLink = (digits: string, text: string): string =>
+  `https://wa.me/${digits.replace(/\D/g, "")}?text=${encodeURIComponent(text)}`;
+
 /* ---- shared styles ---- */
 export const inputClass =
   "h-11 w-full rounded-lg border border-stone-300 bg-white px-3 text-sm text-stone-900 outline-none focus:border-[#7a2648] focus:ring-2 focus:ring-[#7a2648]/20";
 export const labelClass = "mb-1 block text-xs font-medium text-stone-500";
 export const btnClass =
-  "inline-flex h-11 items-center justify-center rounded-lg bg-[#7a2648] px-6 text-sm font-semibold text-white transition-colors hover:bg-[#8f2e55] disabled:opacity-50";
+  "inline-flex h-11 items-center justify-center rounded-full bg-[#7a2648] px-6 text-sm font-semibold text-white transition-colors hover:bg-[#8f2e55] disabled:opacity-50";
 export const btnGhost =
-  "inline-flex h-11 items-center justify-center rounded-lg border border-stone-300 px-6 text-sm font-semibold text-stone-700 hover:bg-stone-50";
+  "inline-flex h-11 items-center justify-center rounded-full border border-stone-300 px-6 text-sm font-semibold text-stone-700 transition-colors hover:border-stone-400 hover:bg-white";

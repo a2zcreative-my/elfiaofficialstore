@@ -46,7 +46,7 @@ export interface Env {
   STORE_ORIGIN?: string;     // override for local testing
 }
 
-const VERSION = "0.4.0";
+const VERSION = "0.6.0";
 const STATUSES = ["pending_payment", "payment_review", "paid", "shipped", "completed", "cancelled"] as const;
 type Status = (typeof STATUSES)[number];
 
@@ -190,6 +190,37 @@ export default {
           "Cache-Control": "public, max-age=86400",
         },
       });
+    }
+
+    /* ---- restock waitlist (v0.6.0) ----
+       A sold-out design collects a name + WhatsApp number instead of losing
+       the customer. Same origin check and honeypot as checkout. The unique
+       (product_id, phone) index means a second submission REPLACES the first
+       and resets it to "still waiting", so a refreshed form cannot flood the
+       list. Nothing is ever sent from here — the shop messages people by
+       hand from /admin, which is also why no email address is collected. */
+    if (path === "/notify" && method === "POST") {
+      const origin = request.headers.get("Origin");
+      if (origin && !ALLOWED_ORIGINS.has(origin) && origin !== env.STORE_ORIGIN) {
+        return err("forbidden", "Bad origin", 403);
+      }
+      let body: Record<string, unknown>;
+      try { body = (await request.json()) as Record<string, unknown>; } catch { return err("invalid_input", "JSON body required", 400); }
+      if (str(body.website, 500)) return json({ ok: true }); // honeypot
+      const name = str(body.name, 120);
+      const phone = str(body.phone, 40);
+      const productId = Math.round(Number(body.product_id));
+      if (!name || !phone || !(productId > 0)) return err("invalid_input", "Name, phone and product are required", 400);
+      if (phone.replace(/\D/g, "").length < 9) return err("invalid_input", "That phone number looks incomplete", 400);
+      const exists = await env.DB.prepare(`SELECT id FROM products WHERE id = ?1 AND active = 1`)
+        .bind(productId).first<{ id: number }>();
+      if (!exists) return err("not_found", "Product not found", 404);
+      await env.DB.prepare(
+        `INSERT INTO restock_requests (product_id, name, phone) VALUES (?1, ?2, ?3)
+         ON CONFLICT(product_id, phone) DO UPDATE
+           SET name = ?2, created_at = datetime('now'), notified_at = NULL`,
+      ).bind(productId, name, phone).run();
+      return json({ ok: true }, 201);
     }
 
     /* ---- place an order ---- */
@@ -403,6 +434,29 @@ export default {
         await env.MEDIA.put(key, request.body, { httpMetadata: { contentType: ct } });
         await env.DB.prepare(`UPDATE products SET image_key = ?1 WHERE id = ?2`).bind(key, adminPhoto[1]!).run();
         return json({ image_key: key }, 201);
+      }
+
+      /* v0.6.0 — the restock waitlist. Open requests first, oldest first:
+         the person who has waited longest is the one to message next. */
+      if (path === "/admin/notify" && method === "GET") {
+        const { results } = await env.DB.prepare(
+          `SELECT r.id, r.product_id, r.name, r.phone, r.created_at, r.notified_at,
+                  p.name AS product_name, p.sku, p.stock
+           FROM restock_requests r LEFT JOIN products p ON p.id = r.product_id
+           ORDER BY (r.notified_at IS NOT NULL), r.created_at LIMIT 500`,
+        ).all();
+        return json({ requests: results });
+      }
+      const adminNotify = path.match(/^\/admin\/notify\/(\d+)$/);
+      if (adminNotify && method === "PUT") {
+        // Mark told. The row stays so you can see who was already contacted.
+        await env.DB.prepare(`UPDATE restock_requests SET notified_at = datetime('now') WHERE id = ?1`)
+          .bind(adminNotify[1]!).run();
+        return json({ ok: true });
+      }
+      if (adminNotify && method === "DELETE") {
+        await env.DB.prepare(`DELETE FROM restock_requests WHERE id = ?1`).bind(adminNotify[1]!).run();
+        return json({ ok: true });
       }
 
       if (path === "/admin/orders" && method === "GET") {

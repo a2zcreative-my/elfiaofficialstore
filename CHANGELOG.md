@@ -1,5 +1,41 @@
 # ELFIA OFFICIAL STORE — changelog
 
+## [0.6.0] — 20-08-2026 — the shopfront
+
+**CEO, from her phone: "the navbar there seem like doesnt same like A2Z. I
+want something that looks nice for ELFIA. Which is attract client/customer
+when visit" — and "also make the thumbnail looks nice!"**
+
+- **A header that fits a phone.** The old one put the wordmark, both links and
+  the Cart button on one row and they fought each other to pieces at 390px.
+  Now: hamburger, centred wordmark and a cart icon with a live item-count
+  badge, with a tap-to-open menu underneath; on desktop, wordmark left, links
+  right, cart button. It sticks to the top as you scroll, over a thin
+  announcement bar carrying the free-delivery threshold (the Worker's number,
+  never typed into the front end).
+- **Thumbnails are a lookbook now.** 4:5 frames matching how the range was
+  shot instead of a square crop, the shade name large ("Dusty Rose") with the
+  SKU small above it instead of a truncated "Bawal Premium — …", a soft zoom
+  on hover, and a corner badge that says **Sold out** or **3 left** on the
+  photo itself. Loading shows placeholder cards rather than a bare "Loading…".
+- **Floating WhatsApp button** on every page — the same reflex as the green
+  bubble customers already know. It hides itself until a real number is set in
+  `WHATSAPP_DIGITS`, because a bubble that opens a chat with 60000000000 is
+  worse than no bubble at all.
+- **Free-delivery progress bar in the cart** — "Add RM 42.00 more for free
+  delivery", filling up to "Delivery is on us". Threshold read from the
+  Worker, so it can never disagree with what checkout charges.
+- **"Tell me when it's back" on sold-out designs** (migration 0006, new
+  **Waitlist** tab in /admin). A sold-out shade collects a name and a WhatsApp
+  number instead of losing the customer. Nothing is ever sent automatically:
+  the admin list shows who is waiting, oldest first, marks the ones whose
+  design is back in stock, and gives you a WhatsApp button with the message
+  already started. One row per person per design — a refreshed form updates
+  the old row instead of stacking up.
+- Product pages: breadcrumb, larger price, a stock line that reads green /
+  amber / grey, and a short delivery-and-payment note under the fold.
+  Checkout and cart restyled to match; buttons are pill-shaped throughout.
+
 ## [0.5.0] — 20-08-2026 — the ten-piece Bawal range
 
 The CEO's new photo pack replaces the first one outright: ten Bawal designs

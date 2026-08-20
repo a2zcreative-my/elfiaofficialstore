@@ -1,20 +1,21 @@
-elfia-store v0.5.0 — 53 files
+elfia-store v0.6.0 — 55 files
 
-CHANGELOG.md	6804
+CHANGELOG.md	9131
 DEPLOY.bat	2720
-FILE-MANIFEST.txt	1707
-README.md	1429
-app/admin/page.tsx	18368
-app/cart/page.tsx	4639
-app/checkout/page.tsx	4094
+FILE-MANIFEST.txt	1777
+README.md	1598
+app/admin/page.tsx	22464
+app/cart/page.tsx	6410
+app/checkout/page.tsx	4427
+app/chrome.tsx	8378
 app/globals.css	210
 app/icon.png	2280
-app/layout.tsx	2495
+app/layout.tsx	2120
 app/order/page.tsx	8502
-app/p/page.tsx	3897
-app/page.tsx	7060
+app/p/page.tsx	8679
+app/page.tsx	10065
 app/policies/page.tsx	2251
-lib/config.ts	4458
+lib/config.ts	5606
 next-env.d.ts	262
 next.config.ts	222
 package.json	456
@@ -48,8 +49,9 @@ worker/migrations/0002_collections.sql	1748
 worker/migrations/0003_billplz.sql	232
 worker/migrations/0004_all_bawal.sql	735
 worker/migrations/0005_bawal_range.sql	4349
+worker/migrations/0006_restock_requests.sql	1177
 worker/package.json	358
 worker/src/billplz.ts	4277
-worker/src/index.ts	28071
+worker/src/index.ts	31196
 worker/tsconfig.json	288
 worker/wrangler.toml	1793

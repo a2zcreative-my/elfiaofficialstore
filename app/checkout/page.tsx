@@ -53,13 +53,14 @@ export default function Checkout() {
   }
 
   return (
-    <main className="px-6 py-10">
+    <main className="px-4 py-8 sm:px-6 sm:py-10">
       <div className="mx-auto w-full max-w-xl">
-        <h1 className="text-2xl font-bold text-[#7a2648]">Delivery details</h1>
+        <p className="text-[11px] font-semibold tracking-[0.2em] text-stone-400 uppercase">Step 1 of 2</p>
+        <h1 className="mt-1.5 text-2xl font-bold text-stone-900">Delivery details</h1>
         <p className="mt-1 text-sm text-stone-500">
           Place the order first — payment instructions come on the next page.
         </p>
-        <form onSubmit={submit} className="mt-6 space-y-4">
+        <form onSubmit={submit} className="mt-6 space-y-4 rounded-2xl border border-stone-200 bg-white p-5">
           <input type="text" value={form.website} onChange={set("website")} className="hidden" tabIndex={-1} autoComplete="off" aria-hidden="true" />
           <label className="block">
             <span className={labelClass}>Full name *</span>
@@ -85,6 +86,9 @@ export default function Checkout() {
             {state === "sending" ? "Placing order…" : "Place order"}
           </button>
           {error && <p className="text-sm font-medium text-red-700">{error}</p>}
+          <p className="text-center text-[11px] text-stone-400">
+            Your details are used to deliver this order and nothing else.
+          </p>
         </form>
       </div>
     </main>

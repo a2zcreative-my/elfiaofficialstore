@@ -2,10 +2,11 @@
 
 /**
  * Store admin — passcode-gated (X-Admin-Key = the ADMIN_KEY secret,
- * held in sessionStorage only). Two tabs:
+ * held in sessionStorage only). Three tabs:
  *   Orders   — confirm payments (view the uploaded receipt), ship with a
  *              tracking number, cancel unpaid orders (restocks itself).
- *   Products — add/edit, price, stock, photo, show/hide.
+ *   Products — add/edit, price, stock, photo, show/hide, sync stock.
+ *   Waitlist — who asked to be told when a sold-out shade returns (v0.6.0).
  * The Worker enforces every rule (forward-only statuses, restock on unpaid
  * cancel); this page is just hands.
  */
@@ -30,10 +31,17 @@ const STATUS_STYLE: Record<string, string> = {
 };
 const FILTERS = ["all", "payment_review", "pending_payment", "paid", "shipped", "completed", "cancelled"] as const;
 
+/** v0.6.0 — a "tell me when it's back" request from a sold-out product page. */
+interface NotifyRow {
+  id: number; product_id: number; name: string; phone: string;
+  created_at: string; notified_at: string | null;
+  product_name: string | null; sku: string | null; stock: number | null;
+}
+
 export default function Admin() {
   const [key, setKey] = useState("");
   const [authed, setAuthed] = useState(false);
-  const [tab, setTab] = useState<"orders" | "products">("orders");
+  const [tab, setTab] = useState<"orders" | "products" | "waitlist">("orders");
   const [error, setError] = useState("");
 
   const [orders, setOrders] = useState<AdminOrder[]>([]);
@@ -42,6 +50,7 @@ export default function Admin() {
   const [tracking, setTracking] = useState("");
 
   const [products, setProducts] = useState<Product[]>([]);
+  const [waitlist, setWaitlist] = useState<NotifyRow[]>([]);
   const [editing, setEditing] = useState<number | null>(null);
   const [pform, setPform] = useState({ name: "", description: "", price: "", stock: "", sku: "", category: "bawal", featured: false });
 
@@ -53,6 +62,10 @@ export default function Admin() {
     setOrders(((await r.json()) as { orders: AdminOrder[] }).orders);
     const rp = await fetch("/api/v1/admin/products", { headers: { "X-Admin-Key": k } });
     if (rp.ok) setProducts(((await rp.json()) as { products: Product[] }).products);
+    /* Tolerated failure: a worker deployed ahead of migration 0006 has no
+       restock_requests table yet. The other two tabs must still work. */
+    const rn = await fetch("/api/v1/admin/notify", { headers: { "X-Admin-Key": k } }).catch(() => null);
+    if (rn?.ok) setWaitlist(((await rn.json()) as { requests: NotifyRow[] }).requests);
     setError(""); return true;
   }, [filter]);
 
@@ -122,6 +135,11 @@ export default function Admin() {
     void load(key);
   };
 
+  const waitlistAct = async (id: number, done: boolean) => {
+    await fetch(`/api/v1/admin/notify/${id}`, { method: done ? "PUT" : "DELETE", headers: hdr(key) });
+    void load(key);
+  };
+
   const uploadPhoto = async (id: number, file: File) => {
     await fetch(`/api/v1/admin/products/${id}/photo`, {
       method: "POST", headers: { "X-Admin-Key": key, "Content-Type": file.type }, body: file,
@@ -149,13 +167,19 @@ export default function Admin() {
     <main className="px-6 py-10">
       <div className="mx-auto w-full max-w-4xl">
         <div className="flex items-center gap-3">
-          {(["orders", "products"] as const).map((t) => (
-            <button key={t} type="button"
-              className={`rounded-lg px-4 py-2 text-sm font-semibold capitalize ${tab === t ? "bg-[#7a2648] text-white" : "bg-white text-stone-600 hover:bg-stone-100"}`}
-              onClick={() => setTab(t)}>
-              {t}
-            </button>
-          ))}
+          {(["orders", "products", "waitlist"] as const).map((t) => {
+            const open = t === "waitlist" ? waitlist.filter((w) => !w.notified_at).length : 0;
+            return (
+              <button key={t} type="button"
+                className={`rounded-lg px-4 py-2 text-sm font-semibold capitalize ${tab === t ? "bg-[#7a2648] text-white" : "bg-white text-stone-600 hover:bg-stone-100"}`}
+                onClick={() => setTab(t)}>
+                {t}
+                {open > 0 && (
+                  <span className={`ml-1.5 rounded-full px-1.5 py-0.5 text-[10px] ${tab === t ? "bg-white/25" : "bg-[#7a2648] text-white"}`}>{open}</span>
+                )}
+              </button>
+            );
+          })}
           <button type="button" className="ml-auto text-xs text-stone-500 underline" onClick={() => void load(key)}>Refresh</button>
         </div>
 
@@ -316,6 +340,48 @@ export default function Admin() {
                   </button>
                 </div>
               ))}
+            </div>
+          </>
+        )}
+
+        {/* v0.6.0 — who is waiting for a sold-out shade. Nothing is sent
+            automatically: you press WhatsApp, say hello in your own words,
+            then mark them told. Open requests sort first, oldest at the top. */}
+        {tab === "waitlist" && (
+          <>
+            <p className="mt-5 text-xs text-stone-500">
+              Customers who asked to be told when a sold-out design returns. Restock it in Products first,
+              then message them — the WhatsApp button opens a chat with the shade already in the message.
+            </p>
+            <div className="mt-4 space-y-2">
+              {waitlist.length === 0 && <p className="text-sm text-stone-500">Nobody waiting right now.</p>}
+              {waitlist.map((w) => {
+                const back = (w.stock ?? 0) > 0;
+                return (
+                  <div key={w.id} className={`flex flex-wrap items-center gap-3 rounded-xl border p-3 ${w.notified_at ? "border-stone-200 bg-stone-50" : "border-stone-200 bg-white"}`}>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium">
+                        {w.name} <span className="font-normal text-stone-500">wants</span> {w.product_name ?? `#${w.product_id}`}
+                      </p>
+                      <p className="text-xs text-stone-500">
+                        {w.sku ? `${w.sku} · ` : ""}{w.phone} · asked {w.created_at.slice(0, 16)}
+                        {w.notified_at && <span className="ml-1 text-green-700">· told {w.notified_at.slice(0, 16)}</span>}
+                      </p>
+                    </div>
+                    <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${back ? "bg-green-100 text-green-900" : "bg-amber-100 text-amber-900"}`}>
+                      {back ? `back in stock (${w.stock})` : "still sold out"}
+                    </span>
+                    <a className="rounded-full bg-green-100 px-3 py-1.5 text-xs font-semibold text-green-900" rel="noopener"
+                      href={`https://wa.me/${w.phone.replace(/[^0-9]/g, "")}?text=${encodeURIComponent(`Hi ${w.name}! ELFIA here — ${w.product_name ?? "the shade you wanted"} is back in stock. `)}`}>
+                      WhatsApp
+                    </a>
+                    {!w.notified_at && (
+                      <button type="button" className="text-xs underline" onClick={() => void waitlistAct(w.id, true)}>mark told</button>
+                    )}
+                    <button type="button" className="text-xs text-stone-500 underline" onClick={() => void waitlistAct(w.id, false)}>remove</button>
+                  </div>
+                );
+              })}
             </div>
           </>
         )}
