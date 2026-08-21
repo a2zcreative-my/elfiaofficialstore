@@ -1,5 +1,63 @@
 # ELFIA OFFICIAL STORE — changelog
 
+## [1.1.0] — 20-08-2026 — the portal runs the business
+
+**CEO, from the live site: sign-in said "Network problem", no Billplz button,
+and: "the inventory can be sync with my staff portal? Orders auto-deducted
+there? Prices controlled in /portal? Orders sent into the portal so I can
+monitor everything?"**
+
+### Why login failed — and how it can never hide again
+The live worker was v1.0.0 but its **database migrations and secrets were
+never applied** (`/api/v1/health` showed every `*_configured: false`).
+Sign-up then crashed into Cloudflare's HTML error page, which the storefront
+can only read as "Network problem". Two fixes so this class of failure
+explains itself:
+
+- **Every error now leaves the worker as JSON.** A global handler catches
+  anything uncaught; the customer sees a real sentence, never a mystery.
+- **/health now reports `migrations_current`** and, when false, lists which
+  tables are missing, what will fail because of it, and the exact command
+  that fixes it. DEPLOY.bat prints this at the end of every deploy.
+- Sign-up on an unmigrated database used to answer "email already taken" —
+  a lie that sends customers chasing a password they never made. It now says
+  the shop's setup is unfinished and that guest checkout still works.
+
+*(No Billplz button is the same story: the button appears the moment
+`BILLPLZ_SECRET` + `BILLPLZ_COLLECTION` exist — they were never set.)*
+
+### Prices are controlled in /portal
+The portal's inventory feed may now carry `price_cents` per SKU. When it
+does, the portal owns that selling price: every 5-minute pull applies it,
+and a store-side edit is corrected back on the next pull. When it does not,
+the store's own price stands — pricing moves to the portal SKU by SKU,
+exactly when the portal starts sending a number. A zero or garbage price is
+refused rather than zeroing the shop. Prices are never deferred the way
+counts are: even a SKU whose count is held back (unsent sales) takes the
+portal's price immediately.
+
+### The portal sees every order
+New `GET /api/v1/bridge/orders` on the store — same shared key, constant-time
+compared, cursor-based. The portal polls it and receives every web order with
+items, totals (the price actually charged, frozen at purchase), status,
+tracking and customer details, and the same order re-surfaces on every status
+change so the portal's copy is never stale. The customer's private order-page
+token is deliberately excluded. Together with the movements push (v0.8.0),
+this closes the loop the CEO asked for: web orders auto-deduct portal stock
+AND appear in the portal for monitoring.
+
+### The portal's address never enters the repo
+`BRIDGE_URL` and `BRIDGE_PUSH_URL` are now **secrets** like `BRIDGE_KEY` —
+the brand-isolation gate forbids the agency's domain in any committed file,
+and pasting it into wrangler.toml would have made DEPLOY.bat refuse to
+deploy. Set all three with `wrangler secret put`.
+
+### Tested
+The sync suite grew to **36 assertions** (portal price applied, store edit
+corrected back, garbage price refused, SKU without a price keeps its own;
+orders feed auth, cursor walk, status-change re-surfacing, no token leak).
+API suite 85, browser journey 16 steps — all passing.
+
 ## [1.0.0] — 20-08-2026 — no joy buyers, real Billplz, no secrets in the code
 
 **CEO: "ensure that there is no joy buyer … fully integrate with Billplz …

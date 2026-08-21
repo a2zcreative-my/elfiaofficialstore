@@ -26,6 +26,8 @@ npx wrangler secret put BILLPLZ_SECRET       # Billplz API Secret Key
 npx wrangler secret put BILLPLZ_COLLECTION   # Billplz Collection ID
 npx wrangler secret put BILLPLZ_XSIGN        # Billplz X Signature Key
 npx wrangler secret put BRIDGE_KEY           # shared with the portal
+npx wrangler secret put BRIDGE_URL           # portal inventory+price feed
+npx wrangler secret put BRIDGE_PUSH_URL      # portal movements endpoint
 ```
 
 `node tests/no-secrets.mjs` fails the build if a credential is ever committed —
@@ -65,12 +67,18 @@ themselves from the portal (see below), or type them in /admin.
 The store and the portal sell the same physical pieces, so they exchange
 inventory both ways:
 
-- **↓ Counts in** — every 5 minutes the store reads the portal's inventory
-  feed and refreshes its own numbers, matched by SKU.
+- **↓ Counts and prices in** — every 5 minutes the store reads the portal's
+  inventory feed and refreshes its numbers, matched by SKU. When the feed
+  carries `price_cents` for a SKU, the portal owns that selling price and the
+  store applies it — prices are controlled in /portal.
 - **↑ Sales out** — the moment an order is placed, the store reports what it
   took (`−2 LUMI001`); a cancelled unpaid order reports it back (`+2`). These
   go into an outbox first, so if the portal is down the sale waits and is
   delivered later. Nothing is lost.
+- **↑ Whole orders out** — the portal polls `GET /api/v1/bridge/orders`
+  (same shared key, cursor-based) and receives every web order with its
+  items, totals, status and tracking, re-sent on every status change. Web
+  orders are monitored from the portal like everything else.
 
 The store never sends absolute counts — the portal owns the true number. And
 the store will not accept a count for a SKU whose sales the portal has not yet
@@ -78,12 +86,14 @@ seen, so a stale number can never put sold pieces back on the shelf.
 
 To switch it on, both sides must hold the same secret:
 
-1. The portal needs one new endpoint — hand **`PORTAL-BRIDGE-SPEC.md`** to
-   whoever maintains that repo.
-2. Paste both URLs into `worker/wrangler.toml`: `BRIDGE_URL` (the portal's
-   inventory feed) and `BRIDGE_PUSH_URL` (where movements are posted).
-3. `cd worker && npx wrangler secret put BRIDGE_KEY` — the same value the
-   portal stores as `ELFIA_BRIDGE_KEY`. Deploy.
+1. The portal needs the movements endpoint and the orders-feed poller — hand
+   **`PORTAL-BRIDGE-SPEC.md`** to whoever maintains that repo. (Adding
+   `price_cents` to its existing feed is the change that moves pricing there.)
+2. `cd worker`, then set all three as secrets — the portal's domain never
+   enters a committed file: `npx wrangler secret put BRIDGE_URL`,
+   `npx wrangler secret put BRIDGE_PUSH_URL`,
+   `npx wrangler secret put BRIDGE_KEY` (same value as the portal's
+   `ELFIA_BRIDGE_KEY`). Deploy.
 4. `/api/v1/health` should show `bridge_pull_configured: true` and
    `bridge_push_configured: true`. /admin → Products shows live sync health.
 

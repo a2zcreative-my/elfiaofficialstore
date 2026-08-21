@@ -6,11 +6,13 @@
  *   node scratch/fake-portal.mjs            (listens on :8200)
  *
  * Endpoints (per the spec):
- *   GET  /bridge/elfia-inventory   -> { items: [{ sku, name, stock }] }
+ *   GET  /bridge/elfia-inventory   -> { items: [{ sku, name, stock, price_cents? }] }
  *   POST /bridge/elfia-movements   -> { applied, ignored, unknown_sku }
  * Test controls (NOT part of the spec):
- *   GET  /_state                   -> counts + the event ids it has applied
+ *   GET  /_state                   -> counts, prices, applied event ids
  *   POST /_set   { sku, stock }    -> force a count
+ *   POST /_price { sku, price_cents } -> set a price (null clears it, so the
+ *                                        feed omits the field for that SKU)
  *   POST /_down  { down: true }    -> pretend the portal is unreachable
  */
 import http from "node:http";
@@ -21,6 +23,7 @@ const stock = new Map([
   ["LUMI006", 6], ["LUMI007", 9], ["LUMI008", 11], ["LUMI009", 4], ["LUMI010", 7],
 ]);
 const applied = new Set();   // event ids already counted — the dedupe store
+const prices = new Map();    // sku -> price_cents; absent = feed omits the field
 let down = false;
 
 const body = async (req) => {
@@ -37,7 +40,13 @@ http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
 
   if (url.pathname === "/_state") {
-    return send(res, 200, { stock: Object.fromEntries(stock), applied: [...applied], down });
+    return send(res, 200, { stock: Object.fromEntries(stock), prices: Object.fromEntries(prices), applied: [...applied], down });
+  }
+  if (url.pathname === "/_price") {
+    const b = await body(req);
+    const sku = String(b.sku).toUpperCase();
+    if (b.price_cents === null) prices.delete(sku); else prices.set(sku, Number(b.price_cents));
+    return send(res, 200, { ok: true });
   }
   if (url.pathname === "/_set") {
     const b = await body(req); stock.set(String(b.sku).toUpperCase(), Number(b.stock));
@@ -52,7 +61,12 @@ http.createServer(async (req, res) => {
   if (req.headers["x-bridge-key"] !== KEY) return send(res, 401, { error: "bad key" });
 
   if (url.pathname === "/bridge/elfia-inventory" && req.method === "GET") {
-    return send(res, 200, { items: [...stock].map(([sku, s]) => ({ sku, name: `Portal ${sku}`, stock: s })) });
+    return send(res, 200, {
+      items: [...stock].map(([sku, s]) => ({
+        sku, name: `Portal ${sku}`, stock: s,
+        ...(prices.has(sku) ? { price_cents: prices.get(sku) } : {}),
+      })),
+    });
   }
 
   if (url.pathname === "/bridge/elfia-movements" && req.method === "POST") {

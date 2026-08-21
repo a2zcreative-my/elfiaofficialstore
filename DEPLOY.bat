@@ -3,7 +3,7 @@ setlocal EnableExtensions EnableDelayedExpansion
 title ELFIA OFFICIAL STORE - deploy
 REM ============================================================
 REM  ELFIA OFFICIAL STORE - full deploy (site + API + database)
-REM  Version 1.0.0
+REM  Version 1.1.0
 REM
 REM  This script NEVER closes without telling you why. Everything it
 REM  prints is also written to deploy-log.txt next to this file.
@@ -39,7 +39,6 @@ call :say "[2/9] Checking worker\wrangler.toml"
 findstr /C:"REPLACE_WITH_D1_DATABASE_ID" "worker\wrangler.toml" >nul && call :die "worker\wrangler.toml still says REPLACE_WITH_D1_DATABASE_ID.  Fix: cd worker  then  npx wrangler d1 create elfia-store  and paste the database_id it prints into worker\wrangler.toml"
 findstr /C:"BANK_LINE = \"REPLACE" "worker\wrangler.toml" >nul && call :warn "BANK_LINE is still a placeholder - customers will see 'REPLACE...' instead of your bank account."
 findstr /C:"WHATSAPP_DIGITS = \"60000000000\"" "worker\wrangler.toml" >nul && call :warn "WHATSAPP_DIGITS is still the dummy number - the floating WhatsApp button will stay hidden."
-findstr /C:"BRIDGE_URL = \"REPLACE" "worker\wrangler.toml" >nul && call :warn "BRIDGE_URL is not set - inventory will NOT sync with the portal."
 
 set "STEP=checking you are logged in to Cloudflare"
 call :say "[3/9] Checking Cloudflare login"
@@ -109,6 +108,8 @@ echo   ============================================================
 echo.
 echo   In the health line above, all of these should be true:
 echo     "db"                          the database answered
+echo     "migrations_current"          the database has every table (if
+echo                                   false, the health line names the fix)
 echo     "admin_key_configured"        you can sign in to /admin
 echo     "bank_line_configured"        customers see your real account
 echo     "gateway_configured"          online payment (Billplz) is on
@@ -123,6 +124,8 @@ echo     npx wrangler secret put BILLPLZ_SECRET
 echo     npx wrangler secret put BILLPLZ_COLLECTION
 echo     npx wrangler secret put BILLPLZ_XSIGN
 echo     npx wrangler secret put BRIDGE_KEY
+echo     npx wrangler secret put BRIDGE_URL        (portal inventory feed)
+echo     npx wrangler secret put BRIDGE_PUSH_URL   (portal movements endpoint)
 echo   (Each asks you to paste the value. It is never written to a file.)
 echo.
 echo   Then open /admin -^> Orders -^> "Test online payment (Billplz)".

@@ -30,7 +30,7 @@ import {
 import {
   callerIp, clearLimit, createSession, currentCustomer, destroySession, hashPassword, hitLimit,
   looksLikeEmail, normaliseEmail, normalisePhone, sessionCookie, clearCookie, sweepAuth,
-  verifyPassword, type Customer,
+  timingSafeEqual, verifyPassword, type Customer,
 } from "./auth";
 import {
   flushStockEvents, getState, pullConfigured, pushConfigured, recordStockEvents, syncNow,
@@ -60,20 +60,20 @@ export interface Env {
   ORDER_HOLD_HOURS?: string;
   /** v1.0.0 — how many unpaid orders one phone number may hold. Default 2. */
   MAX_OPEN_ORDERS?: string;
-  /** v0.4.0 — stock sync from the agency portal that runs ELFIA's live
-      sessions. BRIDGE_URL is a wrangler.toml var (the portal's bridge
-      endpoint, pasted at setup so no other company's domain lives in this
-      repo); BRIDGE_KEY is a secret, same value as the portal side. Both
-      unset = the Sync button reports "not configured" and nothing else. */
+  /** Inventory + price sync with the agency portal. ALL THREE are Wrangler
+      secrets (v1.1.0) — the portal's domain must never live in a committed
+      file, and tests/brand-isolation.mjs enforces that. Any of them unset =
+      that direction reports "not configured" and does nothing.
+        BRIDGE_URL       the portal's inventory feed (GET; counts + prices)
+        BRIDGE_PUSH_URL  where this store posts its sales (POST; deltas)
+        BRIDGE_KEY       shared secret, equal to the portal's ELFIA_BRIDGE_KEY */
   BRIDGE_URL?: string;
-  /** v0.8.0 — where stock MOVEMENTS are posted back (store → portal), so a
-      web sale reaches the portal instead of only the other way round. */
   BRIDGE_PUSH_URL?: string;
   BRIDGE_KEY?: string;
   STORE_ORIGIN?: string;     // override for local testing
 }
 
-const VERSION = "1.0.0";
+const VERSION = "1.1.0";
 const STATUSES = ["pending_payment", "payment_review", "paid", "shipped", "completed", "cancelled"] as const;
 type Status = (typeof STATUSES)[number];
 
@@ -238,7 +238,22 @@ export default {
     })());
   },
 
+  /* v1.1.0 — no request may crash into an HTML error page. The CEO's phone
+     showed "Network problem — please try again" where the real story was a
+     missed database migration: an uncaught throw became Cloudflare's HTML
+     error page, which the storefront cannot read. Every failure now leaves
+     this worker as JSON, and /health names the missing piece. */
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    try {
+      return await handleRequest(request, env, ctx);
+    } catch (e) {
+      console.error("unhandled:", e instanceof Error ? e.stack ?? e.message : String(e));
+      return json({ error: { code: "server_error", message: "Something went wrong on our side — please try again in a moment." } }, 500);
+    }
+  },
+};
+
+async function handleRequest(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname.replace(/^\/api\/v1/, "");
     const method = request.method;
@@ -249,9 +264,29 @@ export default {
       let db = false, r2 = false;
       try { await env.DB.prepare("SELECT 1").first(); db = true; } catch { /* not yet */ }
       try { await env.MEDIA.head("health-probe"); r2 = true; } catch { /* not yet */ }
+      /* Which migrations have actually reached THIS database. `db: true` only
+         proves the database answers; a worker deployed ahead of its
+         migrations is the failure that looked like "Network problem" on the
+         CEO's phone, so the health line now names it. */
+      const table = async (name: string): Promise<boolean> => {
+        try { await env.DB.prepare(`SELECT 1 FROM ${name} LIMIT 1`).first(); return true; } catch { return false; }
+      };
+      const [accounts, progress, syncReady] = await Promise.all([
+        table("customers"), table("order_events"), table("stock_events"),
+      ]);
+      const migrationsCurrent = accounts && progress && syncReady;
       const cfg = storeConfig(env);
       return json({
-        ok: db, version: VERSION, db, r2,
+        ok: db && migrationsCurrent, version: VERSION, db, r2,
+        migrations_current: migrationsCurrent,
+        ...(migrationsCurrent ? {} : {
+          migrations_fix: "cd worker && npx wrangler d1 migrations apply elfia-store --remote",
+          missing: [
+            ...(accounts ? [] : ["customers (0010 — sign in/sign up will fail)"]),
+            ...(progress ? [] : ["order_events (0009 — order progress will fail)"]),
+            ...(syncReady ? [] : ["stock_events (0008 — inventory sync will fail)"]),
+          ],
+        }),
         admin_key_configured: Boolean(env.ADMIN_KEY),
         bank_line_configured: !cfg.bank_line.startsWith("REPLACE"),
         gateway_configured: cfg.gateway,
@@ -490,6 +525,50 @@ export default {
       });
     }
 
+    /* ---- orders feed for the agency portal (v1.1.0) ----
+       CEO: "Order should be able to send into the portal so that I can
+       easily monitor everything." The portal PULLS from here rather than the
+       store pushing whole orders out: an order is not a delta, it is a
+       record that keeps changing (paid, shipped, delivered), and a poll with
+       a cursor picks up every change without an outbox per status.
+
+       Auth is the same shared bridge key as the inventory sync, compared in
+       constant time. The customer's order TOKEN is deliberately absent —
+       that is the customer's private key to their order page, and the portal
+       has no use for it.
+
+       `since` is the cursor: the `cursor` value from the previous response
+       (an updated-at watermark). First call: omit it and page from the
+       start. Rows come back oldest-change-first, at most 200 per call; keep
+       calling with the new cursor until `orders` comes back empty. The same
+       order reappears whenever its status moves — upsert by order_number. */
+    if (path === "/bridge/orders" && method === "GET") {
+      if (!env.BRIDGE_KEY) return err("not_configured", "Set the BRIDGE_KEY secret first", 501);
+      const given = request.headers.get("X-Bridge-Key") ?? "";
+      if (!timingSafeEqual(given, env.BRIDGE_KEY)) return err("unauthorized", "Bad key", 401);
+
+      const since = str(url.searchParams.get("since"), 40);
+      const { results } = await env.DB.prepare(
+        `SELECT order_number, status, customer_name, phone, address, items,
+                subtotal_cents, shipping_cents, total_cents, payment_method,
+                tracking_no, tracking_courier, created_at, updated_at,
+                COALESCE(updated_at, created_at) AS changed_at
+         FROM orders
+         ${since ? "WHERE COALESCE(updated_at, created_at) > ?1" : ""}
+         ORDER BY changed_at, id LIMIT 200`,
+      ).bind(...(since ? [since] : [])).all<Record<string, unknown> & { changed_at: string; items: string }>();
+
+      const orders = results.map((o) => ({
+        ...o,
+        items: JSON.parse(o.items) as unknown[],   // qty + the price actually charged
+      }));
+      return json({
+        orders,
+        cursor: results.length ? results[results.length - 1]!.changed_at : since ?? null,
+        store: "elfia",
+      });
+    }
+
     /* ---------------- customer accounts (v1.0.0) ----------------
        An account is optional everywhere. Nothing below is required to buy;
        it exists so a customer's address and order history survive a new
@@ -519,7 +598,15 @@ export default {
            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) RETURNING id`,
         ).bind(email, name, phone, normalisePhone(phone), str(body?.address, 500), hash, salt, iter)
          .first<{ id: number }>();
-      } catch {
+      } catch (e) {
+        /* Two very different failures land here and must not share a message:
+           a missing table (migration 0010 never ran — the shop's problem) and
+           a duplicate email (the customer's). Telling a customer "email
+           taken" when the real fault is an unmigrated database sends them
+           chasing a password they never made. */
+        if (/no such table/i.test(String(e))) {
+          return err("not_ready", "Accounts are not switched on yet — the shop needs to finish its setup. You can still order as a guest.", 503);
+        }
         // UNIQUE(email). Say so plainly: an attacker can discover the same
         // fact by trying to sign in, so hiding it only confuses real people.
         return err("email_taken", "There is already an account with that email. Sign in instead.", 409);
@@ -1049,5 +1136,4 @@ export default {
     }
 
     return err("not_found", "No such endpoint", 404);
-  },
-};
+}

@@ -21,6 +21,14 @@
  *   that still has unsent events, because that count was computed before the
  *   portal saw our sales and would silently put sold pieces back.
  *
+ * PRICES (v1.1.0, CEO: "make the prices sync with my system which is easier
+ *   for me to control in /portal"). When the feed carries `price_cents` for a
+ *   SKU, the portal owns that price and every pull applies it. When it does
+ *   not, the store's own price stands — pricing moves to the portal SKU by
+ *   SKU, exactly when the portal starts sending a number. Prices are never
+ *   deferred the way counts are: the outbox holds stock deltas, and a stock
+ *   delta cannot make a price stale.
+ *
  * Configuration (both sides must hold the same secret):
  *   BRIDGE_URL       wrangler.toml var — the portal's read-only inventory feed
  *   BRIDGE_PUSH_URL  wrangler.toml var — where movements are posted
@@ -178,6 +186,8 @@ export async function flushStockEvents(env: Env): Promise<FlushResult> {
 export interface PullResult {
   configured: boolean;
   updated: { sku: string; from: number; to: number }[];
+  /** v1.1.0 — prices taken from the portal this pull (cents). */
+  price_updated: { sku: string; from: number; to: number }[];
   unchanged: number;
   unmatched_portal: string[];
   unmatched_store: string[];
@@ -187,7 +197,7 @@ export interface PullResult {
 }
 
 const EMPTY_PULL: Omit<PullResult, "configured" | "error"> = {
-  updated: [], unchanged: 0, unmatched_portal: [], unmatched_store: [], deferred: [],
+  updated: [], price_updated: [], unchanged: 0, unmatched_portal: [], unmatched_store: [], deferred: [],
 };
 
 /** Refresh piece counts from the portal, by SKU, case-insensitive. */
@@ -195,7 +205,7 @@ export async function pullStock(env: Env): Promise<PullResult> {
   if (!pullConfigured(env)) {
     return { configured: false, ...EMPTY_PULL, error: "Set BRIDGE_URL (wrangler.toml) and the BRIDGE_KEY secret first — see PORTAL-BRIDGE-SPEC.md" };
   }
-  let items: { sku: string; name?: string; stock: number }[];
+  let items: { sku: string; name?: string; stock: number; price_cents?: number }[];
   try {
     const r = await fetch(env.BRIDGE_URL!, { headers: { "X-Bridge-Key": env.BRIDGE_KEY! } });
     if (!r.ok) throw new Error(`portal answered ${r.status} — check the key matches on both sides`);
@@ -210,8 +220,8 @@ export async function pullStock(env: Env): Promise<PullResult> {
      portal needs to carry, and listing it as "missing there" turns the
      reconciliation report into noise nobody reads. */
   const { results: mine } = await env.DB.prepare(
-    `SELECT id, sku, stock FROM products WHERE sku IS NOT NULL AND active = 1`,
-  ).all<{ id: number; sku: string; stock: number }>();
+    `SELECT id, sku, stock, price_cents FROM products WHERE sku IS NOT NULL AND active = 1`,
+  ).all<{ id: number; sku: string; stock: number; price_cents: number }>();
   const bySku = new Map(mine.map((m) => [m.sku.toUpperCase(), m]));
 
   /* Any SKU whose sales are still sitting in the outbox must not be
@@ -222,6 +232,7 @@ export async function pullStock(env: Env): Promise<PullResult> {
   const held = new Set(waiting.map((w) => w.sku.toUpperCase()));
 
   const updated: PullResult["updated"] = [];
+  const price_updated: PullResult["price_updated"] = [];
   const unmatched_portal: string[] = [];
   const deferred: string[] = [];
   let unchanged = 0;
@@ -232,6 +243,18 @@ export async function pullStock(env: Env): Promise<PullResult> {
     const m = sku ? bySku.get(sku) : undefined;
     if (!m || !Number.isFinite(stock)) { if (sku) unmatched_portal.push(sku); continue; }
     bySku.delete(sku);
+
+    /* Price first, and independently of the stock decision below: a SKU whose
+       COUNT is deferred (unsent sales) must still take the portal's PRICE —
+       the customer in front of the shop right now should see the right one.
+       Only a sane number is accepted: a positive integer in cents. A feed
+       that sends 0, a negative, or garbage does not zero the shop's prices. */
+    const price = Math.round(Number(it.price_cents));
+    if (it.price_cents !== undefined && Number.isFinite(price) && price > 0 && price !== m.price_cents) {
+      await env.DB.prepare(`UPDATE products SET price_cents = ?1 WHERE id = ?2`).bind(price, m.id).run();
+      price_updated.push({ sku: m.sku, from: m.price_cents, to: price });
+    }
+
     if (held.has(sku)) { deferred.push(m.sku); continue; }
     if (m.stock === stock) { unchanged++; continue; }
     await env.DB.prepare(`UPDATE products SET stock = ?1 WHERE id = ?2`).bind(stock, m.id).run();
@@ -241,10 +264,12 @@ export async function pullStock(env: Env): Promise<PullResult> {
   const unmatched_store = [...bySku.values()].map((m) => m.sku);
   await setState(env, "last_pull_at", new Date().toISOString());
   await setState(env, "last_pull_result",
-    `ok: ${updated.length} updated, ${unchanged} unchanged${deferred.length ? `, ${deferred.length} deferred` : ""}` +
+    `ok: ${updated.length} updated, ${unchanged} unchanged` +
+    `${price_updated.length ? `, ${price_updated.length} price${price_updated.length === 1 ? "" : "s"} updated` : ""}` +
+    `${deferred.length ? `, ${deferred.length} deferred` : ""}` +
     `${unmatched_portal.length ? `, ${unmatched_portal.length} unknown here` : ""}` +
     `${unmatched_store.length ? `, ${unmatched_store.length} unknown there` : ""}`);
-  return { configured: true, updated, unchanged, unmatched_portal, unmatched_store, deferred };
+  return { configured: true, updated, price_updated, unchanged, unmatched_portal, unmatched_store, deferred };
 }
 
 /** What the cron and the /admin button both do: deliver, then refresh. */

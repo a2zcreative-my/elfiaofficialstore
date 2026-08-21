@@ -177,6 +177,80 @@ step("a SKU the portal does not know is reported, not retried forever");
   await admin(`/admin/products/${created.id}`, { method: "PUT", body: JSON.stringify({ active: false }) });
 }
 
+step("prices are controlled in the portal");
+{
+  const p2 = (await jget(`${API}/products`)).products.find((x) => x.sku === "LUMI002");
+  const before = p2.price_cents;
+
+  // The portal starts sending a price for LUMI002 — the store must take it.
+  await fetch(`${PORTAL}/_price`, { method: "POST", body: JSON.stringify({ sku: "LUMI002", price_cents: 5500 }) });
+  let r = await syncNow();
+  ok("the portal's price is applied on the next pull",
+     r.pull.price_updated.some((u) => u.sku === "LUMI002" && u.to === 5500),
+     JSON.stringify(r.pull.price_updated));
+  ok("the storefront now sells at the portal's price",
+     (await jget(`${API}/products/${p2.id}`)).product.price_cents === 5500);
+
+  // An admin edit is overridden on the next pull — the portal owns this SKU's
+  // price now, which is exactly what the CEO asked for.
+  await admin(`/admin/products/${p2.id}`, { method: "PUT", body: JSON.stringify({ price_cents: 9999 }) });
+  r = await syncNow();
+  ok("a store-side price edit is corrected back to the portal's",
+     (await jget(`${API}/products/${p2.id}`)).product.price_cents === 5500,
+     JSON.stringify(r.pull.price_updated));
+
+  // Garbage from the feed must not zero the shop.
+  await fetch(`${PORTAL}/_price`, { method: "POST", body: JSON.stringify({ sku: "LUMI002", price_cents: 0 }) });
+  await syncNow();
+  ok("a zero/garbage price is refused, the last good price stands",
+     (await jget(`${API}/products/${p2.id}`)).product.price_cents === 5500);
+
+  // The portal stops sending a price — the store's own price stands again.
+  await fetch(`${PORTAL}/_price`, { method: "POST", body: JSON.stringify({ sku: "LUMI002", price_cents: null }) });
+  await admin(`/admin/products/${p2.id}`, { method: "PUT", body: JSON.stringify({ price_cents: before }) });
+  const r2 = await syncNow();
+  ok("a SKU without a portal price keeps the store's own",
+     (await jget(`${API}/products/${p2.id}`)).product.price_cents === before &&
+     !r2.pull.price_updated.some((u) => u.sku === "LUMI002"));
+}
+
+step("the portal can pull every web order");
+{
+  const feed = (q = "") => fetch(`${API}/bridge/orders${q}`, { headers: { "X-Bridge-Key": "shared-bridge-secret" } });
+
+  const noKey = await fetch(`${API}/bridge/orders`);
+  ok("no key, no orders", noKey.status === 401 || noKey.status === 501, `${noKey.status}`);
+  const badKey = await fetch(`${API}/bridge/orders`, { headers: { "X-Bridge-Key": "wrong" } });
+  ok("a wrong key is refused", badKey.status === 401);
+
+  const placed = await order(products.find((x) => x.sku === "LUMI003").id, 1, "Feed Test");
+  await sleep(400);
+  let page = await (await feed()).json();
+  let cursor = page.cursor;
+  let all = [...page.orders];
+  for (let i = 0; i < 30 && page.orders.length; i++) {         // walk the cursor to the end
+    page = await (await feed(`?since=${encodeURIComponent(cursor)}`)).json();
+    cursor = page.cursor ?? cursor;
+    all = all.concat(page.orders);
+  }
+  const mine = all.find((o) => o.order_number === placed.order_number);
+  ok("the new order appears in the feed", Boolean(mine), placed.order_number);
+  ok("with its items and the price actually charged",
+     mine && Array.isArray(mine.items) && mine.items[0].qty === 1 && mine.items[0].price_cents > 0,
+     JSON.stringify(mine?.items));
+  ok("and without the customer's private token", mine && !("token" in mine));
+
+  // A status change re-surfaces the order after the cursor.
+  const list = await (await admin("/admin/orders")).json();
+  const id = list.orders.find((x) => x.order_number === placed.order_number).id;
+  await sleep(1100);                                            // datetime('now') is second-resolution
+  await admin(`/admin/orders/${id}`, { method: "PUT", body: JSON.stringify({ action: "confirm_paid" }) });
+  const next = await (await feed(`?since=${encodeURIComponent(cursor)}`)).json();
+  const again = next.orders.find((o) => o.order_number === placed.order_number);
+  ok("a status change re-surfaces the order past the cursor", again?.status === "paid",
+     JSON.stringify(next.orders.map((o) => [o.order_number, o.status])));
+}
+
 step("always-available products still report their sales");
 {
   const p = (await jget(`${API}/products`)).products.find((x) => x.sku === "LUMI005");

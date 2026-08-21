@@ -178,7 +178,8 @@ export default function Admin() {
       const j = (await r.json()) as {
         push?: { configured: boolean; sent: number; pending: number; stuck: number; error?: string };
         pull?: {
-          configured: boolean; updated: { sku: string; from: number; to: number }[]; unchanged: number;
+          configured: boolean; updated: { sku: string; from: number; to: number }[];
+          price_updated?: { sku: string; from: number; to: number }[]; unchanged: number;
           unmatched_portal: string[]; unmatched_store: string[]; deferred: string[]; error?: string;
         };
         sent?: number; error?: { message?: string };
@@ -198,6 +199,9 @@ export default function Admin() {
           lines.push(j.pull.updated.length === 0
             ? `↓ Counts already match (${j.pull.unchanged} checked).`
             : `↓ Updated ${j.pull.updated.length}: ${j.pull.updated.map((u) => `${u.sku} ${u.from}→${u.to}`).join(", ")}`);
+          if (j.pull.price_updated?.length) {
+            lines.push(`↓ Prices from the portal: ${j.pull.price_updated.map((u) => `${u.sku} ${fmtRM(u.from)}→${fmtRM(u.to)}`).join(", ")}`);
+          }
           if (j.pull.deferred.length) lines.push(`↓ Left alone until the portal has our sales: ${j.pull.deferred.join(", ")}`);
           if (j.pull.unmatched_portal.length) lines.push(`In the portal but NOT here (add them with this SKU): ${j.pull.unmatched_portal.join(", ")}`);
           if (j.pull.unmatched_store.length) lines.push(`Here but NOT in the portal (add the SKU there): ${j.pull.unmatched_store.join(", ")}`);
@@ -415,7 +419,7 @@ export default function Admin() {
                     )}
                   </div>
                   <div>
-                    <p className="font-semibold text-stone-700">↓ Counts ← portal</p>
+                    <p className="font-semibold text-stone-700">↓ Counts &amp; prices ← portal</p>
                     {!sync.pull_configured ? (
                       <p className="text-red-700">Not configured — set BRIDGE_URL and the BRIDGE_KEY secret.</p>
                     ) : (

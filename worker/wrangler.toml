@@ -21,14 +21,13 @@ BANK_LINE = "REPLACE — e.g. MAYBANK 1234 5678 9012 — ELFIA"
 WHATSAPP_DIGITS = "60000000000"
 SHIPPING_CENTS = "1000"        # RM 10 flat
 FREE_ABOVE_CENTS = "15000"     # free delivery from RM 150
-# Stock sync with the agency portal — paste the two bridge endpoints here.
-# Both live on the portal; see PORTAL-BRIDGE-SPEC.md for the contract.
-#   BRIDGE_URL       GET  — the portal's live inventory feed  (portal -> store)
-#   BRIDGE_PUSH_URL  POST — where this store reports its sales (store -> portal)
-# e.g. "https://<the portal domain>/api/v1/bridge/elfia-inventory"
-#      "https://<the portal domain>/api/v1/bridge/elfia-movements"
-BRIDGE_URL = "REPLACE — portal inventory feed URL"
-BRIDGE_PUSH_URL = "REPLACE — portal movements endpoint URL"
+# The portal bridge endpoints are SECRETS, not vars — this file is committed,
+# and no other company's domain may live in this repo (tests/brand-isolation.mjs
+# enforces that). Set all three from your machine:
+#   npx wrangler secret put BRIDGE_URL       <- portal inventory+prices feed (GET)
+#   npx wrangler secret put BRIDGE_PUSH_URL  <- portal movements endpoint (POST)
+#   npx wrangler secret put BRIDGE_KEY       <- same value as the portal's ELFIA_BRIDGE_KEY
+# See PORTAL-BRIDGE-SPEC.md for what the portal must serve at those URLs.
 
 # v0.8.0 — the inventory sync runs by itself every 5 minutes: it delivers any
 # sales the portal has not seen yet, then refreshes counts from the portal.
@@ -51,8 +50,6 @@ bucket_name = "elfia-media"
 
 # Secrets (never in this file):
 #   wrangler secret put ADMIN_KEY           <- the /admin passcode
-#   wrangler secret put BRIDGE_KEY          <- stock-sync secret; MUST equal
-#                                              ELFIA_BRIDGE_KEY on the portal
 # Stage B (online FPX payment) — when the Billplz account is approved:
 #   wrangler secret put BILLPLZ_SECRET      <- API Secret Key (Billplz dashboard -> Settings)
 #   wrangler secret put BILLPLZ_COLLECTION  <- the Collection ID you create there

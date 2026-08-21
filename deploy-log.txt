@@ -1,4 +1,4 @@
-ELFIA deploy - Thu 20/08/2026 23:57:39.38 
+ELFIA deploy - Fri 21/08/2026 10:24:51.69 
 [1/9] Checking Node.js and npm 
       node v24.15.0 
 [2/9] Checking worker\wrangler.toml 
@@ -49,3 +49,27 @@ Scope (Access)
 - offline_access 
       logged in 
 [4/9] Installing site dependencies (first run takes a few minutes) 
+
+added 46 packages, and audited 47 packages in 48s
+
+10 packages are looking for funding
+  run `npm fund` for details
+
+3 high severity vulnerabilities
+
+To address all issues (including breaking changes), run:
+  npm audit fix --force
+
+Run `npm audit` for details.
+[5/9] Installing worker dependencies 
+
+added 39 packages, and audited 40 packages in 12s
+
+6 packages are looking for funding
+  run `npm fund` for details
+
+found 0 vulnerabilities
+[6/9] Safety gates - typecheck, brand isolation, no hardcoded keys 
+STOPPED while running the safety gates: A credential looks like it is written into the code. Nothing was deployed. See the list above - move each one into: cd worker  then  npx wrangler secret put NAME 
+[7/9] Applying database migrations, then deploying the API 
+STOPPED while applying database migrations: Database migration failed. Common causes: the database_id in wrangler.toml is wrong, or the database was never created (npx wrangler d1 create elfia-store). 
