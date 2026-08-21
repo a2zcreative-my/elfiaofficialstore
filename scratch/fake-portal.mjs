@@ -18,6 +18,11 @@
 import http from "node:http";
 
 const KEY = process.env.BRIDGE_KEY ?? "shared-bridge-secret";
+/* Keys are stored normalized; the FEED serves them with a space ("LUMI 001"),
+   exactly the way the real portal spells them (the CEO's screenshots show
+   "SKU: LUMI 004"). The store must match them anyway — v1.1.2's fix. */
+const norm = (s) => String(s ?? "").toUpperCase().replace(/\s+/g, "");
+const spaced = (sku) => sku.replace(/^([A-Z]+)(\d+)$/, "$1 $2");
 const stock = new Map([
   ["LUMI001", 24], ["LUMI002", 12], ["LUMI003", 8], ["LUMI004", 30], ["LUMI005", 15],
   ["LUMI006", 6], ["LUMI007", 9], ["LUMI008", 11], ["LUMI009", 4], ["LUMI010", 7],
@@ -44,12 +49,12 @@ http.createServer(async (req, res) => {
   }
   if (url.pathname === "/_price") {
     const b = await body(req);
-    const sku = String(b.sku).toUpperCase();
+    const sku = norm(b.sku);
     if (b.price_cents === null) prices.delete(sku); else prices.set(sku, Number(b.price_cents));
     return send(res, 200, { ok: true });
   }
   if (url.pathname === "/_set") {
-    const b = await body(req); stock.set(String(b.sku).toUpperCase(), Number(b.stock));
+    const b = await body(req); stock.set(norm(b.sku), Number(b.stock));
     return send(res, 200, { ok: true });
   }
   if (url.pathname === "/_down") {
@@ -63,7 +68,7 @@ http.createServer(async (req, res) => {
   if (url.pathname === "/bridge/elfia-inventory" && req.method === "GET") {
     return send(res, 200, {
       items: [...stock].map(([sku, s]) => ({
-        sku, name: `Portal ${sku}`, stock: s,
+        sku: spaced(sku), name: `Portal ${spaced(sku)}`, stock: s,
         ...(prices.has(sku) ? { price_cents: prices.get(sku) } : {}),
       })),
     });
@@ -73,7 +78,7 @@ http.createServer(async (req, res) => {
     const b = await body(req);
     const out = { applied: [], ignored: [], unknown_sku: [] };
     for (const m of b.movements ?? []) {
-      const sku = String(m.sku ?? "").toUpperCase();
+      const sku = norm(m.sku);   // spec: case- AND whitespace-insensitive
       if (applied.has(m.event_id)) { out.ignored.push(m.event_id); continue; }  // THE RULE
       if (!stock.has(sku)) { out.unknown_sku.push(m.event_id); continue; }
       stock.set(sku, Math.max(0, stock.get(sku) + Number(m.delta)));

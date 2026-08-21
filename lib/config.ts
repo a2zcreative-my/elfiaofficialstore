@@ -43,6 +43,13 @@ export const isSoldOut = (p: Product): boolean => (p.track_stock ?? 1) === 1 && 
 export const lowStock = (p: Product): number | null =>
   (p.track_stock ?? 1) === 1 && p.stock > 0 && p.stock <= 5 ? p.stock : null;
 
+/** v1.1.2 — the exact live count, when somebody maintains it. Products synced
+    from the portal are counted (the pull flips them to track_stock = 1), so
+    the product page can show the same number the portal shows. Null for
+    always-available products, where inventing a number would be a lie. */
+export const countedStock = (p: Product): number | null =>
+  (p.track_stock ?? 1) === 1 && p.stock > 0 ? p.stock : null;
+
 /** Quantity ceiling for the pickers. Always-available products cap at 99. */
 export const maxQty = (p: Product): number => ((p.track_stock ?? 1) === 1 ? Math.min(99, p.stock) : 99);
 

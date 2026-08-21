@@ -56,9 +56,9 @@ GET  <BRIDGE_URL>
 
 | field | rule |
 | --- | --- |
-| `sku` | required. Matched case-insensitively against the store's SKU. |
+| `sku` | required. Matched **case- and whitespace-insensitively**: the portal's `LUMI 004` and the store's `LUMI004` are the same SKU. Each side keeps its own spelling; neither needs renaming. |
 | `stock` | required, integer ≥ 0. Pieces physically available to sell. |
-| `price_cents` | optional, integer > 0, **in cents** (RM 49.00 = `4900`). When present the portal owns that SKU's selling price and the store applies it on every pull. When absent the store's own price stands. Never send ringgit as a decimal — the store refuses anything that is not a positive integer. |
+| `price_cents` | optional, integer > 0, **in cents** (RM 49.00 = `4900`). When present the portal owns that SKU's selling price and the store applies it on every pull. When absent the store's own price stands. Never send ringgit as a decimal — the store refuses anything that is not a positive integer. **Send the price the customer must actually pay**: if the portal runs a rebate (RM 39.00 − 3.00 → RM 36.00), `price_cents` is the NET `3600`, because this number goes straight onto the shop's price tag. |
 | `name` | optional, for humans reading the sync report. |
 
 Read-only: the store never writes here. Photos and descriptions remain the
@@ -96,7 +96,7 @@ POST <BRIDGE_PUSH_URL>
 | field | meaning |
 | --- | --- |
 | `event_id` | UUID. **The idempotency key — see below.** |
-| `sku` | the product code, e.g. `LUMI001`. Match case-insensitively. |
+| `sku` | the product code, e.g. `LUMI001`. Match **case- and whitespace-insensitively** (`LUMI001` ≡ `LUMI 001`) — the store writes SKUs without spaces, the portal with. |
 | `delta` | **negative** = the store sold/reserved pieces. **positive** = an unpaid order was cancelled and the pieces came back. Apply it as `stock = stock + delta`. |
 | `reason` | `order` or `cancel`. Informational — `delta` already carries the direction. |
 | `reference` | the store's order number, for your audit trail. May be null. |
@@ -211,6 +211,10 @@ Rules:
 - **Products can be "always available"** in the store, where the count is
   ignored for display. Movements are still pushed for them: the store does not
   gate on the number, but the portal still needs to know the pieces went.
+- **A SKU the feed carries becomes counted automatically.** On the first pull
+  that matches it, the store switches that product from "always available" to
+  counted, shows the exact piece count on the product page, and enforces it at
+  checkout. The portal's number is the shop's number from that moment on.
 
 ## Checklist before switching it on
 

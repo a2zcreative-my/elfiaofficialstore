@@ -89,6 +89,12 @@ step("first pull: the store takes the portal's counts");
   products = (await jget(`${API}/products`)).products;
   target = products.find((p) => p.sku === "LUMI001");
   ok("LUMI001 now reads the portal's 24 in the store", target.stock === 24, `store has ${target.stock}`);
+  /* v1.1.2 — the fake portal spells its SKUs "LUMI 001", with a space, the
+     way the real portal does. Matching anyway IS the fix under test. */
+  ok("the portal's spaced spelling (LUMI 001) matched the store's LUMI001",
+     !r.pull.unmatched_portal.some((s) => /LUMI/i.test(s)), JSON.stringify(r.pull.unmatched_portal));
+  ok("a portal-carried SKU is switched to counted (v1.1.2)", target.track_stock === 1,
+     `track_stock=${target.track_stock}`);
 }
 
 step("a web sale reaches the portal by itself");
@@ -132,9 +138,17 @@ let downSaleQty = 3;
   ok("the sale was delivered on the next sync", r.push.sent === 1, JSON.stringify(r.push));
   const afterPortal = (await portalState()).stock.LUMI001;
   ok(`portal deducted it late (${portalBefore} → ${afterPortal})`, afterPortal === portalBefore - downSaleQty);
-  ok("the pull deferred that SKU rather than overwriting it",
-     r.pull.deferred.includes("LUMI001") || r.pull.updated.some((u) => u.sku === "LUMI001" && u.to === afterPortal),
-     JSON.stringify({ deferred: r.pull.deferred, updated: r.pull.updated }));
+  /* Three right answers, depending on timing: the pull deferred the SKU
+     (outbox still unsent), the pull applied the post-sale count, or — v1.1.2,
+     now the SKU is counted — the store already decremented its own shelf at
+     checkout and the pull found both sides agreeing. What is NEVER right is
+     the store showing the stale pre-sale count, checked just below. */
+  const storeNow = (await jget(`${API}/products/${target.id}`)).product.stock;
+  ok("the stale portal count did not undo the sale",
+     r.pull.deferred.includes("LUMI001")
+       || r.pull.updated.some((u) => u.sku === "LUMI001" && u.to === afterPortal)
+       || storeNow === afterPortal,
+     JSON.stringify({ deferred: r.pull.deferred, updated: r.pull.updated, storeNow }));
 
   // one more sync now that the outbox is empty — the two must agree exactly
   await syncNow();
@@ -251,18 +265,22 @@ step("the portal can pull every web order");
      JSON.stringify(next.orders.map((o) => [o.order_number, o.status])));
 }
 
-step("always-available products still report their sales");
+step("a portal-managed SKU shows and enforces the portal's exact count (v1.1.2)");
 {
-  const p = (await jget(`${API}/products`)).products.find((x) => x.sku === "LUMI005");
-  ok("LUMI005 is always available (store ignores the count)", p.track_stock === 0);
   // Give it a known count first: repeated runs of this file would otherwise
   // drain the stand-in portal to zero, where a deduction cannot be seen.
   await portalSet("LUMI005", 15);
+  await syncNow();
+  const p = (await jget(`${API}/products`)).products.find((x) => x.sku === "LUMI005");
+  ok("LUMI005 is counted now that the portal carries it", p.track_stock === 1, `track_stock=${p.track_stock}`);
+  ok("and the store shows the portal's exact quantity (15)", p.stock === 15, `store has ${p.stock}`);
   const before = (await portalState()).stock.LUMI005;
-  await order(p.id, 2, "Always Available Buyer");
+  await order(p.id, 2, "Counted Buyer");
   await sleep(1200);
   const after = (await portalState()).stock.LUMI005;
-  ok(`the portal still heard about it (${before} → ${after})`, after === before - 2);
+  ok(`the portal heard about the sale (${before} → ${after})`, after === before - 2);
+  const mineNow = (await jget(`${API}/products/${p.id}`)).product.stock;
+  ok(`the store's shelf moved with it (${mineNow})`, mineNow === before - 2);
 }
 
 console.log(`\n${fail === 0 ? "ALL PASS" : "FAILURES"} — ${pass} passed, ${fail} failed`);

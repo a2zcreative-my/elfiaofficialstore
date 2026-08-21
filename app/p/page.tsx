@@ -8,7 +8,7 @@ import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
 import {
-  addToCart, btnClass, btnGhost, fmtRM, imageUrl, inputClass, isSoldOut, labelClass, lowStock,
+  addToCart, btnClass, btnGhost, countedStock, fmtRM, imageUrl, inputClass, isSoldOut, labelClass, lowStock,
   maxQty, splitName, type Product,
 } from "@/lib/config";
 
@@ -106,6 +106,10 @@ function ProductInner() {
 
   const out = isSoldOut(p);
   const low = lowStock(p);
+  /* The live piece count, shown whenever it is maintained (portal-synced
+     products are). The CEO's ask: the shop must show the qty "as per
+     inventory in my portal", not a vague "in stock". */
+  const counted = countedStock(p);
   const { series, shade } = splitName(p.name);
   const collection = (p.category ?? "bawal") === "shawl" ? "Shawl" : "Bawal";
 
@@ -149,7 +153,9 @@ function ProductInner() {
 
             <p className={`mt-4 text-xs font-medium ${out ? "text-stone-500" : low ? "text-amber-700" : "text-green-700"}`}>
               {out ? "Sold out — join the list below and we'll tell you first."
-                : low ? `Only ${low} left` : "In stock — ready to ship"}
+                : low ? `Only ${low} left — order soon`
+                : counted ? `${counted} pieces available — ready to ship`
+                : "In stock — ready to ship"}
             </p>
 
             {!out && (

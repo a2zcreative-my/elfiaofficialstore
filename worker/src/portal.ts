@@ -45,6 +45,15 @@ const MAX_ATTEMPTS = 25;
 const BATCH = 50;
 
 const configured = (v: string | undefined): boolean => Boolean(v && !v.startsWith("REPLACE"));
+
+/**
+ * v1.1.2 — one spelling of a SKU for matching purposes. The portal writes
+ * "LUMI 004"; this store writes "LUMI004". Same code, different keyboard
+ * habits — and the CEO's screenshot proved the two systems would have stared
+ * past each other forever. Case and ALL whitespace are ignored when matching;
+ * each side keeps displaying its own spelling.
+ */
+export const normSku = (s: unknown): string => String(s ?? "").toUpperCase().replace(/\s+/g, "");
 export const pullConfigured = (env: Env): boolean => configured(env.BRIDGE_URL) && Boolean(env.BRIDGE_KEY);
 export const pushConfigured = (env: Env): boolean => configured(env.BRIDGE_PUSH_URL) && Boolean(env.BRIDGE_KEY);
 
@@ -200,7 +209,8 @@ const EMPTY_PULL: Omit<PullResult, "configured" | "error"> = {
   updated: [], price_updated: [], unchanged: 0, unmatched_portal: [], unmatched_store: [], deferred: [],
 };
 
-/** Refresh piece counts from the portal, by SKU, case-insensitive. */
+/** Refresh piece counts from the portal, by SKU — case- and whitespace-
+    insensitive, so the portal's "LUMI 004" meets this store's "LUMI004". */
 export async function pullStock(env: Env): Promise<PullResult> {
   if (!pullConfigured(env)) {
     return { configured: false, ...EMPTY_PULL, error: "Set BRIDGE_URL (wrangler.toml) and the BRIDGE_KEY secret first — see PORTAL-BRIDGE-SPEC.md" };
@@ -220,16 +230,16 @@ export async function pullStock(env: Env): Promise<PullResult> {
      portal needs to carry, and listing it as "missing there" turns the
      reconciliation report into noise nobody reads. */
   const { results: mine } = await env.DB.prepare(
-    `SELECT id, sku, stock, price_cents FROM products WHERE sku IS NOT NULL AND active = 1`,
-  ).all<{ id: number; sku: string; stock: number; price_cents: number }>();
-  const bySku = new Map(mine.map((m) => [m.sku.toUpperCase(), m]));
+    `SELECT id, sku, stock, price_cents, track_stock FROM products WHERE sku IS NOT NULL AND active = 1`,
+  ).all<{ id: number; sku: string; stock: number; price_cents: number; track_stock: number }>();
+  const bySku = new Map(mine.map((m) => [normSku(m.sku), m]));
 
   /* Any SKU whose sales are still sitting in the outbox must not be
      overwritten: the portal computed that number before it knew about them. */
   const { results: waiting } = await env.DB.prepare(
     `SELECT DISTINCT sku FROM stock_events WHERE sent_at IS NULL`,
   ).all<{ sku: string }>().catch(() => ({ results: [] as { sku: string }[] }));
-  const held = new Set(waiting.map((w) => w.sku.toUpperCase()));
+  const held = new Set(waiting.map((w) => normSku(w.sku)));
 
   const updated: PullResult["updated"] = [];
   const price_updated: PullResult["price_updated"] = [];
@@ -238,10 +248,12 @@ export async function pullStock(env: Env): Promise<PullResult> {
   let unchanged = 0;
 
   for (const it of items) {
-    const sku = String(it.sku ?? "").toUpperCase();
+    const sku = normSku(it.sku);
     const stock = Math.max(0, Math.round(Number(it.stock)));
     const m = sku ? bySku.get(sku) : undefined;
-    if (!m || !Number.isFinite(stock)) { if (sku) unmatched_portal.push(sku); continue; }
+    /* Report the portal's own spelling — "LUMI 999 is unknown here" is a code
+       the CEO can find on her portal screen; the squashed form is not. */
+    if (!m || !Number.isFinite(stock)) { if (sku) unmatched_portal.push(String(it.sku).trim()); continue; }
     bySku.delete(sku);
 
     /* Price first, and independently of the stock decision below: a SKU whose
@@ -253,6 +265,15 @@ export async function pullStock(env: Env): Promise<PullResult> {
     if (it.price_cents !== undefined && Number.isFinite(price) && price > 0 && price !== m.price_cents) {
       await env.DB.prepare(`UPDATE products SET price_cents = ?1 WHERE id = ?2`).bind(price, m.id).run();
       price_updated.push({ sku: m.sku, from: m.price_cents, to: price });
+    }
+
+    /* v1.1.2 — a SKU the portal carries is portal-managed: its count is real,
+       so the storefront shows and enforces it from this pull on. "Always
+       available" (track_stock = 0) was the stopgap for counts nobody
+       maintained — the portal maintains this one now, and the CEO expects the
+       shop to show "as per inventory in my portal". */
+    if ((m.track_stock ?? 1) === 0) {
+      await env.DB.prepare(`UPDATE products SET track_stock = 1 WHERE id = ?1`).bind(m.id).run();
     }
 
     if (held.has(sku)) { deferred.push(m.sku); continue; }

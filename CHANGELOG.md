@@ -1,5 +1,33 @@
 # ELFIA OFFICIAL STORE — changelog
 
+## [1.1.2] — 21-08-2026 — the portal's spelling of a SKU now matches
+
+**CEO, with portal screenshots: "the prices not even sync! then the stock not
+even show what is the available qty as per inventory in my portal!"**
+
+Her screenshots settled two things at once. First, the store side of the
+bridge is now configured (health shows both `bridge_*_configured: true`) but
+the portal side still answers 501/404 — that half lives in the portal chat.
+Second, and store-side: the portal spells its codes **"LUMI 004"**, with a
+space, while this store writes **"LUMI004"**. The sync matched SKUs only
+case-insensitively, so the day the wires connected, every single SKU would
+have reported "unknown on the other side" and nothing would have synced.
+
+- **SKU matching is now case- AND whitespace-insensitive** (`normSku`) — in
+  the pull, the outbox hold-list, and the spec for the portal's side of the
+  match. Each system keeps its own spelling; reports show the reader's own.
+- **A SKU the portal feed carries is switched to counted automatically** on
+  the first pull that matches it. Until now every product sat in "always
+  available" mode (the v0.7.0 stopgap for counts nobody maintained), which
+  would have kept the real counts invisible even after they synced.
+- **The product page shows the exact live count** — "20 pieces available —
+  ready to ship" — once a product is counted, the same number the portal
+  shows, not a vague "In stock".
+- Spec + handoff sharpened: the feed must send the **net** selling price when
+  a rebate runs (RM 39 − 3 → send `3600`), and the movements endpoint must
+  match SKUs whitespace-insensitively too. The fake portal now serves spaced
+  SKUs, so the suites prove the fix.
+
 ## [1.1.1] — 21-08-2026 — sign-up works on the real Cloudflare
 
 **CEO, from the live site: "User still cant sign up or either sign in!!"**

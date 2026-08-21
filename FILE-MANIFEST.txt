@@ -1,9 +1,9 @@
-elfia-store v1.1.1 — 71 files
+elfia-store v1.1.2 — 71 files
 
-CHANGELOG.md	27090
+CHANGELOG.md	28819
 DEPLOY.bat	7697
-FILE-MANIFEST.txt	2311
-PORTAL-BRIDGE-SPEC.md	9244
+FILE-MANIFEST.txt	this file
+PORTAL-BRIDGE-SPEC.md	9987
 README.md	8084
 app/account/page.tsx	13615
 app/admin/page.tsx	33626
@@ -14,11 +14,11 @@ app/globals.css	210
 app/icon.png	2280
 app/layout.tsx	2308
 app/order/page.tsx	16771
-app/p/page.tsx	8703
+app/p/page.tsx	9060
 app/page.tsx	10100
 app/policies/page.tsx	2251
 app/track/page.tsx	5587
-lib/config.ts	9830
+lib/config.ts	10258
 next-env.d.ts	262
 next.config.ts	222
 package.json	456
@@ -43,12 +43,12 @@ public/collection/shawl-grey-profile.jpg	57062
 public/collection/shawl-grey.jpg	82129
 public/collection/shawl-taupe.jpg	93391
 public/logo.png	21125
-scratch/fake-portal.mjs	3671
+scratch/fake-portal.mjs	4047
 scratch/serve-local.mjs	2548
 scratch/store-e2e-live.mjs	24277
 scratch/store-e2e.mjs	9690
 scratch/store-journey.mjs	9479
-scratch/store-sync-test.mjs	13802
+scratch/store-sync-test.mjs	15079
 tests/brand-isolation.mjs	1529
 tests/no-secrets.mjs	4868
 tests/worker-compile-gate.mjs	426
@@ -67,7 +67,7 @@ worker/package.json	358
 worker/src/auth.ts	8245
 worker/src/billplz.ts	9791
 worker/src/index.ts	64220
-worker/src/portal.ts	13888
+worker/src/portal.ts	15118
 worker/tsconfig.json	288
 worker/wrangler.e2e.toml	2408
 worker/wrangler.toml	2994
