@@ -7,10 +7,10 @@
  *   untouched, and an order carries `customer_id` only when the buyer
  *   happened to be signed in.
  *
- * PASSWORDS never reach the database. PBKDF2-SHA256, 210,000 iterations, a
- * fresh 16-byte salt each, and the iteration count stored beside the hash so
- * it can be raised later without locking anyone out. Verification is
- * constant-time.
+ * PASSWORDS never reach the database. PBKDF2-SHA256 at 100,000 iterations —
+ * the Cloudflare platform maximum, see the note on PBKDF2_ITER — with a fresh
+ * 16-byte salt each, and the iteration count stored beside the hash so it can
+ * be raised later without locking anyone out. Verification is constant-time.
  *
  * SESSIONS are a 32-byte random token handed to the browser in an HttpOnly,
  * Secure, SameSite=Lax cookie. The database stores only the SHA-256 of it, so
@@ -24,7 +24,12 @@
  */
 import type { Env } from "./index";
 
-const PBKDF2_ITER = 210_000;
+/* 100,000 is the MAXIMUM Cloudflare's production runtime allows for PBKDF2
+   (crypto.subtle enforces the cap on the platform, and throws above it — the
+   local dev runtime does not, which is how 210,000 passed every local test
+   and then broke every real sign-up on the live site, v1.1.1). The count is
+   stored per user, so it can rise if the platform cap ever does. */
+const PBKDF2_ITER = 100_000;
 const SESSION_DAYS = 30;
 const COOKIE = "elfia_session";
 
@@ -55,7 +60,13 @@ export async function hashPassword(password: string): Promise<{ hash: string; sa
 }
 
 export async function verifyPassword(password: string, hash: string, salt: string, iter: number): Promise<boolean> {
-  return timingSafeEqual(await derive(password, salt, iter), hash);
+  /* Fail closed, never crash: a stored iteration count the platform refuses
+     (or any other derive failure) is a failed login, not a 500. */
+  try {
+    return timingSafeEqual(await derive(password, salt, iter), hash);
+  } catch {
+    return false;
+  }
 }
 
 /* ------------------------------------------------------------ rate limits */

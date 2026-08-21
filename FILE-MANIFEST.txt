@@ -1,6 +1,6 @@
-elfia-store v1.1.0 — 71 files
+elfia-store v1.1.1 — 71 files
 
-CHANGELOG.md	25859
+CHANGELOG.md	27090
 DEPLOY.bat	7697
 FILE-MANIFEST.txt	2311
 PORTAL-BRIDGE-SPEC.md	9244
@@ -45,7 +45,7 @@ public/collection/shawl-taupe.jpg	93391
 public/logo.png	21125
 scratch/fake-portal.mjs	3671
 scratch/serve-local.mjs	2548
-scratch/store-e2e-live.mjs	24022
+scratch/store-e2e-live.mjs	24277
 scratch/store-e2e.mjs	9690
 scratch/store-journey.mjs	9479
 scratch/store-sync-test.mjs	13802
@@ -64,7 +64,7 @@ worker/migrations/0008_stock_sync.sql	2439
 worker/migrations/0009_order_progress.sql	2506
 worker/migrations/0010_accounts_and_holds.sql	4107
 worker/package.json	358
-worker/src/auth.ts	7603
+worker/src/auth.ts	8245
 worker/src/billplz.ts	9791
 worker/src/index.ts	64220
 worker/src/portal.ts	13888

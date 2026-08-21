@@ -305,7 +305,10 @@ step("no joy buyers: unpaid orders cannot pile up or hold stock for ever");
      no test-only endpoint is added to the Worker for this. Then run the real
      scheduled handler that production runs. */
   const { execFileSync } = await import("node:child_process");
-  execFileSync("npx", ["wrangler", "d1", "execute", "elfia-store", "--local", "--config", "wrangler.e2e.toml",
+  // WRANGLER_PERSIST must match the dev server's --persist-to, or this edits
+  // a different local database and the release never happens.
+  const persist = process.env.WRANGLER_PERSIST ? ["--persist-to", process.env.WRANGLER_PERSIST] : [];
+  execFileSync("npx", ["wrangler", "d1", "execute", "elfia-store", "--local", "--config", "wrangler.e2e.toml", ...persist,
     "--command", `UPDATE orders SET expires_at = datetime('now','-1 hour') WHERE order_number = '${a.body.order_number}'`],
     { cwd: "worker", stdio: "ignore" });
   const cron = await fetch(`${BASE.replace("/api/v1", "")}/cdn-cgi/local/scheduled`).catch(() => null);

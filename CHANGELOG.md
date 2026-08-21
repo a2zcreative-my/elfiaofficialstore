@@ -1,5 +1,28 @@
 # ELFIA OFFICIAL STORE — changelog
 
+## [1.1.1] — 21-08-2026 — sign-up works on the real Cloudflare
+
+**CEO, from the live site: "User still cant sign up or either sign in!!"**
+
+The bug was mine, and it is the nastiest kind: code that passes every local
+test and fails only in production. Passwords were hashed with PBKDF2 at
+210,000 iterations; **Cloudflare's production runtime caps PBKDF2 at
+100,000** and throws above it, while the local dev runtime does not enforce
+the cap — so all 85 local assertions were green while every real sign-up and
+sign-in on elfiaofficialstore.my crashed.
+
+- Iterations are now **100,000 — the platform maximum**. The count is stored
+  per user, so it can rise the day the cap does, without locking anyone out.
+- `verifyPassword` now **fails closed**: any hashing failure is a refused
+  login, never a 500.
+- The v1.1.0 self-diagnosis did its job — the customer saw a readable
+  message and `/health` proved the database and migrations were fine, which
+  is what pointed at the hashing itself.
+
+No migration needed: no production account was ever successfully created, so
+there are no old-format hashes to migrate. All suites re-run and green,
+including real sign-up → session → order → claim through the new hashing.
+
 ## [1.1.0] — 20-08-2026 — the portal runs the business
 
 **CEO, from the live site: sign-in said "Network problem", no Billplz button,

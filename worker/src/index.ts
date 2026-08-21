@@ -73,7 +73,7 @@ export interface Env {
   STORE_ORIGIN?: string;     // override for local testing
 }
 
-const VERSION = "1.1.0";
+const VERSION = "1.1.1";
 const STATUSES = ["pending_payment", "payment_review", "paid", "shipped", "completed", "cancelled"] as const;
 type Status = (typeof STATUSES)[number];
 
@@ -641,7 +641,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
          same time. */
       const okPassword = row
         ? await verifyPassword(password, row.pw_hash, row.pw_salt, row.pw_iter)
-        : await verifyPassword(password, "0".repeat(64), "00", 210_000);
+        : await verifyPassword(password, "0".repeat(64), "00", 100_000);
       if (!row || !okPassword) return err("bad_login", "That email and password do not match.", 401);
 
       await env.DB.prepare(`UPDATE customers SET last_login_at = datetime('now') WHERE id = ?1`).bind(row.id).run();
