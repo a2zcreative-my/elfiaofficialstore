@@ -35,6 +35,7 @@ import {
 import {
   flushStockEvents, getState, pullConfigured, pushConfigured, recordStockEvents, syncNow,
 } from "./portal";
+import { recordHit, rollupTraffic, trafficFeed } from "./traffic";
 
 export interface Env {
   DB: D1Database;
@@ -73,7 +74,7 @@ export interface Env {
   STORE_ORIGIN?: string;     // override for local testing
 }
 
-const VERSION = "1.1.2";
+const VERSION = "1.2.0";
 const STATUSES = ["pending_payment", "payment_review", "paid", "shipped", "completed", "cancelled"] as const;
 type Status = (typeof STATUSES)[number];
 
@@ -235,6 +236,10 @@ export default {
       await releaseExpiredOrders(env);
       await sweepAuth(env);
       await syncNow(env);
+      /* v1.2.0 — fold the last few minutes of visits into the day's
+         aggregates and prune raw hits past retention. Last on purpose: the
+         inventory sync moves money and stock; this only moves a map. */
+      await rollupTraffic(env);
     })());
   },
 
@@ -271,10 +276,10 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
       const table = async (name: string): Promise<boolean> => {
         try { await env.DB.prepare(`SELECT 1 FROM ${name} LIMIT 1`).first(); return true; } catch { return false; }
       };
-      const [accounts, progress, syncReady] = await Promise.all([
-        table("customers"), table("order_events"), table("stock_events"),
+      const [accounts, progress, syncReady, traffic] = await Promise.all([
+        table("customers"), table("order_events"), table("stock_events"), table("traffic_hits"),
       ]);
-      const migrationsCurrent = accounts && progress && syncReady;
+      const migrationsCurrent = accounts && progress && syncReady && traffic;
       const cfg = storeConfig(env);
       return json({
         ok: db && migrationsCurrent, version: VERSION, db, r2,
@@ -285,6 +290,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
             ...(accounts ? [] : ["customers (0010 — sign in/sign up will fail)"]),
             ...(progress ? [] : ["order_events (0009 — order progress will fail)"]),
             ...(syncReady ? [] : ["stock_events (0008 — inventory sync will fail)"]),
+            ...(traffic ? [] : ["traffic_hits (0011 — visitor traffic will not count)"]),
           ],
         }),
         admin_key_configured: Boolean(env.ADMIN_KEY),
@@ -299,6 +305,14 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
     }
 
     if (path === "/store-config" && method === "GET") return json(storeConfig(env));
+
+    /* v1.2.0 — the visit beacon. Anonymous by construction (see traffic.ts:
+       no IP stored, daily-rotating hash, no cookie); always 204, because the
+       storefront must never wait on, or surface, analytics. */
+    if (path === "/t" && method === "POST") {
+      if (!originAllowed(request.headers.get("Origin"), env)) return new Response(null, { status: 204 });
+      return recordHit(request, env, new URL(storeUrl(env)).host);
+    }
 
     if (path === "/products" && method === "GET") {
       /* v0.2.0 columns (sku/category/featured) with a pre-0002 fallback, so
@@ -567,6 +581,21 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
         cursor: results.length ? results[results.length - 1]!.changed_at : since ?? null,
         store: "elfia",
       });
+    }
+
+    /* ---- traffic feed for the agency portal (v1.2.0, bridge feed D) ----
+       Same key, same constant-time check, same pull shape as the orders
+       feed above. `since` is the newest FINAL day the portal already holds
+       (final = older than the Malaysian yesterday); the response carries
+       every later day's aggregate rows. Today is included as a RUNNING
+       total — the portal must overwrite its copy of any day it receives,
+       never add to it, and advance its cursor only to `final_through`. */
+    if (path === "/bridge/traffic" && method === "GET") {
+      if (!env.BRIDGE_KEY) return err("not_configured", "Set the BRIDGE_KEY secret first", 501);
+      const given = request.headers.get("X-Bridge-Key") ?? "";
+      if (!timingSafeEqual(given, env.BRIDGE_KEY)) return err("unauthorized", "Bad key", 401);
+      const since = str(url.searchParams.get("since"), 10);
+      return json(await trafficFeed(env, since && /^\d{4}-\d{2}-\d{2}$/.test(since) ? since : null));
     }
 
     /* ---------------- customer accounts (v1.0.0) ----------------

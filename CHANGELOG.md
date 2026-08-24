@@ -1,5 +1,34 @@
 # ELFIA OFFICIAL STORE — changelog
 
+## [1.2.0] — 24-08-2026 — the shop now counts its visitors (anonymously)
+
+**CEO, with the portal's Operations map on screen: "for ELFIA, I want to have
+a traffic to see which user that visit my pages … a new map like Operations
+map … a new tab for ELFIA traffic."**
+
+The store now measures WHERE its visitors browse from and WHAT they look at,
+and serves those numbers to the agency portal, which draws them on a Malaysia
+state map in a new "ELFIA Traffic" tab. "Which user" is deliberately answered
+with *where and how many*, never *who* — the decision recorded as OD-20a:
+
+- **A tiny beacon in the storefront** sends only the page path and the
+  referrer. No cookie, no ID stored in the browser, nothing that follows a
+  customer around. Location comes from Cloudflare's own geo lookup on the
+  network connection (state + city), never from the page.
+- **No IP address is ever stored.** Unique visitors are counted with a keyed
+  hash whose key includes the calendar day — the same phone hashes
+  differently tomorrow, so within-day uniques are countable and cross-day
+  tracking is impossible by construction, not by policy.
+- **Aggregates, then deletion** (OD-22): raw hits roll up into per-day
+  state/city/page counts on the 5-minute cron and are deleted after 60 days.
+  The aggregates carry no hashes at all.
+- **Bridge feed D** — `GET /api/v1/bridge/traffic?since=<day>` — same shared
+  key and constant-time check as the orders feed. Finished days are final;
+  today is resent as a running total. Spec: PORTAL-BRIDGE-SPEC.md § D.
+- Self-declared bots are not counted; a beacon flood is rate-limited per
+  address; `/health` now also names migration 0011 if it has not run.
+- Migration: `0011_traffic.sql` (two new tables; touches nothing existing).
+
 ## [1.1.2] — 21-08-2026 — the portal's spelling of a SKU now matches
 
 **CEO, with portal screenshots: "the prices not even sync! then the stock not

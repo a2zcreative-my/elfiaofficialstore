@@ -29,6 +29,17 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         {children}
         <WhatsAppButton />
         <ScrollTopButton />
+        {/* v1.2.0 — anonymous visit beacon for the ELFIA Traffic map.
+            Sends ONLY the page path and the referrer; location is derived
+            server-side from the network, and no cookie or ID is ever placed
+            in the browser. text/plain keeps sendBeacon preflight-free, and a
+            failed beacon fails silently — the shop never waits on it. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              `(function(){var t=0;var s=function(){var p=location.pathname+location.search;if(p===t)return;t=p;try{navigator.sendBeacon&&navigator.sendBeacon("/api/v1/t",new Blob([JSON.stringify({p:p,r:document.referrer||""})],{type:"text/plain"}))}catch(e){}};s();var w=history.pushState;history.pushState=function(){w.apply(this,arguments);setTimeout(s,0)};window.addEventListener("popstate",function(){setTimeout(s,0)})})();`,
+          }}
+        />
         <footer className="mt-24 border-t border-stone-200 bg-white px-6 py-12">
           <div className="mx-auto w-full max-w-5xl text-center">
             {/* eslint-disable-next-line @next/next/no-img-element */}

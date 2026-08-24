@@ -196,6 +196,59 @@ Rules:
 
 ---
 
+## D — traffic feed (portal ← store) — poll the store (v1.2.0)
+
+Anonymous visitor aggregates for the portal's "ELFIA Traffic" map. The store
+counts page views from a browser beacon, groups them by Malaysian state, city
+and page **with no way to name a person** — no IP is stored, the per-day
+visitor hash rotates its key daily so nobody can be followed across days, and
+this feed carries only the aggregates (no hashes at all).
+
+```
+GET  https://elfiaofficialstore.my/api/v1/bridge/traffic?since=<day>
+     X-Bridge-Key: <the same shared secret>
+```
+
+**200 response**
+
+```json
+{
+  "days": [
+    { "day": "2026-08-23", "state": "", "city": "", "path": "", "visits": 412, "visitors": 187 },
+    { "day": "2026-08-23", "state": "Selangor", "city": "Shah Alam", "path": "/", "visits": 61, "visitors": 40 },
+    { "day": "2026-08-23", "state": "Selangor", "city": "Shah Alam", "path": "/p?id=5", "visits": 22, "visitors": 18 }
+  ],
+  "final_through": "2026-08-23",
+  "running_day": "2026-08-24",
+  "store": "elfia"
+}
+```
+
+Rules:
+
+- `since` is the newest **final** day the portal already holds (`final_through`
+  from the previous response). First call: omit it and take everything the
+  store still has. Rows come back day-ordered, at most 2000 per call.
+- **Days are Malaysian calendar days** (UTC+8), the same clock as order
+  numbers.
+- A day ≤ `final_through` is **final** — the store never touches it again.
+  `running_day` (today) is a **running total**, resent on every poll:
+  **replace** your copy of any day you receive, never add to it, and advance
+  your cursor only to `final_through`.
+- The row with `state = "" , city = "", path = ""` is the **whole-day total**;
+  its `visitors` is the day's true unique count. Per-state/city/page rows
+  carry their own `visits` (sum cleanly) and `visitors` (do **not** sum these
+  across rows — distinct visitors overlap between groups; use the total row).
+- Foreign visits arrive as `state = "Outside Malaysia"` with the country code
+  in `city`.
+- Aggregates refresh on the store's 5-minute cron, so `running_day` numbers
+  are at most ~5 minutes behind the live site. Raw hits are kept 60 days;
+  aggregate rows are kept indefinitely.
+- Same auth and failure shapes as feed C: 501 until `BRIDGE_KEY` is set,
+  401 on a wrong key, constant-time compare.
+
+---
+
 ## Behaviour worth knowing about on the store side
 
 - **Sales are pushed immediately** when an order is placed, and again on the

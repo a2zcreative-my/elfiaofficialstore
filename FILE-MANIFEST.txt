@@ -1,9 +1,9 @@
-elfia-store v1.1.2 — 71 files
+elfia-store v1.2.0 — 73 files
 
-CHANGELOG.md	28819
+CHANGELOG.md	30596
 DEPLOY.bat	7697
 FILE-MANIFEST.txt	this file
-PORTAL-BRIDGE-SPEC.md	9987
+PORTAL-BRIDGE-SPEC.md	12309
 README.md	8084
 app/account/page.tsx	13615
 app/admin/page.tsx	33626
@@ -12,7 +12,7 @@ app/checkout/page.tsx	6484
 app/chrome.tsx	9684
 app/globals.css	210
 app/icon.png	2280
-app/layout.tsx	2308
+app/layout.tsx	3216
 app/order/page.tsx	16771
 app/p/page.tsx	9060
 app/page.tsx	10100
@@ -50,7 +50,7 @@ scratch/store-e2e.mjs	9690
 scratch/store-journey.mjs	9479
 scratch/store-sync-test.mjs	15079
 tests/brand-isolation.mjs	1529
-tests/no-secrets.mjs	4868
+tests/no-secrets.mjs	5329
 tests/worker-compile-gate.mjs	426
 tsconfig.json	657
 worker/migrations/0001_init.sql	1410
@@ -63,11 +63,13 @@ worker/migrations/0007_always_available.sql	1401
 worker/migrations/0008_stock_sync.sql	2439
 worker/migrations/0009_order_progress.sql	2506
 worker/migrations/0010_accounts_and_holds.sql	4107
+worker/migrations/0011_traffic.sql	2379
 worker/package.json	358
 worker/src/auth.ts	8245
 worker/src/billplz.ts	9791
-worker/src/index.ts	64220
+worker/src/index.ts	66125
 worker/src/portal.ts	15118
+worker/src/traffic.ts	8332
 worker/tsconfig.json	288
 worker/wrangler.e2e.toml	2408
 worker/wrangler.toml	2994

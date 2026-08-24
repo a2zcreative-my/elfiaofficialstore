@@ -34,6 +34,13 @@ const ALLOWED = new Set([
   "elfia-local-wrong-password",  // ditto, the deliberately wrong one
   "REPLACE_WITH_D1_DATABASE_ID",
   "local-e2e-test",
+  /* v1.2.0 — the real D1 database_id in worker/wrangler.toml. It is shaped
+     like a UUID, which rule 4 exists to catch, but it is an IDENTIFIER, not
+     a credential: it names the database and is useless without Cloudflare
+     account auth (wrangler login). Without this line, the moment the CEO
+     pasted the real id (per the ONE-TIME SETUP comment) every later deploy
+     was blocked by this very gate. */
+  "d1e1bb9f-1360-417e-8932-0c9009f5115c",
 ]);
 /** Files whose sample UUIDs are documentation, not credentials. */
 const ALLOWED_FILES = new Set(["PORTAL-BRIDGE-SPEC.md", "tests/no-secrets.mjs"]);

@@ -3,7 +3,7 @@ setlocal EnableExtensions EnableDelayedExpansion
 title ELFIA OFFICIAL STORE - deploy
 REM ============================================================
 REM  ELFIA OFFICIAL STORE - full deploy (site + API + database)
-REM  Version 1.1.2
+REM  Version 1.2.0
 REM
 REM  This script NEVER closes without telling you why. Everything it
 REM  prints is also written to deploy-log.txt next to this file.
