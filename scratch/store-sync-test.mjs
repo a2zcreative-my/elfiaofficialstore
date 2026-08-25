@@ -401,20 +401,37 @@ step("a changed marker replaces the photo");
   ok("and the product points at it", after && after !== before, `${before} -> ${after}`);
 }
 
-step("the portal never overwrites a photo chosen in /admin");
+step("the portal's photo takes over a matched product (v1.6.0, CEO's rule)");
 {
-  /* LUMI003 ships with a hand-picked campaign shot. The portal offering one
-     must not be able to wipe it — prices moved to the portal, photography
-     did not. */
+  /* v1.5.x protected a photo uploaded in /admin from the feed. The CEO
+     reversed that on 25-08 ("SKU doesnt sync with the portal!!"): she runs
+     the catalogue from the portal's ELFIA tab, and a portal item matched to
+     a store SKU is meant to TAKE IT OVER. Sent = applied; omitted = the
+     store keeps what it has. */
   const p3 = await bySku("LUMI003");
   const before = p3.image_key;
-  ok("the store's own photo is not a portal one to begin with", !p3.image_marker, String(p3.image_marker));
-  await portalPhoto({ sku: "LUMI 003", photo: "hijack", marker: "x1" });
+  /* The marker must be new EVERY run — the store remembers the last one it
+     stored, and an already-seen marker is (correctly) not re-downloaded. */
+  await portalPhoto({ sku: "LUMI 003", photo: "takeover", marker: `x1-${Date.now()}` });
   const r = await syncNow();
   const after = await bySku("LUMI003");
-  ok("the store's photo stands", after.image_key === before, `${before} -> ${after.image_key}`);
-  ok("and nothing was counted as copied", r.pull.photos === 0, `photos=${r.pull.photos}`);
+  ok("the portal's photo replaced the store's", after.image_key !== before && String(after.image_key).startsWith("products/"),
+     `${before} -> ${after.image_key}`);
+  ok("counted as one copy", r.pull.photos >= 1, `photos=${r.pull.photos}`);
+
+  /* …and once the feed stops sending one, the store keeps the last photo —
+     absence is "keep", never "delete". */
   await portalPhoto({ sku: "LUMI 003", photo: null });
+  await syncNow();
+  ok("dropping image_url from the feed deletes nothing", (await bySku("LUMI003")).image_key === after.image_key);
+}
+
+step("a matched product follows the portal's name and collection too (v1.6.0)");
+{
+  /* The fake portal names everything "Portal <SKU>" — under the new rule the
+     matched store product takes that name on the pull above. */
+  const p4 = await bySku("LUMI004");
+  ok("the portal's name landed on a store-made product", p4.name === "Portal LUMI 004", p4.name);
 }
 
 step("a hidden product keeps syncing while it waits for review");
@@ -505,6 +522,77 @@ step("a feed item with no price is reported, never sold for nothing");
      JSON.stringify(r.pull.unmatched_portal));
   ok("no priceless product exists", !(await bySku("NOPRICE001")));
   await portalRemove("NOPRICE 001");
+}
+
+/* ------------------------------------------------------------------ v1.7.0
+   The discount and the carousel, run from the portal. */
+
+step("a portal discount becomes a slashed price on the shop (v1.7.0)");
+{
+  await fetch(`${PORTAL}/_price`, { method: "POST", body: JSON.stringify({ sku: "LUMI006", price_cents: 3900 }) });
+  await fetch(`${PORTAL}/_discount`, { method: "POST", body: JSON.stringify({ sku: "LUMI006", discount_cents: 300 }) });
+  await syncNow();
+  const p6 = await bySku("LUMI006");
+  ok("the customer pays the net price", p6.price_cents === 3600, `${p6.price_cents}`);
+  ok("and the old price is kept for the strike-through", p6.compare_price_cents === 3900, `${p6.compare_price_cents}`);
+  const pub = (await jget(`${API}/products`)).products.find((x) => x.id === p6.id);
+  ok("the public catalogue carries both numbers", pub && pub.price_cents === 3600 && pub.compare_price_cents === 3900,
+     JSON.stringify({ p: pub?.price_cents, c: pub?.compare_price_cents }));
+
+  await fetch(`${PORTAL}/_discount`, { method: "POST", body: JSON.stringify({ sku: "LUMI006", discount_cents: null }) });
+  await syncNow();
+  const off = await bySku("LUMI006");
+  ok("clearing the discount takes the badge off", off.compare_price_cents == null && off.price_cents === 3900,
+     JSON.stringify({ p: off.price_cents, c: off.compare_price_cents }));
+  await fetch(`${PORTAL}/_price`, { method: "POST", body: JSON.stringify({ sku: "LUMI006", price_cents: null }) });
+}
+
+step("the portal's slides become the shop's carousel (v1.7.0)");
+{
+  await fetch(`${PORTAL}/_slides`, { method: "POST", body: JSON.stringify({ slides: [
+    { id: 1, photo: "hero1", marker: "h1", title: "Raya Drop", subtitle: "First Sight, Forever Yours", sort: 10 },
+    { id: 2, photo: "hero2", marker: "h2", sort: 20 },
+  ] }) });
+  const r = await syncNow();
+  ok("two slide photos were copied", r.pull.error === undefined || !r.pull.error, JSON.stringify(r.pull.photo_errors));
+  const feed = await jget(`${API}/products`);
+  ok("the public payload now carries the slides", Array.isArray(feed.slides) && feed.slides.length === 2,
+     JSON.stringify(feed.slides));
+  ok("in the portal's order, with captions", feed.slides?.[0]?.title === "Raya Drop" && feed.slides?.[0]?.portal_id === 1,
+     JSON.stringify(feed.slides?.[0]));
+  const img = await fetch(`${API}/media/${feed.slides[0].image_key}`);
+  ok("and the store serves the slide photo itself", img.status === 200 && (img.headers.get("content-type") ?? "").startsWith("image/"), `${img.status}`);
+
+  // unchanged markers cost nothing
+  const before = feed.slides[0].image_key;
+  await syncNow();
+  const again = await jget(`${API}/products`);
+  ok("an unchanged slide is not re-downloaded", again.slides[0].image_key === before);
+
+  // a caption edit without a photo change flows too
+  await fetch(`${PORTAL}/_slides`, { method: "POST", body: JSON.stringify({ slides: [
+    { id: 1, photo: "hero1", marker: "h1", title: "Merdeka Sale", sort: 10 },
+    { id: 2, photo: "hero2", marker: "h2", sort: 20 },
+  ] }) });
+  await syncNow();
+  const cap = await jget(`${API}/products`);
+  ok("a caption edit lands without touching the photo",
+     cap.slides[0].title === "Merdeka Sale" && cap.slides[0].image_key === before, JSON.stringify(cap.slides[0]));
+
+  // removal in the portal removes on the shop
+  await fetch(`${PORTAL}/_slides`, { method: "POST", body: JSON.stringify({ slides: [
+    { id: 2, photo: "hero2", marker: "h2", sort: 20 },
+  ] }) });
+  await syncNow();
+  const one = await jget(`${API}/products`);
+  ok("a slide removed in the portal leaves the shop", one.slides.length === 1 && one.slides[0].portal_id === 2,
+     JSON.stringify(one.slides));
+
+  // empty list = the shop falls back to its shipped campaign slides
+  await fetch(`${PORTAL}/_slides`, { method: "POST", body: JSON.stringify({ slides: [] }) });
+  await syncNow();
+  const none = await jget(`${API}/products`);
+  ok("no portal slides = no slides key (the shop uses its built-ins)", !("slides" in none), JSON.stringify(none.slides));
 }
 
 step("tidy up after this run");

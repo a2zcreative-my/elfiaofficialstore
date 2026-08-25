@@ -250,14 +250,14 @@ function photoTarget(env: Env, raw: string): { url: URL; sameOrigin: boolean } |
 /**
  * Who owns this product's photo?
  *
- * The portal may FILL an empty one, and may REPLACE one it provided itself
- * (a row it created, or a row whose current photo it already delivered —
- * that is what a non-null image_marker means). It never overwrites a photo
- * uploaded in /admin: the campaign shots shipped with the site were chosen by
- * hand, and a feed should not be able to wipe them.
+ * v1.6.0: the portal does, whenever it sends one — matched SKUs included
+ * (CEO's correction; see the ownership note in pullStock). The store's own
+ * photo survives only as long as the feed omits image_url for that SKU. The
+ * marker still gates DOWNLOADS: an unchanged image_updated_at costs nothing,
+ * whoever took the photo.
  */
-const takesPortalPhoto = (p: { image_key: string | null; portal_created: number; image_marker: string | null }): boolean =>
-  !p.image_key || p.portal_created === 1 || p.image_marker !== null;
+const takesPortalPhoto = (_p: { image_key: string | null; portal_created: number; image_marker: string | null }): boolean =>
+  true;
 
 /** Copy one photo into R2 and point the product at it. Never throws — a photo
     problem must not stop counts and prices from syncing. */
@@ -360,14 +360,22 @@ export async function pullStock(env: Env): Promise<PullResult> {
      field means "the store keeps what it has", so a portal that has not
      shipped its half yet keeps working exactly as before. */
   let items: {
-    sku: string; stock: number; price_cents?: number;
+    sku: string; stock: number; price_cents?: number; list_price_cents?: number;
     name?: string; category?: string; description?: string;
     image_url?: string; image_updated_at?: string;
   }[];
+  /* v1.7.0 — the hero carousel, portal-authored. Absent key (a portal older
+     than its 0087) = leave the store's slides exactly as they are. */
+  let feedSlides: {
+    id: number; image_url: string; image_updated_at: string;
+    title?: string; subtitle?: string; sort?: number;
+  }[] | undefined;
   try {
     const r = await fetch(env.BRIDGE_URL!, { headers: { "X-Bridge-Key": env.BRIDGE_KEY! } });
     if (!r.ok) throw new Error(`portal answered ${r.status} — check the key matches on both sides`);
-    items = ((await r.json()) as { items?: typeof items }).items ?? [];
+    const payload = (await r.json()) as { items?: typeof items; slides?: typeof feedSlides };
+    items = payload.items ?? [];
+    feedSlides = Array.isArray(payload.slides) ? payload.slides : undefined;
   } catch (e) {
     const msg = e instanceof Error ? e.message : "could not reach the portal bridge";
     await setState(env, "last_pull_result", `failed: ${msg}`);
@@ -446,6 +454,8 @@ export async function pullStock(env: Env): Promise<PullResult> {
       /* v1.5.1 — the portal's ELFIA tab also writes the product's
          description; a feed that carries one hands it over at birth. */
       const desc = clean(it.description, 2000) || null;
+      const listC = Math.round(Number(it.list_price_cents));
+      const cmpAtBirth = it.list_price_cents !== undefined && Number.isFinite(listC) && listC > newPrice ? listC : null;
       const row = await env.DB.prepare(
         `INSERT INTO products (name, description, price_cents, stock, active, sort, sku, category,
                                featured, track_stock, portal_created, portal_pending)
@@ -455,6 +465,10 @@ export async function pullStock(env: Env): Promise<PullResult> {
        .catch(() => null);
       if (!row) { unmatched_portal.push(clean(it.sku, 40)); continue; }
       created.push({ sku: clean(it.sku, 40), name });
+      if (cmpAtBirth !== null) {
+        await env.DB.prepare(`UPDATE products SET compare_price_cents = ?1 WHERE id = ?2`)
+          .bind(cmpAtBirth, row.id).run().catch(() => null);
+      }
       await doPhoto({ id: row.id, image_key: null, portal_created: 1, image_marker: null }, it);
       continue;
     }
@@ -472,13 +486,29 @@ export async function pullStock(env: Env): Promise<PullResult> {
       await env.DB.prepare(`UPDATE products SET price_cents = ?1 WHERE id = ?2`).bind(price, m.id).run();
       price_updated.push({ sku: m.sku, from: m.price_cents, to: price });
     }
+    /* v1.7.0 — the slashed price. Recomputed on EVERY pull for every SKU the
+       portal prices: list_price_cents present and larger than the price →
+       that is the struck-through number; absent (discount cleared) → the
+       badge comes off. Kept out of the deferred check below on the same
+       argument as the price itself. Armored: pre-0014 this column is absent
+       and the sale display simply waits for the migration. */
+    if (it.price_cents !== undefined && Number.isFinite(price) && price > 0) {
+      const list = Math.round(Number(it.list_price_cents));
+      const cmp = it.list_price_cents !== undefined && Number.isFinite(list) && list > price ? list : null;
+      await env.DB.prepare(`UPDATE products SET compare_price_cents = ?1 WHERE id = ?2`)
+        .bind(cmp, m.id).run().catch(() => null);
+    }
 
-    /* v1.5.1 — a product the PORTAL created follows the portal's words, the
-       same way it follows the portal's photo: its name, collection and
-       description were authored in the portal's ELFIA tab, so an edit there
-       lands here on the next pull. A product made by hand in /admin is never
-       touched — the feed does not get to rewrite copy it did not write. */
-    if (m.portal_created === 1) {
+    /* v1.6.0 — THE PORTAL OWNS WHATEVER IT SENDS, for every matched SKU.
+       The CEO, seeing her renamed portal items not land on the shop: "SKU
+       doesnt sync with the portal!!" The v1.5.1 rule — the feed only rewrote
+       products it had created — was protecting store-side copy she no longer
+       wants protected: she runs the whole catalogue from the portal's ELFIA
+       tab now, and matching a portal item to a store SKU IS the instruction
+       to take it over. So: a field the feed carries is applied; a field the
+       feed omits leaves the store's own value standing (the spec's one
+       constant: absent = the store keeps what it has). */
+    {
       const newName = clean(it.name, 200);
       const newCat = clean(it.category, 20).toLowerCase();
       const newDesc = it.description !== undefined ? (clean(it.description, 2000) || null) : undefined;
@@ -515,6 +545,74 @@ export async function pullStock(env: Env): Promise<PullResult> {
     updated.push({ sku: m.sku, from: m.stock, to: stock });
   }
 
+  /* ---- v1.7.0 — the carousel, mirrored from the portal ----
+     Slides are the ONE feed section where absence inside the list means
+     delete: the portal is their only author, so the store's set is replaced
+     to match. The whole section is skipped when the feed has no `slides` key
+     at all (a portal older than its 0087), and armored against a store
+     database older than 0014. Photo downloads ride the same pipeline as
+     product photos: copied into our R2 once, re-copied only when the marker
+     moves, failures reported per slide and never fatal to the pull. */
+  let slides_synced = 0;
+  if (feedSlides !== undefined) {
+    try {
+      const { results: haveRows } = await env.DB.prepare(
+        `SELECT portal_id, image_key, image_marker FROM portal_slides`,
+      ).all<{ portal_id: number; image_key: string; image_marker: string }>();
+      const have = new Map(haveRows.map((r) => [r.portal_id, r]));
+      const seen = new Set<number>();
+      for (const sl of feedSlides.slice(0, 12)) {
+        if (!Number.isInteger(sl.id) || !sl.image_url || !sl.image_updated_at) continue;
+        seen.add(sl.id);
+        const cur = have.get(sl.id);
+        let key = cur?.image_key ?? null;
+        if (!cur || cur.image_marker !== sl.image_updated_at) {
+          const target = photoTarget(env, clean(sl.image_url, 2000));
+          if ("error" in target) { photo_errors.push(`slide ${sl.id}: ${target.error}`); if (!cur) continue; }
+          else {
+            try {
+              const r2 = await fetch(target.url.toString(), {
+                headers: target.sameOrigin && env.BRIDGE_KEY ? { "X-Bridge-Key": env.BRIDGE_KEY } : {},
+                signal: AbortSignal.timeout(PHOTO_TIMEOUT_MS),
+              });
+              const ct = (r2.headers.get("Content-Type") ?? "").split(";")[0]!.trim().toLowerCase();
+              const ext = PHOTO_EXT[ct];
+              if (!r2.ok || !ext) { photo_errors.push(`slide ${sl.id}: download ${r2.ok ? `is ${ct || "unknown"}` : `answered ${r2.status}`}`); if (!cur) continue; }
+              else {
+                const bytes = await r2.arrayBuffer();
+                if (bytes.byteLength === 0 || bytes.byteLength > MAX_PHOTO_BYTES) {
+                  photo_errors.push(`slide ${sl.id}: ${(bytes.byteLength / 1048576).toFixed(1)} MB — the limit is 5 MB`);
+                  if (!cur) continue;
+                } else {
+                  key = `slides/${sl.id}-${Date.now()}.${ext}`;
+                  await env.MEDIA.put(key, bytes, { httpMetadata: { contentType: ct === "image/jpg" ? "image/jpeg" : ct } });
+                  slides_synced += 1;
+                }
+              }
+            } catch { photo_errors.push(`slide ${sl.id}: photo download failed`); if (!cur) continue; }
+          }
+        }
+        if (!key) continue;
+        await env.DB.prepare(
+          `INSERT INTO portal_slides (portal_id, image_key, image_marker, title, subtitle, sort, updated_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))
+           ON CONFLICT (portal_id) DO UPDATE SET image_key = ?2, image_marker = ?3,
+             title = ?4, subtitle = ?5, sort = ?6, updated_at = datetime('now')`,
+        ).bind(sl.id, key, clean(sl.image_updated_at, 200),
+               clean(sl.title, 120) || null, clean(sl.subtitle, 200) || null,
+               Number.isFinite(Number(sl.sort)) ? Math.round(Number(sl.sort)) : 100).run();
+      }
+      /* Removed in the portal = removed here. The R2 file is left behind
+         (same rule as replaced product photos: a cached page may still
+         point at it). */
+      for (const [pid] of have) {
+        if (!seen.has(pid)) {
+          await env.DB.prepare(`DELETE FROM portal_slides WHERE portal_id = ?1`).bind(pid).run();
+        }
+      }
+    } catch { /* pre-0014 — the sale/carousel simply waits for the migration */ }
+  }
+
   /* A row still waiting in the review list came FROM the portal, so calling
      it "unknown there" the moment the feed drops it would be noise. Only
      published products are reconciled against the portal. */
@@ -525,6 +623,7 @@ export async function pullStock(env: Env): Promise<PullResult> {
     `${price_updated.length ? `, ${price_updated.length} price${price_updated.length === 1 ? "" : "s"} updated` : ""}` +
     `${created.length ? `, ${created.length} new product${created.length === 1 ? "" : "s"} waiting to publish` : ""}` +
     `${photos ? `, ${photos} photo${photos === 1 ? "" : "s"}` : ""}` +
+    `${slides_synced ? `, ${slides_synced} slide${slides_synced === 1 ? "" : "s"}` : ""}` +
     `${deferred.length ? `, ${deferred.length} deferred` : ""}` +
     `${unmatched_portal.length ? `, ${unmatched_portal.length} unknown here` : ""}` +
     `${unmatched_store.length ? `, ${unmatched_store.length} unknown there` : ""}`);

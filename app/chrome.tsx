@@ -101,8 +101,12 @@ export function SiteHeader() {
           <Link href="/" aria-label="ELFIA home" className="flex shrink-0 flex-col items-center gap-px">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src="/logo.png" alt="ELFIA" className="h-4.5 w-auto" />
-            <span className="text-[6px] leading-none font-semibold tracking-[0.3em] text-elfia-muted uppercase">
-              Official Store
+            {/* The CEO, 25-08: the line under the logo is the brand promise,
+                not "Official Store" — and it must be SET like the footer's:
+                italic, deep rose, sentence case. Same three classes as
+                SiteFooter below, scaled for the phone bar. */}
+            <span className="text-[7px] leading-none font-medium tracking-wide whitespace-nowrap text-elfia-deep italic">
+              {STORE.tagline}
             </span>
           </Link>
           <SearchBox compact />
@@ -121,8 +125,8 @@ export function SiteHeader() {
           <Link href="/" className="flex shrink-0 flex-col items-center gap-0.5">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src="/logo.png" alt="ELFIA" className="h-6 w-auto" />
-            <span className="text-[8px] leading-none font-semibold tracking-[0.34em] text-elfia-muted uppercase">
-              Official Store
+            <span className="text-[10px] leading-none font-medium tracking-wide whitespace-nowrap text-elfia-deep italic">
+              {STORE.tagline}
             </span>
           </Link>
 

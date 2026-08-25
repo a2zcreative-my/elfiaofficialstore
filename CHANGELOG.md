@@ -1,3 +1,97 @@
+# ELFIA OFFICIAL STORE — v1.7.0 (25-08-2026, late night)
+
+## The slashed price and the portal-run carousel
+
+The CEO: "remove the store's current photos which is all the photo should
+sync from the portal then the prices also should come from the portal. I also
+want to add for the collection photo which is to make the photo of the
+carousel gallery and also there is a discount for me to update in the portal.
+This is to make my staff easier to update all in one finger tips in the
+portal." Photos and prices already flow from the portal (v1.5.x/v1.6.0); this
+release adds the two things that did not exist yet — a discount and the home
+page carousel, both run from the portal's ELFIA tab.
+
+- **Sale price** (`migration 0014`, `compare_price_cents`): when the feed
+  sends `list_price_cents` next to `price_cents` (the portal does this when a
+  discount is set there), the store keeps the pre-discount number and the
+  storefront draws it — struck-through beside the price on every product
+  card, a gold **SALE** badge on the card, and "Save RM X" on the product
+  page. The customer still pays exactly `price_cents`, the same contract as
+  always. Feed stops sending it → badge comes off on the next pull. Nothing
+  is ever edited by hand in /admin: the discount lives in the portal.
+- **The carousel** (`portal_slides` table, same migration): the portal's
+  ELFIA tab now authors the home page hero. Slides ride the same
+  `/api/v1/products` response the page already fetches; photos are copied
+  into the store's own R2 under `slides/…` (marker-gated, same 5 MB/type
+  rules as product photos) and served from `/media/slides/…`. This is the ONE
+  feed section where absence means delete — a slide removed in the portal
+  leaves the shop on the next pull, because a slide has no store-side author
+  to protect. No portal slides at all = the shipped campaign slides show, so
+  the page is never blank.
+- **The lock-up line** (CEO, after seeing it live): the words under the
+  ELFIA logo are now the brand line — **First Sight, Forever Yours** — not
+  "Official Store", on desktop and the phone app bar both, written once
+  (`STORE.tagline`). Set exactly like the footer's, on her instruction
+  ("header should be the same as this footer"): italic, deep rose, sentence
+  case — the same three classes `SiteFooter` uses, not the old letter-spaced
+  uppercase caption.
+
+### Verified
+
+- `scratch/store-sync-test.mjs` — now **105 assertions**, twice in a row:
+  discount lands (net price + compare price in admin AND the public payload),
+  clearing removes it; two slides copied with captions and order, unchanged
+  marker not re-downloaded, caption-only edit lands without touching the
+  photo, removal propagates, empty list removes the `slides` key.
+- `scratch/portal-live-e2e.mjs` — now **35 assertions against the real
+  portal worker**, twice in a row: an RM 5 discount set in the portal's
+  ELFIA tab becomes RM 55 struck → RM 50 paid on the shopfront and clears
+  again; a slide photo uploaded in the portal (with captions) is copied,
+  served by the store itself, and disappears when removed in the portal.
+- Worker `tsc` clean; `next build` clean; brand-isolation, no-secrets PASS.
+
+**Deploy**: one DEPLOY.bat run — it applies migration 0014 and ships the
+still-pending v1.5.2/v1.6.0 changes with it.
+
+# ELFIA OFFICIAL STORE — v1.6.0 (25-08-2026, night)
+
+## The portal owns whatever it sends
+
+The CEO renamed her portal items onto the store's LUMI codes, uploaded photos
+for all of them — and the shop kept showing its own names and photos. Her
+verdict: **"SKU doesnt sync with the portal!!"** She was hitting v1.5.x's
+protection rule on purpose-built copy: the feed could only rewrite products
+it had created, so matched SKUs took counts and prices but nothing else.
+
+That protection is now removed, on her instruction. The rule becomes ONE
+sentence: **a field the feed carries is applied — name, collection,
+description, photo — for every matched SKU; a field the feed omits leaves
+the store's value standing.** Matching a portal item to a store SKU is the
+instruction to take it over. The photo change-marker still gates downloads
+(an unchanged image_updated_at costs nothing), and dropping image_url from
+the feed deletes nothing — absence always means "keep", never "delete".
+
+This also answers the missing Shawl collection: set an item's Collection to
+Shawl in the portal's ELFIA tab and the matched store product moves into the
+Shawl collection on the next pull — the storefront's Collections strip then
+shows Shawl by itself (it only hides EMPTY groups).
+
+### Verified
+
+- `scratch/store-sync-test.mjs` — **93 assertions**: the old
+  "never overwrites an /admin photo" step is deliberately REVERSED (the
+  portal's photo replaces the store's; the take-over is counted; dropping the
+  URL from the feed deletes nothing; a matched store-made product takes the
+  portal's name).
+- `scratch/portal-live-e2e.mjs` — **24 assertions against the real portal
+  worker**, including the new cross-system step: a store-made product with
+  the shipped campaign shot ends up wearing the photo uploaded in the
+  portal's ELFIA tab after one sync.
+- Worker `tsc` clean; brand-isolation, no-secrets, compile gate PASS.
+
+Worker-only, no migration — one DEPLOY.bat run ships it together with
+v1.5.2's header/tagline (still pending deploy).
+
 # ELFIA OFFICIAL STORE — v1.5.2 (25-08-2026, evening)
 
 ## The lock-up and the brand line

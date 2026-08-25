@@ -15,7 +15,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import {
-  WISH_EVENT, fmtRM, imageUrl, isSoldOut, lowStock, readWishlist, splitName, toggleWish,
+  WISH_EVENT, comparePrice, fmtRM, imageUrl, isSoldOut, lowStock, readWishlist, splitName, toggleWish,
   type Product,
 } from "@/lib/config";
 
@@ -110,6 +110,8 @@ export function ProductCard({ p, compact = false }: { p: Product; compact?: bool
   const { series, shade } = splitName(p.name);
   const out = isSoldOut(p);
   const low = lowStock(p);
+  /* v1.7.0 — the portal's discount, drawn as a struck price + SALE badge. */
+  const was = comparePrice(p);
   return (
     <Link href={`/p?id=${p.id}`} className="group block">
       <div className="relative aspect-[4/5] overflow-hidden rounded-2xl bg-elfia-veil ring-1 ring-elfia-line">
@@ -129,6 +131,10 @@ export function ProductCard({ p, compact = false }: { p: Product; compact?: bool
           <span className="absolute top-3 left-3 rounded-full bg-elfia-deep px-2.5 py-1 text-[10px] font-bold tracking-wider text-white uppercase">
             {low} left
           </span>
+        ) : was ? (
+          <span className="absolute top-3 left-3 rounded-full bg-elfia-gold px-2.5 py-1 text-[10px] font-bold tracking-wider text-white uppercase">
+            Sale
+          </span>
         ) : null}
       </div>
       <div className="mt-2.5">
@@ -138,7 +144,10 @@ export function ProductCard({ p, compact = false }: { p: Product; compact?: bool
         <p className={`mt-1 line-clamp-2 leading-snug font-medium text-elfia-ink group-hover:text-elfia-deep ${compact ? "text-[13.5px]" : "text-[15px]"}`}>
           {shade}
         </p>
-        <p className="mt-1 text-sm font-bold text-elfia-deep">{fmtRM(p.price_cents)}</p>
+        <p className="mt-1 text-sm font-bold text-elfia-deep">
+          {fmtRM(p.price_cents)}
+          {was && <s className="ml-1.5 text-xs font-normal text-elfia-muted">{fmtRM(was)}</s>}
+        </p>
       </div>
     </Link>
   );

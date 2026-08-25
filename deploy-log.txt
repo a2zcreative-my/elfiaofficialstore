@@ -1,11 +1,11 @@
-ELFIA deploy - Fri 21/08/2026 23:23:38.60 
+ELFIA deploy - Tue 25/08/2026 21:19:42.46 
 [1/9] Checking Node.js and npm 
       node v24.15.0 
 [2/9] Checking worker\wrangler.toml 
 WARNING: WHATSAPP_DIGITS is still the dummy number - the floating WhatsApp button will stay hidden. 
 [3/9] Checking Cloudflare login 
 
- ⛅️ wrangler 4.117.0
+ ⛅️ wrangler 4.125.0
 ────────────────────
 Getting User settings...
 👋 You are logged in with an OAuth Token, associated with the email aliffarhan1997@gmail.com.
@@ -49,7 +49,7 @@ Scope (Access)
       logged in 
 [4/9] Installing site dependencies (first run takes a few minutes) 
 
-added 46 packages, and audited 47 packages in 49s
+up to date, audited 47 packages in 4s
 
 10 packages are looking for funding
   run `npm fund` for details
@@ -61,10 +61,12 @@ To address all issues (including breaking changes), run:
 
 Run `npm audit` for details.
 [5/9] Installing worker dependencies 
+
+up to date, audited 40 packages in 2s
+
+6 packages are looking for funding
+  run `npm fund` for details
+
+found 0 vulnerabilities
 [6/9] Safety gates - typecheck, brand isolation, no hardcoded keys 
 STOPPED while running the safety gates: A credential looks like it is written into the code. Nothing was deployed. See the list above - move each one into: cd worker  then  npx wrangler secret put NAME 
-STOPPED while running the safety gates: The worker does not compile. Nothing was deployed. See the errors above. 
-[7/9] Applying database migrations, then deploying the API 
-[8/9] Building and deploying the site 
-[9/9] Health check 
-{"ok":true,"version":"1.1.2","db":true,"r2":true,"migrations_current":true,"admin_key_configured":false,"bank_line_configured":false,"gateway_configured":false,"gateway_signature_configured":false,"store_url":"https://elfiaofficialstore.my","order_hold_hours":12,"bridge_pull_configured":true,"bridge_push_configured":true}

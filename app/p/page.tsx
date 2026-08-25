@@ -11,7 +11,7 @@ import { Suspense, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
 import {
-  addToCart, btnClass, btnGhost, countedStock, fmtRM, imageUrl, inputClass, isSoldOut, labelClass, lowStock,
+  addToCart, btnClass, btnGhost, comparePrice, countedStock, fmtRM, imageUrl, inputClass, isSoldOut, labelClass, lowStock,
   maxQty, splitName, type Product,
 } from "@/lib/config";
 
@@ -137,6 +137,7 @@ function ProductInner() {
      products are). The CEO's ask: the shop must show the qty "as per
      inventory in my portal", not a vague "in stock". */
   const counted = countedStock(p);
+  const was = comparePrice(p); // v1.7.0 — the portal's discount
   const { series, shade } = splitName(p.name);
   const collection = (p.category ?? "bawal") === "shawl" ? "Shawl" : "Bawal";
   const also = others.filter((o) => o.id !== p.id && (o.category ?? "bawal") === (p.category ?? "bawal")).slice(0, 4);
@@ -176,7 +177,17 @@ function ProductInner() {
             </p>
             <h1 className="mt-2 text-3xl leading-tight font-bold text-elfia-ink">{shade}</h1>
             {series && <p className="mt-1 text-sm text-elfia-muted">{series}</p>}
-            <p className="mt-4 text-2xl font-bold text-elfia-deep">{fmtRM(p.price_cents)}</p>
+            <p className="mt-4 text-2xl font-bold text-elfia-deep">
+              {fmtRM(p.price_cents)}
+              {was && (
+                <>
+                  <s className="ml-2 text-base font-normal text-elfia-muted">{fmtRM(was)}</s>
+                  <span className="ml-2 align-middle rounded-full bg-elfia-gold px-2 py-0.5 text-[10px] font-bold tracking-wider text-white uppercase">
+                    Save {fmtRM(was - p.price_cents)}
+                  </span>
+                </>
+              )}
+            </p>
 
             {p.description && (
               <p className="mt-5 text-sm leading-relaxed whitespace-pre-wrap text-elfia-body">{p.description}</p>

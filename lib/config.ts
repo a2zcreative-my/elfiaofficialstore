@@ -41,7 +41,28 @@ export interface Product {
   portal_created?: number;
   portal_pending?: number;
   image_marker?: string | null;
+  /* v1.7.0 — the pre-discount price. Set by the portal sync when a discount
+     runs; the storefront draws the struck-through number and a SALE badge
+     from it. NULL/absent = no sale. */
+  compare_price_cents?: number | null;
 }
+
+/** v1.7.0 — one hero-carousel slide, authored in the portal and mirrored by
+    the sync. Served inside GET /api/v1/products; an empty/absent list means
+    the shipped campaign slides carry the carousel, exactly as before. */
+export interface PortalSlide {
+  portal_id: number;
+  image_key: string;
+  title?: string | null;
+  subtitle?: string | null;
+  sort: number;
+}
+
+/** The struck-through number, only when it is genuinely bigger than the
+    price — a "sale" from RM 36 down to RM 36 is not a sale. */
+export const comparePrice = (p: Product): number | null =>
+  typeof p.compare_price_cents === "number" && p.compare_price_cents > p.price_cents
+    ? p.compare_price_cents : null;
 
 /** The single answer to "can this be bought right now?". Everything on the
     storefront asks this rather than testing `stock <= 0` on its own — that

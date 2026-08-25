@@ -47,8 +47,14 @@ step("start clean: reset the portal's shawl to the seeded baseline");
   const pShawl = inv.items.find((x) => x.sku === "SHWL 001");
   await portalStaff(`/inventory/${pShawl.id}`, { method: "PATCH", body: JSON.stringify({ stock: 8 }) });
   await portalStaff(`/inventory/${pShawl.id}/elfia`, {
-    method: "PATCH", body: JSON.stringify({ description: "Long-cut, lightweight and opaque. Finished by hand." }),
+    method: "PATCH", body: JSON.stringify({ description: "Long-cut, lightweight and opaque. Finished by hand.", discount: "" }),
   });
+  /* v1.46.0 — slides and discounts survive in the portal's D1 between runs;
+     a leftover would turn this run's "create" into "refresh". */
+  const sl = await (await portalStaff(`/elfia/slides`)).json();
+  for (const s of sl.slides ?? []) {
+    await portalStaff(`/elfia/slides/${s.id}`, { method: "PATCH", body: JSON.stringify({ remove: true }) });
+  }
   ok("portal baseline restored", true);
 }
 
@@ -114,6 +120,28 @@ step("a description edit in the portal flows to the store");
     (await bySku("LUMI001")).description !== "Edited in the portal — v2.");
 }
 
+step("v1.6.0 — a portal photo TAKES OVER a store-made product");
+{
+  /* The CEO's 25-08 rule: matching a portal item to a store SKU is the
+     instruction to take it over — name, photo, collection. LUMI001 is a
+     store-made product with the shipped campaign shot; the portal now
+     photographs it, and the shop must show the portal's photo on the next
+     pull. */
+  const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+  const portalInv = await (await portalStaff(`/inventory`)).json();
+  const pLumi = portalInv.items.find((x) => x.sku === "LUMI 001");
+  const before = (await bySku("LUMI001")).image_key;
+  const up = await fetch(`${PORTAL}/staff/inventory/${pLumi.id}/elfia/photo`, {
+    method: "POST", headers: { Cookie: COOKIES, "X-CSRF-Token": CSRF, "Content-Type": "image/png" }, body: PNG,
+  });
+  ok("portal accepted the photo", up.status === 201, `${up.status}`);
+  await syncNow();
+  const after = await bySku("LUMI001");
+  ok("the store's product now wears the portal's photo",
+    after.image_key !== before && String(after.image_key).startsWith("products/"),
+    `${before} -> ${after.image_key}`);
+}
+
 step("Publish in the store's admin puts it in the shop");
 {
   await admin(`/admin/products/${shawl.id}/publish`, { method: "POST", body: "{}" });
@@ -139,6 +167,58 @@ step("an ELFIA sale walks back into the REAL portal");
   ok(`the portal's count moved (${before} → ${after})`, after === before - 2, `${before} -> ${after}`);
   const health = await (await portalStaff(`/inventory/bridge-health`)).json();
   ok("the portal's bridge health saw the movement", (health.applied_24h ?? 0) >= 1, JSON.stringify(health).slice(0, 140));
+}
+
+step("v1.46.0 — a discount set in the portal becomes a slashed price in the shop");
+{
+  const inv = await (await portalStaff(`/inventory`)).json();
+  const pShawl = inv.items.find((x) => x.sku === "SHWL 001");
+  const set = await portalStaff(`/inventory/${pShawl.id}/elfia`, { method: "PATCH", body: JSON.stringify({ discount: 5 }) });
+  ok("the portal accepted the RM 5 discount", set.status === 200, `${set.status}`);
+  await syncNow();
+  const s = await bySku("SHWL001");
+  ok("the customer pays the net price (RM 50)", s.price_cents === 5000, `${s.price_cents}`);
+  ok("the old price rides along for the strike-through", s.compare_price_cents === 5500, `${s.compare_price_cents}`);
+  const shop = await (await fetch(`${STORE}/products`)).json();
+  const pub = shop.products.find((x) => x.id === s.id);
+  ok("the shopfront carries both numbers", Boolean(pub) && pub.price_cents === 5000 && pub.compare_price_cents === 5500,
+     JSON.stringify({ price: pub?.price_cents, was: pub?.compare_price_cents }));
+
+  await portalStaff(`/inventory/${pShawl.id}/elfia`, { method: "PATCH", body: JSON.stringify({ discount: "" }) });
+  await syncNow();
+  const cleared = await bySku("SHWL001");
+  ok("clearing it in the portal takes the badge off", cleared.price_cents === 5500 && (cleared.compare_price_cents ?? null) === null,
+     JSON.stringify({ price: cleared.price_cents, was: cleared.compare_price_cents }));
+}
+
+step("v1.46.0 — a slide uploaded in the portal becomes the shop's carousel");
+{
+  const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+  const up = await fetch(`${PORTAL}/staff/elfia/slides/photo`, {
+    method: "POST", headers: { Cookie: COOKIES, "X-CSRF-Token": CSRF, "Content-Type": "image/png" }, body: PNG,
+  });
+  ok("the portal accepted the slide photo", up.status === 201, `${up.status}`);
+  const slide = await up.json();
+  await portalStaff(`/elfia/slides/${slide.id}`, {
+    method: "PATCH", body: JSON.stringify({ title: "Raya Drop", subtitle: "Koleksi terbaru" }),
+  });
+  await syncNow();
+  const shop = await (await fetch(`${STORE}/products`)).json();
+  const got = (shop.slides ?? []).find((x) => x.portal_id === slide.id);
+  ok("the shopfront now carries the slide", Boolean(got), JSON.stringify(shop.slides ?? null));
+  ok("with the portal's captions", got?.title === "Raya Drop" && got?.subtitle === "Koleksi terbaru",
+     JSON.stringify({ t: got?.title, s: got?.subtitle }));
+  ok("its photo was copied into ELFIA's own R2", typeof got?.image_key === "string" && got.image_key.startsWith("slides/"),
+     String(got?.image_key));
+  const img = got ? await fetch(`${STORE}/media/${got.image_key}`) : { status: 0, headers: new Headers() };
+  ok("and ELFIA serves it itself", img.status === 200 && (img.headers.get("content-type") ?? "").startsWith("image/"), `${img.status}`);
+
+  /* Remove in the portal — the ONE feed section where absence means delete. */
+  await portalStaff(`/elfia/slides/${slide.id}`, { method: "PATCH", body: JSON.stringify({ remove: true }) });
+  await syncNow();
+  const after = await (await fetch(`${STORE}/products`)).json();
+  ok("removing it in the portal removes it from the shop", !(after.slides ?? []).some((x) => x.portal_id === slide.id),
+     JSON.stringify(after.slides ?? null));
 }
 
 console.log(`\n${fail === 0 ? "ALL PASS" : "FAILURES"} — ${pass} passed, ${fail} failed`);

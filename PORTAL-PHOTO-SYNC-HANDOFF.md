@@ -37,22 +37,50 @@ Dismiss. Nothing the feed invents reaches a customer unreviewed. Without a
 name or a positive price it is only reported — a product needs something to
 be called and something to be sold for.
 
-## Photo ownership (both sides hold the same doctrine)
+## Ownership (v1.6.0 — the CEO's rule)
 
-The feed may FILL an empty photo and may REPLACE one it delivered itself; it
-never overwrites a photo uploaded in the store's /admin. Symmetrically, the
-portal's tab is where the photo is uploaded once — nobody uploads the same
-file twice.
+**The portal owns whatever it sends, for every matched SKU**: name,
+collection, description and photo are all applied on the pull, whether the
+store product was portal-created or made by hand in /admin. A field the feed
+omits leaves the store's own value standing — absence means "keep", never
+"delete". The photo marker still gates downloads. (v1.5.x protected
+store-side copy from the feed; the CEO reversed that on 25-08 — the portal's
+ELFIA tab is the catalogue's single home.)
+
+## v1.7.0 — the discount and the carousel
+
+Two more feed A sections, both authored in the portal's ELFIA tab:
+
+- **`list_price_cents`** (per item, optional): sent ONLY when a discount is
+  set portal-side and actually bites (`0 < discount < price`). `price_cents`
+  stays what the customer pays (now net of the discount); `list_price_cents`
+  is the pre-discount number. The store keeps it as `compare_price_cents`
+  and draws the struck price + SALE badge. An item arriving with
+  `price_cents` but no `list_price_cents` clears the badge — this pair is
+  evaluated together, so "no list price" means "no sale", not "keep".
+- **`slides`** (top-level, optional array): the home page hero carousel —
+  `{id, image_url, image_updated_at, title?, subtitle?, sort}`. The store
+  REPLACES its slide set to match the feed on every pull: this is the one
+  feed section where absence-in-the-list means delete, because a slide has
+  no store-side author to protect. Photos are copied into the store's own R2
+  (`slides/…`, marker-gated, same 5 MB/type rules). Key absent entirely
+  (portal pre-0087) = the store's slides are left alone; empty array =
+  cleared. No rows = the storefront falls back to its shipped campaign
+  slides.
 
 ## Proven
 
 - Store-side unit rig: `scratch/store-sync-test.mjs` against
-  `scratch/fake-portal.mjs` — 92 assertions.
-- The portal's serializer guard covers the four fields' omission rules
-  (absent-when-empty, unknown category dropped, URL only with its marker).
+  `scratch/fake-portal.mjs` — 105 assertions (v1.7.0 added the discount and
+  slide steps).
+- The portal's serializer guard covers the omission rules (absent-when-empty,
+  unknown category dropped, URL only with its marker, list price only when
+  the discount bites, slides sorted with absolute URLs).
 - **Cross-system**: `scratch/portal-live-e2e.mjs` runs this store's real
   Worker against the portal's real Worker (both on wrangler dev, real D1 +
-  R2) — 22 assertions, run twice: create-hidden with photo/description/
-  collection, marker-gated re-download, portal edit flowing across, /admin
-  copy protected, Publish → shopfront, and an ELFIA sale landing in the
-  portal's stock ledger.
+  R2) — 35 assertions: create-hidden with photo/description/
+  collection, marker-gated re-download, portal edit flowing across, a portal
+  photo taking over a store-made product, Publish → shopfront, an ELFIA sale
+  landing in the portal's stock ledger, a portal discount becoming the
+  shopfront's slashed price (and clearing), and a portal slide becoming —
+  then leaving — the shop's carousel.

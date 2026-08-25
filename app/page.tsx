@@ -21,7 +21,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
 import {
-  BRAND_SLIDES, CATEGORIES, GROUPS, fmtRM, imageUrl, splitName, type Product,
+  BRAND_SLIDES, CATEGORIES, GROUPS, fmtRM, imageUrl, splitName, type PortalSlide, type Product,
 } from "@/lib/config";
 
 import { CardSkeleton, Icon, ProductCard, SectionHeader, type IconName } from "./ui";
@@ -119,19 +119,36 @@ function ProductRail({ items }: { items: Product[] }) {
 
 export default function Home() {
   const [products, setProducts] = useState<Product[] | null>(null);
+  const [portalSlides, setPortalSlides] = useState<PortalSlide[]>([]);
   const [tab, setTab] = useState<string>("all");
 
   useEffect(() => {
     void fetch("/api/v1/products")
       .then((r) => r.json())
-      .then((j: { products: Product[] }) => setProducts(j.products))
+      .then((j: { products: Product[]; slides?: PortalSlide[] }) => {
+        setProducts(j.products);
+        if (Array.isArray(j.slides)) setPortalSlides(j.slides);
+      })
       .catch(() => setProducts([]));
   }, []);
 
   const all = products ?? [];
 
+  /* v1.7.0 — the carousel is the portal's when the portal has authored one:
+     the slides uploaded in its ELFIA tab replace the shipped campaign
+     shots. No portal slides = the shipped pair, exactly as before. Featured
+     products ride after either set, unchanged. */
+  const heroSlides: Slide[] = portalSlides.length > 0
+    ? portalSlides.map((s) => ({
+        image: imageUrl(s.image_key),
+        title: s.title ?? "",
+        subtitle: s.subtitle ?? "",
+        position: "50% 30%",
+      }))
+    : [...BRAND_SLIDES];
+
   const slides: Slide[] = [
-    ...BRAND_SLIDES,
+    ...heroSlides,
     ...all
       .filter((p) => p.featured === 1 && p.image_key)
       .map((p) => ({

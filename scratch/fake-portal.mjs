@@ -44,7 +44,9 @@ let down = false;
 /* v1.5.0 — per-SKU metadata the feed may carry: a real name, a collection and
    a photo. `meta` only holds what a test has set; everything absent falls back
    to the old behaviour, so the pre-v1.5.0 assertions are untouched. */
-const meta = new Map();      // sku -> { name?, category?, photo?, marker? }
+const meta = new Map();      // sku -> { name?, category?, photo?, marker?, description?, discount? }
+/* v1.7.0 — the carousel. Test control _slide sets the whole list. */
+let slidesList = [];         // [{ id, photo, marker, title?, subtitle?, sort? }]
 
 /* A genuine 1x1 PNG — the store checks the Content-Type and the byte length,
    so the bytes have to be real. */
@@ -105,6 +107,18 @@ http.createServer(async (req, res) => {
     meta.set(sku, m);
     return send(res, 200, { ok: true, marker: m.marker ?? null });
   }
+  if (url.pathname === "/_slides") {
+    const b = await body(req);
+    slidesList = Array.isArray(b.slides) ? b.slides : [];
+    return send(res, 200, { ok: true, n: slidesList.length });
+  }
+  if (url.pathname === "/_discount") {
+    const b = await body(req);
+    const m = meta.get(norm(b.sku)) ?? {};
+    if (b.discount_cents == null) delete m.discount; else m.discount = Number(b.discount_cents);
+    meta.set(norm(b.sku), m);
+    return send(res, 200, { ok: true });
+  }
   if (url.pathname === "/_remove") {
     const b = await body(req);
     const sku = norm(b.sku);
@@ -146,8 +160,23 @@ http.createServer(async (req, res) => {
             image_url: `http://127.0.0.1:8200/media/${m.photo}.png`,
             image_updated_at: m.marker,
           } : {}),
+          /* v1.7.0 — a discount nets the price and sends the list alongside,
+             exactly the way the real serializer does. */
+          ...(m.discount > 0 && prices.has(sku) && m.discount < prices.get(sku)
+            ? { price_cents: prices.get(sku) - m.discount, list_price_cents: prices.get(sku) }
+            : {}),
         };
       }),
+      /* v1.7.0 — the carousel. Always emitted (empty list included — that is
+         how "portal removed every slide" is expressed). */
+      slides: slidesList.map((sl, i) => ({
+        id: sl.id ?? i + 1,
+        image_url: `http://127.0.0.1:8200/media/${sl.photo}.png`,
+        image_updated_at: sl.marker ?? "s1",
+        ...(sl.title ? { title: sl.title } : {}),
+        ...(sl.subtitle ? { subtitle: sl.subtitle } : {}),
+        sort: sl.sort ?? (i + 1) * 10,
+      })),
     });
   }
 
