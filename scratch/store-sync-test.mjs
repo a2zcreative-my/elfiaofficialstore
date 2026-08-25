@@ -837,6 +837,51 @@ step("a shared product link previews THAT product (v1.9.0)");
   ok("with the shop's own preview", /og:url" content="[^"]*\/shop"/.test(mh));
 }
 
+step("the portal names its own collections (v1.10.0)");
+{
+  /* The CEO: "why it is Bawal plain? I think I should be able to add the
+     category in the portal so that easier for me to categorized it."
+     The store used to accept two words and then split the bawal range by
+     running a regex over the product NAME — which is where the shelf called
+     "Bawal Plain" came from. Any name the portal sends is now the shelf. */
+  await fetch(`${PORTAL}/_add`, { method: "POST", body: JSON.stringify({
+    sku: "LUMI001", category: "Bawal Printed" }) });
+  await syncNow();
+  ok("a collection she invented lands on the product", (await bySku("LUMI001")).category === "Bawal Printed",
+     String((await bySku("LUMI001")).category));
+
+  // renaming it in the portal renames the shelf here
+  await fetch(`${PORTAL}/_add`, { method: "POST", body: JSON.stringify({
+    sku: "LUMI001", category: "Raya Exclusive" }) });
+  await syncNow();
+  ok("renaming it in the portal renames it here", (await bySku("LUMI001")).category === "Raya Exclusive",
+     String((await bySku("LUMI001")).category));
+
+  // the customer-facing payload carries the name as typed
+  const pub = (await jget(`${API}/products`)).products.find((x) => x.sku === "LUMI001");
+  ok("and the shopfront sees it", pub?.category === "Raya Exclusive", String(pub?.category));
+
+  // a portal that says nothing leaves the shelf alone — the feed's oldest rule
+  await fetch(`${PORTAL}/_add`, { method: "POST", body: JSON.stringify({ sku: "LUMI001" }) });
+  await syncNow();
+  ok("saying nothing leaves the collection standing", (await bySku("LUMI001")).category === "Raya Exclusive",
+     String((await bySku("LUMI001")).category));
+
+  /* A brand-new SKU with a collection is created into it; without one it
+     lands in Bawal, the range this shop started as. */
+  const NEWSKU = `COLL${String(Date.now() % 100000).padStart(5, "0")}`;
+  await portalAdd({ sku: NEWSKU, name: "Collection Test", category: "Shawl Premium", price_cents: 4200, stock: 3 });
+  await syncNow();
+  const made = await bySku(NEWSKU);
+  ok("a new SKU is created into the portal's collection", made?.category === "Shawl Premium", String(made?.category));
+
+  // tidy: retire the fixture and put LUMI001 back where it started
+  await admin(`/admin/products/${made.id}`, { method: "PUT", body: JSON.stringify({ sku: `RET${Date.now() % 1e9}`, active: false }) });
+  await portalRemove(NEWSKU);
+  await fetch(`${PORTAL}/_add`, { method: "POST", body: JSON.stringify({ sku: "LUMI001", category: "bawal" }) });
+  await syncNow();
+}
+
 step("tidy up after this run");
 {
   /* The store keeps products; the stand-in portal forgets everything when it

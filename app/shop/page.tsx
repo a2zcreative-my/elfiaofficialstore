@@ -16,7 +16,7 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import {
-  GROUPS, SORTS, inGroup, isSoldOut, sortProducts, splitName,
+  collectionsOf, SORTS, inGroup, isSoldOut, sortProducts, splitName,
   type Product, type SortKey,
 } from "@/lib/config";
 
@@ -64,7 +64,10 @@ function ShopInner() {
     return sortProducts(list, sort);
   }, [products, group, q, sort, inStockOnly]);
 
-  const groupLabel = GROUPS.find((g) => g.key === group)?.label;
+  /* v1.10.0 — the shelves are the portal's collections, derived from what
+     the catalogue actually holds. */
+  const groups = collectionsOf(products ?? []);
+  const groupLabel = groups.find((g) => g.key === group)?.label;
   const sortLabel = SORTS.find((s) => s.key === sort)?.label ?? "Featured";
   const counts = (key: string | null) => inGroup(products ?? [], key).length;
 
@@ -94,7 +97,7 @@ function ShopInner() {
               !group ? "bg-elfia-deep text-white" : "bg-white text-elfia-body ring-1 ring-elfia-line hover:ring-elfia-rose"}`}>
             All <span className="ml-1 text-[11px] opacity-70">{counts(null)}</span>
           </button>
-          {GROUPS.map((g) => {
+          {groups.map((g) => {
             const n = counts(g.key);
             if (products !== null && n === 0) return null;   // never offer an empty shelf
             return (

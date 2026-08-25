@@ -13,7 +13,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
-import { GROUPS, fmtRM, imageUrl, type Product } from "@/lib/config";
+import { collectionsOf, fmtRM, imageUrl, type Product } from "@/lib/config";
 
 import { EmptyState, Icon } from "./../ui";
 
@@ -28,7 +28,7 @@ export default function CategoriesPage() {
   }, []);
 
   const all = products ?? [];
-  const rows = GROUPS.map((g) => ({ g, items: all.filter(g.match) })).filter((r) => r.items.length > 0);
+  const rows = collectionsOf(all).map((g) => ({ g, items: all.filter(g.match) })).filter((r) => r.items.length > 0);
   const from = (items: Product[]) => Math.min(...items.map((p) => p.price_cents));
 
   return (
@@ -85,7 +85,10 @@ export default function CategoriesPage() {
                     </span>
                   )}
                 </span>
-                <span className="mt-0.5 block truncate text-xs text-elfia-muted">{g.blurb}</span>
+                {/* v1.10.0 — a collection named in the portal carries no
+                    blurb, and inventing one for it would be the shop putting
+                    words in her mouth. The count line below says enough. */}
+                {g.blurb && <span className="mt-0.5 block truncate text-xs text-elfia-muted">{g.blurb}</span>}
                 <span className="mt-1 block text-xs text-elfia-body">
                   {items.length} item{items.length === 1 ? "" : "s"} · from <span className="font-semibold text-elfia-deep">{fmtRM(from(items))}</span>
                 </span>

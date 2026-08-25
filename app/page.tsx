@@ -21,8 +21,8 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
 import {
-  BRAND_SLIDES, CATEGORIES, GROUPS, fmtRM, imageUrl, slideFraming, splitName,
-  type PortalSlide, type Product,
+  BRAND_SLIDES, categoryChips, collectionKey, collectionOf, collectionsOf, fmtRM,
+  imageUrl, slideFraming, splitName, type PortalSlide, type Product,
 } from "@/lib/config";
 
 import { CardSkeleton, Icon, ProductCard, SectionHeader, type IconName } from "./ui";
@@ -193,10 +193,16 @@ export default function Home() {
     { icon: "spark", title: "Direct from ELFIA", note: "No middleman, no markup" },
   ];
 
-  const groups = GROUPS.map((g) => ({ g, items: all.filter(g.match) })).filter((x) => x.items.length > 0);
+  /* v1.10.0 — collections come from the portal now, so both the strip and
+     the filter chips are derived from the products in hand. A collection
+     with nothing in it cannot appear, because a collection IS its products. */
+  const groups = collectionsOf(all).map((g) => ({ g, items: all.filter(g.match) }))
+    .filter((x) => x.items.length > 0);
+  const chips = categoryChips(all);
 
-  const shown = all.filter((p) => tab === "all" || (p.category ?? "bawal") === tab);
-  const counts = (key: string) => all.filter((p) => key === "all" || (p.category ?? "bawal") === key).length;
+  const inTab = (p: Product) => tab === "all" || collectionKey(collectionOf(p)) === tab;
+  const shown = all.filter(inTab);
+  const counts = (key: string) => all.filter((p) => key === "all" || collectionKey(collectionOf(p)) === key).length;
 
   return (
     <main className="px-4 pt-4 pb-10 sm:px-6 sm:pt-8">
@@ -272,7 +278,7 @@ export default function Home() {
               coarse Bawal / Shawl split, while /shop does the finer filtering
               and sorting. */}
           <div className="mt-7 flex flex-wrap justify-center gap-2" data-testid="category-tabs">
-            {[{ key: "all", label: "All" }, ...CATEGORIES].map((c) => (
+            {[{ key: "all", label: "All" }, ...chips].map((c) => (
               <button key={c.key} type="button"
                 className={`rounded-full px-5 py-2 text-sm font-medium transition-colors ${
                   tab === c.key ? "bg-elfia-deep text-white" : "bg-white text-elfia-body ring-1 ring-elfia-line hover:ring-elfia-rose"}`}

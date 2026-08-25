@@ -74,7 +74,7 @@ export interface Env {
   STORE_ORIGIN?: string;     // override for local testing
 }
 
-const VERSION = "1.9.0";
+const VERSION = "1.10.0";
 const STATUSES = ["pending_payment", "payment_review", "paid", "shipped", "completed", "cancelled"] as const;
 type Status = (typeof STATUSES)[number];
 

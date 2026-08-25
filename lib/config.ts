@@ -113,10 +113,14 @@ export const countedStock = (p: Product): number | null =>
 /** Quantity ceiling for the pickers. Always-available products cap at 99. */
 export const maxQty = (p: Product): number => ((p.track_stock ?? 1) === 1 ? Math.min(99, p.stock) : 99);
 
-export const CATEGORIES = [
-  { key: "bawal", label: "Bawal" },
-  { key: "shawl", label: "Shawl" },
-] as const;
+/* v1.10.0 — the home page's filter chips. Derived from the same portal
+   collections as everything else; the old fixed Bawal/Shawl pair is gone,
+   because a shop whose owner names her own collections cannot have its
+   filters hard-coded here. ELFIA Exclusive is left out: it is a curation,
+   and the strip below it already features those. */
+export const categoryChips = (products: Product[]): { key: string; label: string }[] =>
+  collectionsOf(products).filter((g) => g.key !== FEATURED_KEY)
+    .map((g) => ({ key: g.key, label: g.label }));
 
 /* Hero carousel brand slides — the CEO's campaign shots, shipped with the
    site. Featured products (admin toggle) are appended after these.
@@ -305,54 +309,86 @@ export const toggleWish = (id: number): boolean => {
 
 export const wishCount = (): number => readWishlist().length;
 
-/* ---- collections (v1.4.0) ----
-   The CEO's layout has a Collections screen. ELFIA's real catalogue is one
-   Bawal range plus a Shawl category, so the groups below are DERIVED from the
-   live data rather than typed in: nothing here invents a collection the shop
-   cannot fill, and an empty group is never shown. When the range grows, name
-   the products the way the rule expects — or add a group here. */
+/* ---- collections (v1.10.0 — named in the portal) ----
+   The CEO: "why it is Bawal plain? I think I should be able to add the
+   category in the portal so that easier for me to categorized it."
+
+   She was right to be annoyed. Until now this file HARD-CODED four
+   collections and split the bawal range by running a regex over the product
+   NAME — so every LUMI shade, none of which says "floral" or "gold", fell
+   into a bucket called "Bawal Plain" that nobody had chosen. A collection
+   the shop invents from a product's spelling is not a collection.
+
+   Collections are now simply the distinct Collection values the portal
+   sends, in the portal's own spelling. Type "Bawal Printed" there and it
+   exists here; rename it there and it renames here; stop using it and it
+   disappears. Nothing is invented, and an empty collection cannot exist
+   because a collection IS its products.
+
+   The one addition the shop still makes is ELFIA Exclusive — the /admin
+   "featured" tick, a curation rather than a category — and it is always
+   listed last. */
 
 export interface Group {
   key: string;
   label: string;
-  blurb: string;
+  blurb?: string;
   match: (p: Product) => boolean;
 }
 
-const PRINTED = /(floral|print|gold|batik|motif)/i;
+/** The key two spellings of the same collection share. Case and spacing are
+    noise: "Bawal Printed", "bawal printed" and "BAWAL  PRINTED" are one. */
+export const collectionKey = (v: unknown): string =>
+  String(v ?? "").trim().toLowerCase().replace(/\s+/g, " ");
 
-export const GROUPS: Group[] = [
-  {
-    key: "printed",
-    label: "Bawal Printed",
-    blurb: "Florals and gold-line designs",
-    match: (p) => (p.category ?? "bawal") === "bawal" && PRINTED.test(p.name),
-  },
-  {
-    key: "plain",
-    label: "Bawal Plain",
-    blurb: "Solid and gradient shades",
-    match: (p) => (p.category ?? "bawal") === "bawal" && !PRINTED.test(p.name),
-  },
-  {
-    key: "shawl",
-    label: "Shawl",
-    blurb: "The long-cut collection",
-    match: (p) => (p.category ?? "bawal") === "shawl",
-  },
-  {
-    key: "featured",
-    label: "ELFIA Exclusive",
-    blurb: "Hand-picked by the studio",
-    match: (p) => p.featured === 1,
-  },
-];
+/** A product with no Collection set is Bawal — the range this shop started
+    as, and what the bridge writes at creation when the portal omits one. */
+export const collectionOf = (p: Product): string => (p.category ?? "").trim() || "Bawal";
 
-export const groupOf = (key: string): Group | undefined => GROUPS.find((g) => g.key === key);
+/** Portal spelling, tidied for display: an all-lowercase legacy value
+    ("bawal", "shawl") is title-cased; anything typed with capitals is left
+    exactly as the person typed it. */
+const prettyCollection = (raw: string): string =>
+  raw === raw.toLowerCase()
+    ? raw.replace(/\b[a-z]/g, (c) => c.toUpperCase())
+    : raw;
 
-/** Everything in a group, or the whole catalogue when the key is unknown. */
+export const FEATURED_KEY = "featured";
+
+/** Every collection the live catalogue actually contains, alphabetical, with
+    ELFIA Exclusive last. Derived on each render from the products in hand —
+    there is no list to keep in step. */
+export const collectionsOf = (products: Product[]): Group[] => {
+  const seen = new Map<string, string>(); // key -> the first spelling seen
+  for (const p of products) {
+    const raw = collectionOf(p);
+    const key = collectionKey(raw);
+    if (!seen.has(key)) seen.set(key, prettyCollection(raw));
+  }
+  const groups: Group[] = [...seen.entries()]
+    .map(([key, label]) => ({
+      key,
+      label,
+      match: (p: Product) => collectionKey(collectionOf(p)) === key,
+    }))
+    .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base" }));
+
+  if (products.some((p) => p.featured === 1)) {
+    groups.push({
+      key: FEATURED_KEY,
+      label: "ELFIA Exclusive",
+      blurb: "Hand-picked by the studio",
+      match: (p: Product) => p.featured === 1,
+    });
+  }
+  return groups;
+};
+
+/** Filter by a collection key. Unknown key = everything, so a stale link
+    shows the shop instead of an empty page. */
 export const inGroup = (products: Product[], key: string | null): Product[] => {
-  const g = key ? groupOf(key) : undefined;
+  if (!key) return products;
+  const g = collectionsOf(products).find((x) => x.key === key);
   return g ? products.filter(g.match) : products;
 };
 

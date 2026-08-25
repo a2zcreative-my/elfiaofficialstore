@@ -1,3 +1,53 @@
+# ELFIA OFFICIAL STORE — v1.10.0 (25-08-2026, late night)
+
+## Collections are named in the portal now
+
+The CEO: **"why it is Bawal plain? I think I should be able to add the
+category in the portal so that easier for me to categorized it"** — and then
+**"how I want to add the Collection category!"**, looking at a dropdown that
+offered exactly two words.
+
+She was right to be annoyed twice. This file hard-coded four collections and
+split the bawal range by running a **regex over the product NAME** — so every
+LUMI shade, none of which says "floral" or "gold", fell into a shelf called
+**"Bawal Plain" that nobody had ever chosen**. A collection the shop invents
+from a product's spelling is not a collection.
+
+**Collections are now simply the distinct Collection values the portal
+sends, in the portal's own spelling.** Type "Bawal Printed" there and the
+shelf exists here; rename it there and it renames here; stop using it and it
+disappears. An empty collection cannot exist, because a collection IS its
+products. The home strip, the home filter chips, /categories and /shop's
+rail are all derived from the same list — there is no list left to maintain.
+
+- `collectionsOf(products)` replaces the hard-coded `GROUPS`; `categoryChips`
+  replaces the fixed Bawal/Shawl pair.
+- Matching ignores case and spacing, so "Bawal Printed" and "bawal  printed"
+  are one shelf, not two. An all-lowercase legacy value ("bawal", "shawl") is
+  title-cased for display; anything typed with capitals is shown exactly as
+  typed.
+- The sync accepts any collection name (40 chars) instead of coercing
+  everything to bawal/shawl. Absent still means "the store keeps what it
+  has"; a brand-new SKU with no collection is created into Bawal.
+- **ELFIA Exclusive** stays — it is the /admin "featured" tick, a curation
+  rather than a category — and is always listed last.
+- A portal-named collection carries no blurb, and the shop no longer invents
+  one for it.
+
+### Verified
+
+- `scratch/store-sync-test.mjs` — **142 assertions**, twice: a collection she
+  invented lands on the product and reaches the shopfront in her spelling;
+  renaming it in the portal renames it here; saying nothing leaves it
+  standing; a brand-new SKU is created into the portal's collection.
+- Storefront checked against the live payload: the strip renders Bawal (6),
+  Bawal Printed (2), Raya Exclusive (1), Shawl Premium (1) and ELFIA
+  Exclusive (4) — all from portal names, no phantom shelf.
+- Worker `tsc` clean; `next build` clean; brand-isolation, no-secrets PASS.
+
+**Deploy**: no migration — `products.category` was already free text. Use
+PUSH.bat (engine + website).
+
 # ELFIA OFFICIAL STORE — v1.9.0 (25-08-2026, late night)
 
 ## "Still the discount is not live update!!!!"

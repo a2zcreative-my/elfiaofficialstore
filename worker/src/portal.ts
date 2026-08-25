@@ -503,7 +503,12 @@ export async function pullStock(env: Env): Promise<PullResult> {
         unmatched_portal.push(clean(it.sku, 40));
         continue;
       }
-      const category = clean(it.category, 20).toLowerCase() === "shawl" ? "shawl" : "bawal";
+      /* v1.10.0 — the collection is whatever the portal calls it, in the
+         portal's own spelling. The old two-value allow-list ("bawal" or
+         anything else means bawal) is gone: the CEO names her own
+         collections in the ELFIA tab and the shop groups by what arrives.
+         Absent = Bawal, the range this shop started as. */
+      const category = clean(it.category, 40) || "bawal";
       /* v1.5.1 — the portal's ELFIA tab also writes the product's
          description; a feed that carries one hands it over at birth. */
       const desc = clean(it.description, 2000) || null;
@@ -587,13 +592,17 @@ export async function pullStock(env: Env): Promise<PullResult> {
        constant: absent = the store keeps what it has). */
     {
       const newName = clean(it.name, 200);
-      const newCat = clean(it.category, 20).toLowerCase();
+      const newCat = clean(it.category, 40);
       const newDesc = it.description !== undefined ? (clean(it.description, 2000) || null) : undefined;
       const sets: string[] = [];
       const vals: (string | null)[] = [];
       const push = (col: string, val: string | null) => { sets.push(`${col} = ?${sets.length + 1}`); vals.push(val); };
       if (newName && newName !== m.name) push("name", newName);
-      if ((newCat === "bawal" || newCat === "shawl") && newCat !== (m.category ?? "bawal")) push("category", newCat);
+      /* Any non-empty name is accepted and applied; an empty one means the
+         portal said nothing, so the store's value stands (the feed's oldest
+         rule). Case and spacing are what the storefront groups on, so
+         "Bawal Printed" renamed to "Bawal printed" is not a new shelf. */
+      if (newCat && newCat.toLowerCase() !== String(m.category ?? "bawal").toLowerCase()) push("category", newCat);
       if (newDesc !== undefined && newDesc !== (m.description ?? null)) push("description", newDesc);
       if (sets.length > 0) {
         await env.DB.prepare(`UPDATE products SET ${sets.join(", ")} WHERE id = ?${sets.length + 1}`)
