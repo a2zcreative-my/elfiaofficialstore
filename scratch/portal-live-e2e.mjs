@@ -53,6 +53,17 @@ step("start clean: reset the portal's shawl to the seeded baseline");
   await portalStaff(`/inventory/${pShawl.id}/elfia`, {
     method: "PATCH", body: JSON.stringify({ description: "Long-cut, lightweight and opaque. Finished by hand.", discount: "" }),
   });
+  /* The rig needs a photo to exist ON THE PORTAL for the copy step below to
+     mean anything. A freshly seeded database has none, so one is put there
+     rather than assumed — a missing fixture should not read as a broken
+     bridge. */
+  if (!pShawl.elfia_image_key) {
+    const PNG1 = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+    await fetch(`${PORTAL}/staff/inventory/${pShawl.id}/elfia/photo`, {
+      method: "POST", headers: { Cookie: COOKIES, "X-CSRF-Token": CSRF, "Content-Type": "image/png" }, body: PNG1,
+    });
+  }
+
   /* v1.46.0 — slides and discounts survive in the portal's D1 between runs;
      a leftover would turn this run's "create" into "refresh". */
   const sl = await (await portalStaff(`/elfia/slides`)).json();
@@ -277,6 +288,60 @@ step("v1.48.0 — the portal's own 'Update the shop now' button");
   // put the seeded price back so the next run starts where this one did
   await portalStaff(`/inventory/${pShawl.id}/bridge`, { method: "PATCH", body: JSON.stringify({ elfia_price: "" }) });
   await portalStaff(`/elfia/sync-now`, { method: "POST", body: "{}" });
+}
+
+step("v1.51.0 — the portal fulfils an order: paid, tracking, delivered");
+{
+  /* The CEO: "elfia web order should be able to update the tracking number
+     so that customer can track the order based on the order number that
+     filled by staff in the portal". This is that whole path against the two
+     real workers — and the customer's own order page is checked at the end,
+     because a tracking number nobody can see is not tracking. */
+  const shawlNow = await bySku("SHWL001");
+  const o = await (await fetch(`${STORE}/orders`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "CF-Connecting-IP": `100.88.${RUN % 250}.${(Date.now() % 250) + 1}` },
+    body: JSON.stringify({
+      customer: { name: "Tracking Buyer", phone: `0188${String(RUN)}${String(Date.now() % 1000).padStart(3, "0")}`, address: "1 Jalan Track" },
+      items: [{ id: shawlNow.id, qty: 1 }],
+    }),
+  })).json();
+  ok("order placed in the shop", Boolean(o.token) && Boolean(o.order_number), JSON.stringify(o).slice(0, 120));
+
+  const act = (action, extra = {}) => portalStaff(`/web-orders/${encodeURIComponent(o.order_number)}/action`, {
+    method: "POST", body: JSON.stringify({ action, ...extra }),
+  });
+
+  /* Shipping before payment must be refused BY THE STORE, and the refusal
+     must reach the portal in words a person can act on. */
+  const early = await act("ship", { tracking_no: "TOOSOON", tracking_courier: "jnt" });
+  ok("the store refuses to ship an unpaid order", early.status === 409, `${early.status}`);
+  const earlyBody = await early.json().catch(() => ({}));
+  ok("and says why, in plain words", /cannot ship|pending_payment/i.test(earlyBody?.error?.message ?? ""),
+     JSON.stringify(earlyBody).slice(0, 140));
+
+  const paid = await act("confirm_paid");
+  ok("the portal can confirm the payment", paid.status === 200, `${paid.status}`);
+
+  const TRACK = `EP${Date.now() % 100000000}MY`;
+  const shipped = await act("ship", { tracking_no: TRACK, tracking_courier: "jnt" });
+  ok("the portal can enter the tracking number", shipped.status === 200, `${shipped.status}`);
+
+  /* The customer's own page — the reason any of this exists. */
+  const view = await (await fetch(`${STORE}/orders/${o.token}`)).json();
+  ok("the customer's order page shows it as shipped", view?.status === "shipped", String(view?.status));
+  ok("with the tracking number the staff typed", view?.tracking_no === TRACK,
+     `${view?.tracking_no} (wanted ${TRACK})`);
+
+  const done = await act("complete");
+  ok("the portal can mark it delivered", done.status === 200, `${done.status}`);
+  const after = await (await fetch(`${STORE}/orders/${o.token}`)).json();
+  ok("and the customer sees that too", after?.status === "completed", String(after?.status));
+
+  /* A finished order cannot be moved again — the store's forward-only rule
+     holds no matter which screen is asking. */
+  const again = await act("ship", { tracking_no: "AGAIN", tracking_courier: "jnt" });
+  ok("a finished order cannot be shipped again", again.status === 409, `${again.status}`);
 }
 
 console.log(`\n${fail === 0 ? "ALL PASS" : "FAILURES"} — ${pass} passed, ${fail} failed`);

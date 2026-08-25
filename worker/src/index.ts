@@ -74,7 +74,7 @@ export interface Env {
   STORE_ORIGIN?: string;     // override for local testing
 }
 
-const VERSION = "1.11.0";
+const VERSION = "1.12.0";
 const STATUSES = ["pending_payment", "payment_review", "paid", "shipped", "completed", "cancelled"] as const;
 type Status = (typeof STATUSES)[number];
 
@@ -222,6 +222,75 @@ interface OrderRow {
   subtotal_cents: number; shipping_cents: number; total_cents: number; status: Status;
   receipt_key: string | null; payment_method: string | null; tracking_no: string | null;
   admin_notes: string | null; created_at: string; updated_at: string | null;
+}
+
+/* v1.12.0 — ONE implementation of "move this order forward", shared by the
+   store's own /admin and by the portal over the bridge. The CEO runs the
+   shop from the portal, so the portal must be able to confirm a payment and
+   enter a tracking number — and the day those two screens disagree about
+   what "cancel" does to the shelf is the day the counts drift. So there is
+   one copy, and both callers go through it. */
+const ORDER_MOVES: Record<string, { from: Status[]; to: Status }> = {
+  confirm_paid: { from: ["pending_payment", "payment_review"], to: "paid" },
+  ship:         { from: ["paid"], to: "shipped" },
+  complete:     { from: ["shipped"], to: "completed" },
+  cancel:       { from: ["pending_payment", "payment_review"], to: "cancelled" },
+};
+
+async function applyOrderAction(
+  env: Env, ctx: ExecutionContext, o: OrderRow, action: string,
+  body: Record<string, unknown> | null,
+): Promise<Response> {
+  const mv = ORDER_MOVES[action];
+  if (!mv) return err("invalid_input", "Unknown action", 400);
+  if (!mv.from.includes(o.status)) {
+    return err("invalid_input", `Cannot ${action} an order that is ${o.status}. Paid orders are refunded manually (WhatsApp), never silently cancelled.`, 409);
+  }
+  if (action === "cancel") {
+    /* The order never got paid — its reservation goes back on the shelf.
+       `track_stock = 1` mirrors checkout: an always-available line never
+       reserved anything, so putting stock back would invent pieces that were
+       never taken. */
+    const items = JSON.parse(o.items) as { product_id: number; qty: number }[];
+    for (const it of items) {
+      await env.DB.prepare(`UPDATE products SET stock = stock + ?1 WHERE id = ?2 AND track_stock = 1`)
+        .bind(it.qty, it.product_id).run()
+        .catch(() => env.DB.prepare(`UPDATE products SET stock = stock + ?1 WHERE id = ?2`)
+          .bind(it.qty, it.product_id).run()); // pre-0007 schema
+    }
+    /* …and tell the portal the pieces came back, mirroring the movement the
+       order sent. SKUs are read now rather than from the order snapshot,
+       because a code can be corrected between the order and the
+       cancellation. */
+    const { results: skus } = await env.DB.prepare(
+      `SELECT id, sku FROM products WHERE id IN (${items.map((_, i) => `?${i + 1}`).join(",")})`,
+    ).bind(...items.map((it) => it.product_id)).all<{ id: number; sku: string | null }>();
+    await recordStockEvents(
+      env,
+      items.map((it) => ({ sku: skus.find((p) => p.id === it.product_id)?.sku, qty: it.qty })),
+      "cancel", o.order_number,
+    );
+    ctx.waitUntil(flushStockEvents(env).then(() => undefined));
+  }
+  const tracking = action === "ship" ? str(body?.tracking_no, 60) : null;
+  const courierKey = action === "ship" ? str(body?.tracking_courier, 20) : null;
+  const courier = courierKey && COURIERS[courierKey] ? courierKey : null;
+  await env.DB.prepare(
+    `UPDATE orders SET status = ?1, payment_method = COALESCE(payment_method, ?2),
+            tracking_no = COALESCE(?3, tracking_no), updated_at = datetime('now') WHERE id = ?4`,
+  ).bind(mv.to, action === "confirm_paid" ? "bank_transfer" : null, tracking, o.id).run();
+  if (courier) {
+    await env.DB.prepare(`UPDATE orders SET tracking_courier = ?1 WHERE id = ?2`)
+      .bind(courier, o.id).run().catch(() => null); // pre-0009
+  }
+  const NOTES: Record<string, string> = {
+    confirm_paid: "Payment confirmed — we are packing your order",
+    ship: tracking ? `Handed to the courier — tracking ${tracking}` : "Handed to the courier",
+    complete: "Delivered",
+    cancel: "Order cancelled",
+  };
+  await recordOrderEvent(env, o.id, mv.to, NOTES[action] ?? null);
+  return json({ ok: true, status: mv.to, tracking_no: tracking ?? o.tracking_no ?? null });
 }
 
 export default {
@@ -705,6 +774,31 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
           "Cache-Control": "public, max-age=300",
         },
       });
+    }
+
+    /* v1.12.0 — the portal moves an order forward.
+       The CEO: "elfia web order should be able to update the tracking number
+       so that customer can track the order based on the order number that
+       filled by staff in the portal". Her Web Orders tab could only WATCH;
+       confirming a payment and entering a tracking number still needed the
+       store's /admin, which is unreachable because ADMIN_KEY was never set.
+       So the same shared transition used by /admin is exposed here, behind
+       the same bridge key as every other bridge route — no admin key, no
+       second implementation that could drift.
+       Addressed by ORDER NUMBER, which is what the portal shows and what a
+       human types, rather than by the store's internal row id. */
+    const bridgeOrder = path.match(/^\/bridge\/orders\/([A-Za-z0-9-]{1,40})$/);
+    if (bridgeOrder && method === "POST") {
+      if (!env.BRIDGE_KEY) return err("not_configured", "Set the BRIDGE_KEY secret first", 501);
+      const given = request.headers.get("X-Bridge-Key") ?? "";
+      if (!timingSafeEqual(given, env.BRIDGE_KEY)) return err("unauthorized", "Bad key", 401);
+      const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
+      const action = str(body?.action, 20) ?? "";
+      const o = await env.DB.prepare(`SELECT * FROM orders WHERE order_number = ?1`)
+        .bind(decodeURIComponent(bridgeOrder[1]!)).first<OrderRow>();
+      if (!o) return err("not_found", "No order with that number", 404);
+      if (!ORDER_MOVES[action]) return err("invalid_input", "Unknown action", 400);
+      return applyOrderAction(env, ctx, o, action, body);
     }
 
     if (path === "/bridge/sync-now" && method === "POST") {
@@ -1342,63 +1436,8 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
         const o = await env.DB.prepare(`SELECT * FROM orders WHERE id = ?1`).bind(adminOrder[1]).first<OrderRow>();
         if (!o) return err("not_found", "Order not found", 404);
 
-        /* Forward-only transitions — the whole money-safety model: */
-        const moves: Record<string, { from: Status[]; to: Status }> = {
-          confirm_paid: { from: ["pending_payment", "payment_review"], to: "paid" },
-          ship:         { from: ["paid"], to: "shipped" },
-          complete:     { from: ["shipped"], to: "completed" },
-          cancel:       { from: ["pending_payment", "payment_review"], to: "cancelled" },
-        };
-        if (action && moves[action]) {
-          const mv = moves[action]!;
-          if (!mv.from.includes(o.status)) {
-            return err("invalid_input", `Cannot ${action} an order that is ${o.status}. Paid orders are refunded manually (WhatsApp), never silently cancelled.`, 409);
-          }
-          if (action === "cancel") {
-            /* The order never got paid — its reservation goes back on the
-               shelf. `track_stock = 1` mirrors checkout: an always-available
-               line never reserved anything, so putting stock back would
-               invent pieces that were never taken. */
-            const items = JSON.parse(o.items) as { product_id: number; qty: number }[];
-            for (const it of items) {
-              await env.DB.prepare(`UPDATE products SET stock = stock + ?1 WHERE id = ?2 AND track_stock = 1`)
-                .bind(it.qty, it.product_id).run()
-                .catch(() => env.DB.prepare(`UPDATE products SET stock = stock + ?1 WHERE id = ?2`)
-                  .bind(it.qty, it.product_id).run()); // pre-0007 schema
-            }
-            /* …and tell the portal the pieces came back, mirroring the
-               movement the order sent. SKUs are read now rather than from the
-               order snapshot, because a code can be corrected in /admin
-               between the order and the cancellation. */
-            const { results: skus } = await env.DB.prepare(
-              `SELECT id, sku FROM products WHERE id IN (${items.map((_, i) => `?${i + 1}`).join(",")})`,
-            ).bind(...items.map((it) => it.product_id)).all<{ id: number; sku: string | null }>();
-            await recordStockEvents(
-              env,
-              items.map((it) => ({ sku: skus.find((p) => p.id === it.product_id)?.sku, qty: it.qty })),
-              "cancel", o.order_number,
-            );
-            ctx.waitUntil(flushStockEvents(env).then(() => undefined));
-          }
-          const tracking = action === "ship" ? str(body?.tracking_no, 60) : null;
-          const courierKey = action === "ship" ? str(body?.tracking_courier, 20) : null;
-          const courier = courierKey && COURIERS[courierKey] ? courierKey : null;
-          await env.DB.prepare(
-            `UPDATE orders SET status = ?1, payment_method = COALESCE(payment_method, ?2),
-                    tracking_no = COALESCE(?3, tracking_no), updated_at = datetime('now') WHERE id = ?4`,
-          ).bind(mv.to, action === "confirm_paid" ? "bank_transfer" : null, tracking, o.id).run();
-          if (courier) {
-            await env.DB.prepare(`UPDATE orders SET tracking_courier = ?1 WHERE id = ?2`)
-              .bind(courier, o.id).run().catch(() => null); // pre-0009
-          }
-          const NOTES: Record<string, string> = {
-            confirm_paid: "Payment confirmed — we are packing your order",
-            ship: tracking ? `Handed to the courier — tracking ${tracking}` : "Handed to the courier",
-            complete: "Delivered",
-            cancel: "Order cancelled",
-          };
-          await recordOrderEvent(env, o.id, mv.to, NOTES[action] ?? null);
-          return json({ ok: true, status: mv.to });
+        if (action && ORDER_MOVES[action]) {
+          return applyOrderAction(env, ctx, o, action, body);
         }
         if (body?.admin_notes !== undefined) {
           await env.DB.prepare(`UPDATE orders SET admin_notes = ?1, updated_at = datetime('now') WHERE id = ?2`)

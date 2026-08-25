@@ -2,6 +2,15 @@
    ELFIA is an independent client brand: the store must not carry the
    agency's or the consultancy's identity anywhere — no names, no SSM
    numbers, no bank accounts, no domains. Fails the build on any leak.
+
+   ONE exception, added 26-08-2026 and deliberately narrow: the PAYEE line.
+   The CEO banks this shop's takings into the operating company's account,
+   so BANK_LINE in worker/wrangler.toml carries that account number and the
+   holder's legal name. That is a payment instruction, not branding — a
+   customer whose banking app shows a payee they were not told to expect
+   abandons the transfer, and a name mismatch is how a transfer bounces.
+   The exemption is one setting in one file: the same number anywhere else,
+   and every other identity, still fails.
    Run: node tests/brand-isolation.mjs */
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -26,9 +35,18 @@ const walk = (dir) => {
     if (statSync(p).isDirectory()) { walk(p); continue; }
     if (!EXT.test(f)) continue;
     const src = readFileSync(p, "utf8");
-    for (const [re, what] of FORBIDDEN) {
-      if (re.test(src)) hits.push(`${p}: contains ${what}`);
-    }
+    /* Line by line, so the payee exemption can be pinned to one setting in
+       one file rather than waved at a whole document — and so a failure
+       names the line to fix. */
+    src.split("\n").forEach((line, i) => {
+      const isPayeeLine = p.replace(/\\/g, "/").endsWith("worker/wrangler.toml")
+        && /^\s*BANK_LINE\s*=/.test(line);
+      for (const [re, what] of FORBIDDEN) {
+        if (!re.test(line)) continue;
+        if (isPayeeLine && what === "agency bank account") continue;  // the payee
+        hits.push(`${p}:${i + 1}: contains ${what}`);
+      }
+    });
   }
 };
 walk(".");

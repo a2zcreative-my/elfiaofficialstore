@@ -1,3 +1,100 @@
+# ELFIA OFFICIAL STORE — v1.12.1 (26-08-2026)
+
+## The shop can take money again
+
+The live config was still shipping its placeholder:
+
+```
+"bank_line": "REPLACE — e.g. MAYBANK 1234 5678 9012 — ELFIA"
+"whatsapp_digits": "60000000000"
+```
+
+Customers at checkout were being told to transfer to the words **"REPLACE —
+e.g. MAYBANK 1234 5678 9012"**. Every order on this shop is a bank transfer,
+so nobody could pay — which is the likeliest reason all four orders in the
+portal's Web Orders tab are cancelled: placed, unpayable, released by the
+12-hour hold.
+
+The CEO supplied both on 26-08:
+
+- `BANK_LINE` = the account and the holder's legal name.
+- `WHATSAPP_DIGITS` = `60123834821` (from +60 12 383 4821 — digits only,
+  country code first; it is pasted straight into a wa.me link). The floating
+  WhatsApp bubble hides itself while the number is the dummy, so it appears
+  for the first time with this deploy.
+
+**Still incomplete on purpose**: the BANK NAME is not in the line, because
+nobody has said which bank it is and a Malaysian transfer needs it to pick
+the destination. Guessing from the account's length would be a guess printed
+on a payment instruction. The line is no longer a placeholder, but it wants
+one more word in front of the number.
+
+## brand-isolation gains ONE narrow exception
+
+The guard forbids the operating company's bank account anywhere in this repo.
+That account is now, by the CEO's instruction, the account this shop collects
+into — so `BANK_LINE` in `worker/wrangler.toml` is exempted, and nothing else
+is. A payee line is a payment instruction, not branding: a customer whose
+banking app shows a payee they were not told to expect abandons the transfer,
+and a name mismatch is how a transfer bounces.
+
+The exemption is pinned to one setting in one file, and the guard now scans
+line by line so it can be. Proven not to be a hole: the same account number
+written anywhere else in the repo still fails, and so does every other
+identity (names, registrations, domains). Both cases are exercised.
+
+### Verified
+
+- `store-config` rendered from the real `wrangler.toml`: both values come
+  out as the customer will see them.
+- brand-isolation PASS, with the leak tests above; no-secrets PASS.
+
+**Deploy**: PUSH.bat. No migration.
+
+# ELFIA OFFICIAL STORE — v1.12.0 (26-08-2026)
+
+## The portal can now fulfil an order
+
+The CEO: **"elfia web order should be able to update the tracking number so
+that customer can track the order based on the order number that filled by
+staff in the portal."**
+
+Her Web Orders tab could only WATCH. Confirming a payment and entering a
+tracking number still needed this store's `/admin` — which is unreachable,
+because ADMIN_KEY has never been set on the live worker. Four orders sat
+cancelled with no tracking and nobody able to move them.
+
+**`POST /bridge/orders/:order_number`** — behind the same shared bridge key
+as every other bridge route, no admin key — moves an order forward:
+`confirm_paid`, `ship` (with `tracking_no` + `tracking_courier`), `complete`,
+`cancel`. Addressed by ORDER NUMBER, which is what the portal shows and what
+a human types, not this store's internal row id.
+
+The transition logic itself was **extracted, not copied**
+(`applyOrderAction`): /admin and the portal now call one function. The day
+those two screens disagree about what "cancel" does to the shelf is the day
+the counts drift — so there is one implementation, and cancelling still puts
+the stock back AND reports the movement to the portal exactly as before.
+
+Everything the store already enforced still holds, whoever is asking:
+forward-only transitions, and a paid order that cannot be silently
+cancelled ("Paid orders are refunded manually, never silently cancelled").
+The refusals are already written for a human, so the portal passes them
+through rather than replacing them with something vaguer.
+
+### Verified
+
+- `scratch/portal-live-e2e.mjs` — **52 assertions**, twice, both real
+  workers, including the whole path she will use: place an order, try to ship
+  it before payment (**refused, with the reason**), confirm the payment,
+  enter the tracking number, and then **check the CUSTOMER's own order page**
+  — because a tracking number nobody can see is not tracking. Then mark it
+  delivered, and confirm a finished order cannot be shipped again.
+- `scratch/store-sync-test.mjs` 151 assertions; migration-safety,
+  brand-isolation, no-secrets PASS.
+
+**Deploy**: no migration. PUSH.bat.
+
 # ELFIA OFFICIAL STORE — v1.11.1 (25-08-2026)
 
 ## The deploy that stopped at "Database changes"
