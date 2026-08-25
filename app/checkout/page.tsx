@@ -22,6 +22,9 @@ import {
 export default function Checkout() {
   const router = useRouter();
   const [form, setForm] = useState({ name: "", phone: "", address: "", email: "", notes: "", website: "" });
+  /* v1.3.0 — PDPA marketing consent. Default OFF, never pre-ticked, not kept
+     in the draft: consent is a decision made on this order, not a leftover. */
+  const [marketing, setMarketing] = useState(false);
   const [state, setState] = useState<"idle" | "sending">("idle");
   const [error, setError] = useState("");
   const [empty, setEmpty] = useState(false);
@@ -66,7 +69,7 @@ export default function Checkout() {
       const r = await fetch("/api/v1/orders", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ customer: form, items: readCart() }),
+        body: JSON.stringify({ customer: { ...form, marketing }, items: readCart() }),
       });
       const j = (await r.json()) as { token?: string; order_number?: string; error?: { message?: string } };
       if (!r.ok || !j.token) {
@@ -132,12 +135,21 @@ export default function Checkout() {
             <span className={labelClass}>Order notes (optional)</span>
             <input className={inputClass} value={form.notes} onChange={set("notes")} maxLength={300} />
           </label>
+          <label className="flex items-start gap-2.5 rounded-xl bg-stone-50 px-3 py-2.5">
+            <input type="checkbox" checked={marketing} onChange={(e) => setMarketing(e.target.checked)}
+              className="mt-0.5 h-4 w-4 rounded border-stone-300 accent-[#7a2648]" />
+            <span className="text-xs leading-relaxed text-stone-600">
+              I agree to receive news and promotions from ELFIA by WhatsApp or email.
+              Optional — you can withdraw anytime. <span className="text-stone-400">/ Saya bersetuju menerima berita dan promosi daripada ELFIA. Pilihan — boleh ditarik balik bila-bila masa.</span>
+            </span>
+          </label>
           <button type="submit" className={`${btnClass} w-full`} disabled={state === "sending"}>
             {state === "sending" ? "Placing order…" : "Place order"}
           </button>
           {error && <p className="text-sm font-medium text-red-700">{error}</p>}
           <p className="text-center text-[11px] text-stone-400">
-            Your details are used to deliver this order and nothing else.
+            Your details are used to deliver this order — see our{" "}
+            <Link href="/policies" className="underline hover:text-[#7a2648]">privacy notice</Link>.
           </p>
         </form>
       </div>

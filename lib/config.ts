@@ -89,6 +89,8 @@ export interface Account {
   name: string;
   phone: string | null;
   address: string | null;
+  /** v1.3.0 — PDPA marketing consent state (true = consent on record). */
+  marketing?: boolean;
 }
 
 export interface AccountOrder {

@@ -193,6 +193,12 @@ Rules:
   `completed`, `cancelled`. A `cancelled` order's pieces have already come
   back through feed B — do not add them again.
 - The customer's private order-page token is deliberately not included.
+- **`marketing_consent`** (v1.3.0): `1` when the buyer ticked the PDPA
+  marketing box at checkout, else `0` (absent on a pre-0012 store).
+  **Marketing lists on the portal side must be built ONLY from rows where
+  this is `1`** — everyone else gave their details to receive a parcel, not
+  promotions. Consent is withdrawable on the store; a later re-send of the
+  same order carries the current value, so upserts keep the portal honest.
 
 ---
 

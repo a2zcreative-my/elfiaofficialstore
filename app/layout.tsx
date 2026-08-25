@@ -54,6 +54,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <span className="text-stone-300">·</span>
               <Link href="/policies" className="hover:text-[#7a2648]">Delivery &amp; returns</Link>
               <span className="text-stone-300">·</span>
+              <Link href="/policies#privacy" className="hover:text-[#7a2648]">Privacy</Link>
+              <span className="text-stone-300">·</span>
               <Link href="/cart" className="hover:text-[#7a2648]">Cart</Link>
             </div>
             <p className="mt-6 text-[11px] text-stone-400">

@@ -44,6 +44,8 @@ export default function AccountPage() {
   const [orders, setOrders] = useState<AccountOrder[]>([]);
   const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [form, setForm] = useState({ name: "", email: "", password: "", phone: "", address: "", website: "" });
+  /* v1.3.0 — PDPA marketing consent at sign-up. Default OFF, never pre-ticked. */
+  const [marketing, setMarketing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState("");
@@ -72,7 +74,7 @@ export default function AccountPage() {
       const r = await fetch(`/api/v1/auth/${mode === "signup" ? "signup" : "login"}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(mode === "signup" ? form : { email: form.email, password: form.password }),
+        body: JSON.stringify(mode === "signup" ? { ...form, marketing } : { email: form.email, password: form.password }),
       });
       const j = (await r.json()) as { customer?: Account; error?: { message?: string } };
       if (!r.ok || !j.customer) { setError(j.error?.message ?? "Something went wrong."); setBusy(false); return; }
@@ -93,6 +95,18 @@ export default function AccountPage() {
     });
     if (r.ok) { setMe(((await r.json()) as { customer: Account }).customer); setSaved("Saved."); }
     setBusy(false);
+  };
+
+  /* v1.3.0 — PDPA: consent is given and withdrawn in the same place, one
+     tap, effective immediately. */
+  const toggleMarketing = async (next: boolean) => {
+    if (me === null || me === "loading") return;
+    setMe({ ...me, marketing: next }); // optimistic — the toggle must feel instant
+    const r = await fetch("/api/v1/auth/me", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ marketing: next }),
+    }).catch(() => null);
+    if (!r?.ok) setMe((cur) => (cur && cur !== "loading" ? { ...cur, marketing: !next } : cur));
   };
 
   const claimOrder = async (e: React.FormEvent) => {
@@ -172,6 +186,14 @@ export default function AccountPage() {
                   <span className={labelClass}>Delivery address (optional)</span>
                   <textarea className={`${inputClass} h-20 py-2`} value={form.address} maxLength={500}
                     onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))} />
+                </label>
+                <label className="mt-4 flex items-start gap-2.5 rounded-xl bg-stone-50 px-3 py-2.5">
+                  <input type="checkbox" checked={marketing} onChange={(e) => setMarketing(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 rounded border-stone-300 accent-[#7a2648]" />
+                  <span className="text-xs leading-relaxed text-stone-600">
+                    I agree to receive news and promotions from ELFIA by WhatsApp or email.
+                    Optional — withdraw anytime in your account. <span className="text-stone-400">/ Saya bersetuju menerima berita dan promosi daripada ELFIA. Pilihan — boleh ditarik balik bila-bila masa.</span>
+                  </span>
                 </label>
               </>
             )}
@@ -266,6 +288,19 @@ export default function AccountPage() {
             {saved && <span className="text-xs font-medium text-green-700">{saved}</span>}
           </div>
         </form>
+
+        {/* v1.3.0 — PDPA marketing consent, owned by the customer. */}
+        <div className="mt-5 rounded-2xl border border-stone-200 bg-white p-5">
+          <label className="flex items-start gap-2.5">
+            <input type="checkbox" checked={Boolean(me.marketing)} onChange={(e) => void toggleMarketing(e.target.checked)}
+              className="mt-0.5 h-4 w-4 rounded border-stone-300 accent-[#7a2648]" />
+            <span className="text-xs leading-relaxed text-stone-600">
+              <span className="block text-sm font-semibold text-stone-800">News &amp; promotions</span>
+              Receive ELFIA news and offers by WhatsApp or email. Untick to stop —
+              it takes effect immediately. <span className="text-stone-400">/ Terima berita dan tawaran ELFIA. Nyahtanda untuk berhenti — berkuat kuasa serta-merta.</span>
+            </span>
+          </label>
+        </div>
       </div>
     </main>
   );

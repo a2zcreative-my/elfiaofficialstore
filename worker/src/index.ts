@@ -74,7 +74,7 @@ export interface Env {
   STORE_ORIGIN?: string;     // override for local testing
 }
 
-const VERSION = "1.2.0";
+const VERSION = "1.3.0";
 const STATUSES = ["pending_payment", "payment_review", "paid", "shipped", "completed", "cancelled"] as const;
 type Status = (typeof STATUSES)[number];
 
@@ -276,10 +276,16 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
       const table = async (name: string): Promise<boolean> => {
         try { await env.DB.prepare(`SELECT 1 FROM ${name} LIMIT 1`).first(); return true; } catch { return false; }
       };
-      const [accounts, progress, syncReady, traffic] = await Promise.all([
+      /* Column probes for migrations that only ALTER (0012 adds columns, so
+         table() cannot see it). */
+      const probe = async (q: string): Promise<boolean> => {
+        try { await env.DB.prepare(q).first(); return true; } catch { return false; }
+      };
+      const [accounts, progress, syncReady, traffic, consent] = await Promise.all([
         table("customers"), table("order_events"), table("stock_events"), table("traffic_hits"),
+        probe("SELECT marketing_consent_at FROM customers LIMIT 1"),
       ]);
-      const migrationsCurrent = accounts && progress && syncReady && traffic;
+      const migrationsCurrent = accounts && progress && syncReady && traffic && consent;
       const cfg = storeConfig(env);
       return json({
         ok: db && migrationsCurrent, version: VERSION, db, r2,
@@ -291,6 +297,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
             ...(progress ? [] : ["order_events (0009 — order progress will fail)"]),
             ...(syncReady ? [] : ["stock_events (0008 — inventory sync will fail)"]),
             ...(traffic ? [] : ["traffic_hits (0011 — visitor traffic will not count)"]),
+            ...(consent ? [] : ["marketing_consent (0012 — PDPA consent will not record)"]),
           ],
         }),
         admin_key_configured: Boolean(env.ADMIN_KEY),
@@ -495,6 +502,21 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
         signedIn?.id ?? null, `+${holdHours} hours`,
       ).run();
 
+      /* v1.3.0 — PDPA marketing consent at checkout: recorded only when the
+         box was ticked. Kept on the ORDER (a guest has no account row), and
+         stamped onto the account too when the buyer is signed in — first
+         consent date wins. Armored: pre-0012 places the order and simply
+         cannot record consent yet. */
+      if (body.customer?.marketing === true) {
+        await env.DB.prepare(`UPDATE orders SET marketing_consent = 1 WHERE token = ?1`)
+          .bind(token).run().catch(() => null);
+        if (signedIn) {
+          await env.DB.prepare(
+            `UPDATE customers SET marketing_consent_at = COALESCE(marketing_consent_at, datetime('now')) WHERE id = ?1`,
+          ).bind(signedIn.id).run().catch(() => null);
+        }
+      }
+
       const created = await env.DB.prepare(`SELECT id FROM orders WHERE token = ?1`).bind(token).first<{ id: number }>();
       if (created) await recordOrderEvent(env, created.id, "pending_payment", "Order placed");
 
@@ -562,15 +584,31 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
       if (!timingSafeEqual(given, env.BRIDGE_KEY)) return err("unauthorized", "Bad key", 401);
 
       const since = str(url.searchParams.get("since"), 40);
-      const { results } = await env.DB.prepare(
-        `SELECT order_number, status, customer_name, phone, address, items,
-                subtotal_cents, shipping_cents, total_cents, payment_method,
-                tracking_no, tracking_courier, created_at, updated_at,
-                COALESCE(updated_at, created_at) AS changed_at
-         FROM orders
-         ${since ? "WHERE COALESCE(updated_at, created_at) > ?1" : ""}
-         ORDER BY changed_at, id LIMIT 200`,
-      ).bind(...(since ? [since] : [])).all<Record<string, unknown> & { changed_at: string; items: string }>();
+      /* v1.3.0: marketing_consent rides along so the portal's marketing
+         lists carry ONLY people who ticked the PDPA box. Fallback query for
+         a pre-0012 database keeps the feed alive without the column. */
+      let results: (Record<string, unknown> & { changed_at: string; items: string })[];
+      try {
+        results = (await env.DB.prepare(
+          `SELECT order_number, status, customer_name, phone, address, items,
+                  subtotal_cents, shipping_cents, total_cents, payment_method,
+                  tracking_no, tracking_courier, marketing_consent, created_at, updated_at,
+                  COALESCE(updated_at, created_at) AS changed_at
+           FROM orders
+           ${since ? "WHERE COALESCE(updated_at, created_at) > ?1" : ""}
+           ORDER BY changed_at, id LIMIT 200`,
+        ).bind(...(since ? [since] : [])).all<Record<string, unknown> & { changed_at: string; items: string }>()).results;
+      } catch {
+        results = (await env.DB.prepare(
+          `SELECT order_number, status, customer_name, phone, address, items,
+                  subtotal_cents, shipping_cents, total_cents, payment_method,
+                  tracking_no, tracking_courier, created_at, updated_at,
+                  COALESCE(updated_at, created_at) AS changed_at
+           FROM orders
+           ${since ? "WHERE COALESCE(updated_at, created_at) > ?1" : ""}
+           ORDER BY changed_at, id LIMIT 200`,
+        ).bind(...(since ? [since] : [])).all<Record<string, unknown> & { changed_at: string; items: string }>()).results;
+      }
 
       const orders = results.map((o) => ({
         ...o,
@@ -642,6 +680,15 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
       }
       if (!created) return err("server_error", "Could not create the account — please try again.", 500);
 
+      /* v1.3.0 — PDPA marketing consent: recorded ONLY when the box was
+         ticked, with its timestamp; an untouched form consents to nothing.
+         A separate armored UPDATE (not part of the INSERT) so a pre-0012
+         database still signs people up — it just cannot record consent yet. */
+      if (body?.marketing === true) {
+        await env.DB.prepare(`UPDATE customers SET marketing_consent_at = datetime('now') WHERE id = ?1`)
+          .bind(created.id).run().catch(() => null);
+      }
+
       const token = await createSession(env, created.id, request.headers.get("User-Agent"));
       return new Response(JSON.stringify({ customer: { id: created.id, email, name, phone, address: str(body?.address, 500) } }), {
         status: 201,
@@ -694,7 +741,11 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
     if (path === "/auth/me" && method === "GET") {
       const me = await currentCustomer(env, request);
       if (!me) return err("unauthorized", "Not signed in", 401);
-      return json({ customer: { id: me.id, email: me.email, name: me.name, phone: me.phone, address: me.address } });
+      /* v1.3.0 — the account page shows the marketing toggle's real state.
+         Armored: pre-0012 simply reports false. */
+      const consent = await env.DB.prepare(`SELECT marketing_consent_at FROM customers WHERE id = ?1`)
+        .bind(me.id).first<{ marketing_consent_at: string | null }>().catch(() => null);
+      return json({ customer: { id: me.id, email: me.email, name: me.name, phone: me.phone, address: me.address, marketing: Boolean(consent?.marketing_consent_at) } });
     }
 
     if (path === "/auth/me" && method === "PUT") {
@@ -708,7 +759,39 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
       await env.DB.prepare(
         `UPDATE customers SET name = ?1, phone = ?2, phone_digits = ?3, address = ?4 WHERE id = ?5`,
       ).bind(name, phone, normalisePhone(phone), address, me.id).run();
-      return json({ customer: { id: me.id, email: me.email, name, phone, address } });
+      /* v1.3.0 — PDPA: consent is withdrawable in the same place it was
+         given. `marketing: true` stamps now (keeping an earlier date if one
+         exists — the FIRST consent is the legal fact); `false` clears it;
+         absent leaves it untouched. Armored pre-0012.
+
+         Consent is a fact about the PERSON, and the orders feed is how it
+         travels to the marketing list — so both directions also rewrite the
+         flag on this customer's ORDERS and bump updated_at, which makes the
+         feed re-send them. Withdrawal therefore reaches the portal within
+         one poll, not never. Phone-matched guest orders are included on
+         withdrawal (stop-marketing must catch everything) but NOT on grant
+         (a tick today cannot consent an order someone placed as a guest
+         under a phone number that may have changed hands). */
+      let marketing: boolean | undefined;
+      if (body?.marketing === true) {
+        await env.DB.prepare(
+          `UPDATE customers SET marketing_consent_at = COALESCE(marketing_consent_at, datetime('now')) WHERE id = ?1`,
+        ).bind(me.id).run().catch(() => null);
+        await env.DB.prepare(
+          `UPDATE orders SET marketing_consent = 1, updated_at = datetime('now') WHERE customer_id = ?1 AND marketing_consent = 0`,
+        ).bind(me.id).run().catch(() => null);
+        marketing = true;
+      } else if (body?.marketing === false) {
+        await env.DB.prepare(`UPDATE customers SET marketing_consent_at = NULL WHERE id = ?1`)
+          .bind(me.id).run().catch(() => null);
+        const digits = normalisePhone(phone);
+        await env.DB.prepare(
+          `UPDATE orders SET marketing_consent = 0, updated_at = datetime('now')
+           WHERE marketing_consent = 1 AND (customer_id = ?1 OR (?2 != '' AND phone_digits = ?2))`,
+        ).bind(me.id, digits).run().catch(() => null);
+        marketing = false;
+      }
+      return json({ customer: { id: me.id, email: me.email, name, phone, address, ...(marketing === undefined ? {} : { marketing }) } });
     }
 
     /* The customer's own orders. Only ever their own: the query is keyed on
@@ -1158,6 +1241,23 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
         if (body?.admin_notes !== undefined) {
           await env.DB.prepare(`UPDATE orders SET admin_notes = ?1, updated_at = datetime('now') WHERE id = ?2`)
             .bind(typeof body.admin_notes === "string" ? body.admin_notes.slice(0, 1000) : null, o.id).run();
+          return json({ ok: true });
+        }
+        /* v1.3.0 — PDPA withdrawal for a GUEST (no account page to untick):
+           they WhatsApp the shop, the shop clears it here. Clears every order
+           under the same phone and, if the order belongs to an account, that
+           account's consent too — withdrawal must catch everything. The
+           updated_at bump re-sends the rows through the orders feed, so the
+           portal's marketing list drops them within one poll. */
+        if (body?.action === "withdraw_marketing") {
+          await env.DB.prepare(
+            `UPDATE orders SET marketing_consent = 0, updated_at = datetime('now')
+             WHERE marketing_consent = 1 AND (id = ?1 OR (phone_digits != '' AND phone_digits = (SELECT phone_digits FROM orders WHERE id = ?1)))`,
+          ).bind(o.id).run().catch(() => null);
+          await env.DB.prepare(
+            `UPDATE customers SET marketing_consent_at = NULL
+             WHERE id = (SELECT customer_id FROM orders WHERE id = ?1 AND customer_id IS NOT NULL)`,
+          ).bind(o.id).run().catch(() => null);
           return json({ ok: true });
         }
         return err("invalid_input", "Unknown action", 400);

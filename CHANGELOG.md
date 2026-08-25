@@ -1,5 +1,29 @@
 # ELFIA OFFICIAL STORE — changelog
 
+## [1.3.0] — 24-08-2026 — PDPA: consent, a privacy notice, and marketing done right
+
+**CEO: marketing needs to reach customers, covered by PDPA — decided as
+"from orders + consent": the people marketed to are the people who ticked
+the box, never the people who merely bought.**
+
+- **Consent tick-box** at checkout and at sign-up — optional, never
+  pre-ticked, bilingual (EN/BM), stored with its timestamp
+  (`0012_marketing_consent.sql`). An untouched form consents to nothing.
+- **Withdrawal that actually works.** Account holders untick it on the
+  account page — effective immediately, and the flag is rewritten on their
+  orders so the portal's marketing list drops them within one poll. Guests
+  WhatsApp the shop; the admin `withdraw_marketing` action clears every
+  order under that phone and any linked account in one call.
+- **Privacy notice (PDPA 2010 s.7)** on the policies page, in English AND
+  Bahasa Malaysia as the Act requires, written to match what the system
+  actually does: what is collected, why, who sees it, the anonymous-only
+  website statistics, retention, and the customer's rights. Footer link
+  added.
+- **Orders feed carries `marketing_consent`** (spec § C updated): the portal
+  builds marketing lists ONLY from rows where it is `1`.
+- `/health` names 0012 if it has not run; `/auth/me` reports the consent
+  state so the account page shows the truth.
+
 ## [1.2.0] — 24-08-2026 — the shop now counts its visitors (anonymously)
 
 **CEO, with the portal's Operations map on screen: "for ELFIA, I want to have
