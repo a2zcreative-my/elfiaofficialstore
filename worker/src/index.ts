@@ -1109,23 +1109,19 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
         return json({ image_key: key }, 201);
       }
 
-      /* v1.5.0 — the review queue for products the PORTAL created.
-         The bridge creates them hidden (portal_pending = 1); this is where a
-         human decides. Publish puts it in the shop; Dismiss takes it out of
-         the queue and leaves it hidden, so the same SKU is not re-proposed on
-         every pull — the row exists now, so later pulls just refresh it.
-         Neither action can be taken by the portal itself: this endpoint is
-         behind the admin key like everything else under /admin. */
+      /* v1.8.1 — the "From portal" review queue is GONE.
+         The CEO: "/admin → From portal this should not be appear in ELFIA
+         system! all inside the portal … dont make this system conflict and
+         become unstable!!!" She is right: two screens that both decide what
+         is published is how the catalogue drifts. Publishing lives in the
+         portal's ELFIA tab and nowhere else. The route is answered rather
+         than deleted so an old bookmark or a cached admin page gets a plain
+         explanation instead of a 404 that looks like a broken shop. */
       const adminPublish = path.match(/^\/admin\/products\/(\d+)\/publish$/);
       if (adminPublish && method === "POST") {
-        const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
-        const publish = body?.publish !== false;   // default: yes, publish it
-        const row = await env.DB.prepare(`SELECT id, name, active, portal_pending FROM products WHERE id = ?1`)
-          .bind(adminPublish[1]!).first<{ id: number; name: string; active: number; portal_pending: number }>();
-        if (!row) return err("not_found", "Product not found", 404);
-        await env.DB.prepare(`UPDATE products SET active = ?1, portal_pending = 0 WHERE id = ?2`)
-          .bind(publish ? 1 : row.active, row.id).run();
-        return json({ ok: true, id: row.id, active: publish ? 1 : row.active });
+        return err("gone",
+          "Publishing moved to the portal's ELFIA Store tab — tick Publish there and the shop follows within 5 minutes.",
+          410);
       }
 
       /* v0.6.0 — the restock waitlist. Open requests first, oldest first:
@@ -1218,8 +1214,6 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
           /* v1.5.0 — photo trouble is reported on its own line so a clean
              count sync cannot make a failed photo look like success. */
           last_photo_error: state.last_photo_error || null,
-          portal_pending: await env.DB.prepare(`SELECT COUNT(*) AS n FROM products WHERE portal_pending = 1`)
-            .first<{ n: number }>().then((r) => r?.n ?? 0).catch(() => 0),
           recent,
         });
       }

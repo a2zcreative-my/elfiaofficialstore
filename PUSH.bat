@@ -1,186 +1,231 @@
 @echo off
 setlocal EnableExtensions
-title ELFIA OFFICIAL STORE - go live
+title ELFIA + PORTAL - deploy everything
 REM ============================================================
-REM  ELFIA OFFICIAL STORE - PUSH.bat  (v2)
+REM  ONE FILE. DOUBLE-CLICK IT. IT PUTS EVERYTHING LIVE.
 REM
-REM  THE STORE IS TWO SEPARATE THINGS AND THEY DEPLOY DIFFERENTLY.
-REM  This is what went wrong on 25-08: the website updated and the
-REM  engine did not, so the new header appeared but the product
-REM  names still came from the old rules.
+REM  There is an identical copy of this file in the other folder;
+REM  it does not matter which one you run.
 REM
-REM    1. THE WEBSITE  (what you look at)
-REM       Deploys BY ITSELF when this folder is pushed to GitHub.
+REM  WHY THIS FILE EXISTS (the mistake that wasted 25-08):
+REM  each project publishes TWO SEPARATE THINGS, and deploying
+REM  one without the other is what made new features look broken:
 REM
-REM    2. THE ENGINE   (worker "elfia-api" - the database, the
-REM       portal bridge, the prices, the photos, the carousel)
-REM       Does NOT deploy from GitHub. It has to be published from
-REM       this computer with wrangler. THAT is step 4 below, and
-REM       it is the step that was missing.
+REM    a2zcreative-official
+REM      * azoneofficial-api  - the engine   (worker\ folder)
+REM      * azoneofficial      - the WEBSITE  (repo root, out\)
+REM    elfiaofficialstore
+REM      * elfia-api          - the engine   (worker\ folder)
+REM      * elfia-store        - the WEBSITE  (Cloudflare Pages, out\)
 REM
-REM  This file now does both, in the right order, and checks the
-REM  live result itself.
+REM  On 25-08 the engines went live and the websites did not, so
+REM  the portal kept showing the OLD carousel card with no way to
+REM  reposition a photo, even though the feature was live in the
+REM  engine underneath. This file always does all four, portal
+REM  first (the shop reads from it), and checks the result itself.
 REM ============================================================
 
-cd /d "%~dp0"
-set "TMPH=%TEMP%\elfia-health.txt"
+REM  Which folder am I sitting in? The portal has a wrangler.toml at its
+REM  ROOT (its website is a worker); the store does not (its website is a
+REM  Pages project). That one file tells the two apart with no guessing.
+set "STORE=%~dp0"
+set "PORTAL=%~dp0..\a2zcreative-official"
+if exist "%~dp0wrangler.toml" set "PORTAL=%~dp0"
+if exist "%~dp0wrangler.toml" set "STORE=%~dp0..\elfiaofficialstore"
 
 echo.
-echo   ELFIA OFFICIAL STORE - go live
-echo   ==============================
+echo   DEPLOY EVERYTHING
+echo   =================
+echo   Portal: %PORTAL%
+echo   Store : %STORE%
+echo.
+echo   This takes about 5 minutes. Leave the window open until it
+echo   says DONE.
 echo.
 
-if not exist ".git"                 goto :nogit
-if not exist "worker\wrangler.toml" goto :noworker
+if not exist "%PORTAL%\worker\wrangler.toml" goto :nofolders
+if not exist "%STORE%\worker\wrangler.toml"  goto :nofolders
 
-set "PKG="
-for /f "tokens=2 delims=:, " %%v in ('findstr /C:"\"version\"" package.json') do if not defined PKG set "PKG=%%~v"
-echo   Version in this folder: %PKG%
+REM ============================================================
+REM  PORTAL
+REM ============================================================
 echo.
+echo   ========== PORTAL (a2zcreative.my) ==========
+cd /d "%PORTAL%"
 
-echo   [1/5] Checking you are signed in to Cloudflare...
-pushd worker
+echo   [1/5] Checking the Cloudflare login...
+cd worker
 call npx wrangler whoami >nul 2>&1
-if errorlevel 1 (
-  popd
-  echo.
-  echo   [X] Not signed in to Cloudflare, so the engine cannot be
-  echo       published. Fix it once - a browser window opens:
-  echo.
-  echo         cd worker
-  echo         npx wrangler login
-  echo.
-  echo       Then double-click this file again.
-  echo.
-  pause
-  exit /b 1
-)
-popd
+if errorlevel 1 goto :nologin
+cd ..
 echo         signed in.
-echo.
 
-echo   [2/5] Sending the website to GitHub...
-git add -A
-git status --short
-git commit -m "ELFIA store v%PKG% - portal photos, prices, discount and carousel"
-if errorlevel 1 echo         nothing new to save - pushing anyway.
-git push
-if errorlevel 1 (
-  echo.
-  echo   [X] THE PUSH WAS REFUSED - the website will not update.
-  echo       Usually: not signed in to GitHub, or someone else
-  echo       changed the repo. Try:  git pull   then run this again.
-  echo       Copy this window and send it over.
-  echo.
-  pause
-  exit /b 1
-)
-echo         sent - Cloudflare rebuilds the website by itself.
-echo.
+echo   [2/5] Installing what the build needs...
+call pnpm install
+if errorlevel 1 goto :failed
 
-echo   [3/5] Adding the new database columns (discount, carousel)...
-REM  CI=true is REQUIRED: without it wrangler asks "continue?" and
-REM  answering no exits 0 - which would publish new code against an
-REM  un-migrated database.
+echo   [3/5] Database columns...
 set CI=true
-pushd worker
-call npx wrangler d1 migrations apply elfia-store --remote
-if errorlevel 1 (
-  popd
-  set CI=
-  echo.
-  echo   [X] The database step failed. NOTHING was published - the
-  echo       live site is untouched and still working. Send the
-  echo       lines above over.
-  echo.
-  pause
-  exit /b 1
-)
-popd
+cd worker
+call npx wrangler d1 migrations apply azoneofficial --remote
+if errorlevel 1 goto :failedpop
+cd ..
 set CI=
-echo.
 
-echo   [4/5] Publishing the ENGINE - this is the step that was missing...
-pushd worker
+echo   [4/5] Publishing the ENGINE (azoneofficial-api)...
+cd worker
 call npx wrangler deploy
-if errorlevel 1 (
-  popd
-  echo.
-  echo   ============================================
-  echo    [X] THE ENGINE DID NOT PUBLISH.
-  echo   ============================================
-  echo    The website will still update from the push above, but
-  echo    the portal takeover, the discount and the carousel all
-  echo    live in the engine, so nothing will look different.
-  echo.
-  echo    If the error mentions the worker being connected to a
-  echo    REPOSITORY, Cloudflare is refusing a direct publish:
-  echo      Cloudflare - Workers and Pages - elfia-api
-  echo      - Settings - Build - Disconnect, run this again,
-  echo      then reconnect it afterwards.
-  echo.
-  echo    Copy this window and send it over.
-  echo.
-  pause
-  exit /b 1
-)
-popd
-echo.
+if errorlevel 1 goto :failedpop
+cd ..
 
-echo   [5/5] Checking the live site...
-echo.
-set /a TRIES=0
+echo   [5/5] Building and publishing the WEBSITE (azoneofficial)...
+echo         ^(this is the half that was missing^)
+call pnpm build
+if errorlevel 1 goto :failed
+if not exist "out\index.html" goto :nobuild
+call npx wrangler deploy
+if errorlevel 1 goto :sitefailed
 
-:poll
-set /a TRIES+=1
-timeout /t 10 /nobreak >nul
-curl.exe -s -m 20 https://elfiaofficialstore.my/api/v1/health > "%TMPH%" 2>nul
-type "%TMPH%"
+REM ============================================================
+REM  STORE
+REM ============================================================
 echo.
-findstr /C:"\"version\":\"%PKG%\"" "%TMPH%" >nul && goto :live
-if %TRIES% LSS 12 goto :poll
+echo   ========== STORE (elfiaofficialstore.my) ==========
+cd /d "%STORE%"
 
-echo.
-echo   [!] The live site still does not say v%PKG%. The publish
-echo       above said it worked, so this is usually the domain
-echo       pointing at a different worker. Send this window over.
-echo.
-pause
-exit /b 1
+echo   [1/5] Installing what the build needs...
+call npm install --no-audit --no-fund
+if errorlevel 1 goto :failed
 
-:live
+echo   [2/5] Database columns...
+set CI=true
+cd worker
+call npx wrangler d1 migrations apply elfia-store --remote
+if errorlevel 1 goto :failedpop
+cd ..
+set CI=
+
+echo   [3/5] Publishing the ENGINE (elfia-api)...
+cd worker
+call npx wrangler deploy
+if errorlevel 1 goto :failedpop
+cd ..
+
+echo   [4/5] Building the shop...
+call npx next build
+if errorlevel 1 goto :failed
+if not exist "out\index.html" goto :nobuild
+
+echo   [5/5] Publishing the WEBSITE (elfia-store)...
+call npx wrangler pages deploy out --project-name=elfia-store --commit-dirty=true
+if errorlevel 1 goto :sitefailed
+
+REM ============================================================
+REM  SAVE THE CODE (never blocks a deploy - it runs last)
+REM ============================================================
+echo.
+echo   Saving both folders to GitHub (history only - the deploys
+echo   above are already live)...
+cd /d "%PORTAL%"
+git add -A >nul 2>&1
+git commit -m "portal deploy" >nul 2>&1
+git push >nul 2>&1
+cd /d "%STORE%"
+git add -A >nul 2>&1
+git commit -m "store deploy" >nul 2>&1
+git push >nul 2>&1
+
+REM ============================================================
+REM  CHECK THE LIVE SYSTEMS
+REM ============================================================
+echo.
+echo   Checking both live systems...
+echo.
+echo     --- https://a2zcreative.my/api/v1/health
+curl.exe -s -m 20 https://a2zcreative.my/api/v1/health
+echo.
+echo.
+echo     --- https://elfiaofficialstore.my/api/v1/health
+curl.exe -s -m 20 https://elfiaofficialstore.my/api/v1/health
+echo.
 echo.
 echo   ============================================
-echo    DONE - v%PKG% is LIVE on elfiaofficialstore.my
+echo    DONE - engines AND websites are published.
 echo   ============================================
 echo.
-echo    The engine now takes the PORTAL as the boss. Within 5
-echo    minutes (it checks the portal every 5 minutes by itself):
-echo      1. Product NAMES become the portal's names.
-echo      2. Product PHOTOS become the photos you uploaded there.
-echo      3. Discount RM shows as a crossed-out price + SALE badge.
-echo      4. Carousel photos from the portal appear on the home page.
-echo.
-echo    Refresh the shop with Ctrl+F5 after 5 minutes.
-echo.
-echo    One thing still switched off - NEW products from the portal
-echo    stay hidden until this is set (needed once only):
-echo      cd worker
-echo      npx wrangler secret put ADMIN_KEY
+echo    IMPORTANT: your browser is still holding the old pages.
+echo    Open each one and press Ctrl+F5 (hold Ctrl, tap F5):
+echo      1. https://a2zcreative.my/portal  - the carousel card
+echo         should now show "Change photo", "Whole photo" and
+echo         "click the photo to aim".
+echo      2. https://elfiaofficialstore.my  - discounted items
+echo         show the old price crossed out with a SALE badge.
 echo.
 pause
 exit /b 0
 
-:nogit
-echo   [X] This folder is not connected to git - the website half
-echo       cannot be sent. Send this message over.
+:nologin
+cd /d "%~dp0"
+echo.
+echo   [X] Not signed in to Cloudflare. Nothing was deployed.
+echo       Fix it once - a browser window opens:
+echo         cd worker
+echo         npx wrangler login
+echo       Then double-click this file again.
 echo.
 pause
 exit /b 1
 
-:noworker
-echo   [X] worker\wrangler.toml is missing - this is not the full
-echo       project folder. Send this message over.
+:nofolders
+echo.
+echo   [X] Could not find both project folders side by side.
+echo       Expected them next to each other, for example:
+echo         Desktop\elfiaofficialstore
+echo         Desktop\a2zcreative-official
+echo       Send this message over.
+echo.
+pause
+exit /b 1
+
+:nobuild
+echo.
+echo   [X] The build produced no out\index.html, so there is no
+echo       website to publish. Nothing further was deployed.
+echo       Send the lines above over.
+echo.
+pause
+exit /b 1
+
+:sitefailed
+echo.
+echo   ============================================
+echo    [X] THE WEBSITE STEP WAS REFUSED.
+echo   ============================================
+echo    The engine above is already live, but the pages people
+echo    actually look at were NOT updated - which is exactly the
+echo    half-deployed state this file exists to prevent.
+echo.
+echo    The usual cause: that worker is connected to a GitHub
+echo    repository, and Cloudflare will not let this computer
+echo    publish over a git-connected worker. Fix it once:
+echo      Cloudflare - Workers and Pages - pick the worker
+echo      - Settings - Build - Disconnect
+echo    then run this file again.
+echo.
+echo    Copy this window and send it over.
+echo.
+pause
+exit /b 1
+
+:failedpop
+cd ..
+set CI=
+:failed
+echo.
+echo   ============================================
+echo    [X] A STEP FAILED - nothing after it ran.
+echo   ============================================
+echo    Scroll up to the last error and send it over.
 echo.
 pause
 exit /b 1

@@ -351,20 +351,24 @@ const SHAWL = `SHWL${stamp}`;
 const SHAWL_B = `SHWL${String((Number(stamp) + 1) % 1_000_000).padStart(6, "0")}`;
 let shawlId = null;
 
-step("start from an empty review queue");
+step("the store's /admin has no publishing screen any more (v1.8.1)");
 {
-  /* The same reasoning as "start from a settled outbox" above: the local
-     database survives between runs, and a row an earlier run left waiting
-     would make this one's counts read wrong. Dismissing leaves them hidden. */
-  for (const p of await adminProducts()) {
-    if (p.portal_pending === 1) {
-      await admin(`/admin/products/${p.id}/publish`, { method: "POST", body: JSON.stringify({ publish: false }) });
-    }
-  }
-  ok("nothing is waiting to be published", (await status()).portal_pending === 0);
+  /* The CEO: "/admin → From portal this should not be appear in ELFIA
+     system! all inside the portal … dont make this system conflict and
+     become unstable!!!" Two screens deciding what is published is how a
+     catalogue drifts. The route answers 410 with a sentence pointing at the
+     portal, rather than 404-ing an old bookmark into a mystery. */
+  const any = (await adminProducts())[0];
+  const res = await admin(`/admin/products/${any.id}/publish`, { method: "POST", body: "{}" });
+  ok("publishing from the store is gone", res.status === 410, `${res.status}`);
+  const j = await res.json().catch(() => ({}));
+  ok("and it says where publishing lives now", /portal/i.test(j?.error?.message ?? ""), JSON.stringify(j));
+  const st = await status();
+  ok("the sync status no longer counts a review queue", st.portal_pending === undefined,
+     JSON.stringify(st.portal_pending));
 }
 
-step("a SKU the store has never had is CREATED, hidden (v1.5.0)");
+step("a SKU the store has never had is CREATED, live (v1.8.0)");
 {
   await portalAdd({ sku: SHAWL, name: "Shawl Premium — Beige", category: "shawl", price_cents: 5500, stock: 8, photo: "beige", marker: "v1" });
   const r = await syncNow();
