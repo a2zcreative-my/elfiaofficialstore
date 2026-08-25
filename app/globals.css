@@ -55,13 +55,26 @@ body {
   flex: 0 0 auto;
 }
 
-/* The phone tab bar covers the last stripe of the page; every screen ends
-   above it. Also respects the iPhone home indicator. */
+/* The phone tab bar covers the last stripe of the page, so every screen has to
+   end above it.
+
+   v1.4.1 — this used to be a hard-coded 5.25rem, which was SHORTER than the
+   bar itself on a notched iPhone (the bar adds env(safe-area-inset-bottom) of
+   its own padding for the home indicator), so the last row of content sat
+   underneath it. The bar now measures itself and publishes its real height as
+   --elfia-tabbar (see BottomTabBar in chrome.tsx); everything that has to
+   clear it reads that. The fallback covers a notched iPhone for the instant
+   before hydration, and is 0 on a desktop where the bar is not drawn. */
 @utility pb-tabbar {
-  padding-bottom: calc(5.25rem + env(safe-area-inset-bottom));
+  padding-bottom: calc(var(--elfia-tabbar, 6rem) + 0.75rem);
 }
+/* Floating buttons (WhatsApp, back-to-top) ride just above the bar. */
 @utility bottom-tabbar {
-  bottom: calc(4.5rem + env(safe-area-inset-bottom));
+  bottom: calc(var(--elfia-tabbar, 6rem) + 0.75rem);
+}
+/* A page's own sticky footer (the product buy bar) sits directly on it. */
+@utility above-tabbar {
+  bottom: var(--elfia-tabbar, 6rem);
 }
 
 @keyframes elfia-pop {

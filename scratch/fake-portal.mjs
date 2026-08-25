@@ -6,14 +6,24 @@
  *   node scratch/fake-portal.mjs            (listens on :8200)
  *
  * Endpoints (per the spec):
- *   GET  /bridge/elfia-inventory   -> { items: [{ sku, name, stock, price_cents? }] }
+ *   GET  /bridge/elfia-inventory   -> { items: [{ sku, name, stock, price_cents?,
+ *                                       category?, image_url?, image_updated_at? }] }
  *   POST /bridge/elfia-movements   -> { applied, ignored, unknown_sku }
+ *   GET  /media/<file>             -> a product photo, PUBLIC (v1.5.0 — the
+ *                                     spec requires an unauthenticated URL)
  * Test controls (NOT part of the spec):
  *   GET  /_state                   -> counts, prices, applied event ids
  *   POST /_set   { sku, stock }    -> force a count
  *   POST /_price { sku, price_cents } -> set a price (null clears it, so the
  *                                        feed omits the field for that SKU)
  *   POST /_down  { down: true }    -> pretend the portal is unreachable
+ *   POST /_add   { sku, name, category, price_cents, stock, photo }
+ *                                  -> a product the STORE has never had, which
+ *                                     is the shawl case (v1.5.0)
+ *   POST /_photo { sku, photo, marker }
+ *                                  -> attach/replace a photo. `photo` is one of
+ *                                     "png" | "html" | "huge" | null, so the
+ *                                     store's refusals can be tested too.
  */
 import http from "node:http";
 
@@ -30,6 +40,19 @@ const stock = new Map([
 const applied = new Set();   // event ids already counted — the dedupe store
 const prices = new Map();    // sku -> price_cents; absent = feed omits the field
 let down = false;
+
+/* v1.5.0 — per-SKU metadata the feed may carry: a real name, a collection and
+   a photo. `meta` only holds what a test has set; everything absent falls back
+   to the old behaviour, so the pre-v1.5.0 assertions are untouched. */
+const meta = new Map();      // sku -> { name?, category?, photo?, marker? }
+
+/* A genuine 1x1 PNG — the store checks the Content-Type and the byte length,
+   so the bytes have to be real. */
+const PNG_1PX = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+  "base64",
+);
+const HUGE = Buffer.alloc(6 * 1024 * 1024, 7);   // 6 MB — over the store's 5 MB cap
 
 const body = async (req) => {
   const chunks = [];
@@ -61,16 +84,70 @@ http.createServer(async (req, res) => {
     const b = await body(req); down = Boolean(b.down);
     return send(res, 200, { down });
   }
+  if (url.pathname === "/_add") {
+    const b = await body(req);
+    const sku = norm(b.sku);
+    stock.set(sku, Number(b.stock ?? 0));
+    if (b.price_cents !== undefined && b.price_cents !== null) prices.set(sku, Number(b.price_cents));
+    meta.set(sku, {
+      ...(b.name !== undefined ? { name: b.name } : {}),
+      ...(b.category ? { category: b.category } : {}),
+      ...(b.photo ? { photo: b.photo, marker: b.marker ?? `m-${Date.now()}` } : {}),
+    });
+    return send(res, 200, { ok: true });
+  }
+  if (url.pathname === "/_photo") {
+    const b = await body(req);
+    const sku = norm(b.sku);
+    const m = meta.get(sku) ?? {};
+    if (b.photo === null) { delete m.photo; delete m.marker; }
+    else { m.photo = b.photo; m.marker = b.marker ?? `m-${Date.now()}`; }
+    meta.set(sku, m);
+    return send(res, 200, { ok: true, marker: m.marker ?? null });
+  }
+  if (url.pathname === "/_remove") {
+    const b = await body(req);
+    const sku = norm(b.sku);
+    stock.delete(sku); prices.delete(sku); meta.delete(sku);
+    return send(res, 200, { ok: true });
+  }
+
+  /* PUBLIC by contract — the spec says the store's Worker must be able to
+     fetch a photo without a session, so this route sits ABOVE the key check.
+     The filename decides what is served, which is how the store's refusals
+     (wrong type, too large) get exercised. */
+  const media = url.pathname.match(/^\/media\/([\w.-]+)$/);
+  if (media && req.method === "GET") {
+    const kind = media[1].split(".")[0];
+    if (kind === "html") { res.writeHead(200, { "content-type": "text/html" }); return res.end("<h1>not a photo</h1>"); }
+    if (kind === "huge") { res.writeHead(200, { "content-type": "image/png", "content-length": HUGE.length }); return res.end(HUGE); }
+    if (kind === "missing") { res.writeHead(404); return res.end("gone"); }
+    res.writeHead(200, { "content-type": "image/png", "content-length": PNG_1PX.length });
+    return res.end(PNG_1PX);
+  }
 
   if (down) { res.writeHead(503); return res.end("portal down"); }
   if (req.headers["x-bridge-key"] !== KEY) return send(res, 401, { error: "bad key" });
 
   if (url.pathname === "/bridge/elfia-inventory" && req.method === "GET") {
     return send(res, 200, {
-      items: [...stock].map(([sku, s]) => ({
-        sku: spaced(sku), name: `Portal ${spaced(sku)}`, stock: s,
-        ...(prices.has(sku) ? { price_cents: prices.get(sku) } : {}),
-      })),
+      items: [...stock].map(([sku, s]) => {
+        const m = meta.get(sku) ?? {};
+        return {
+          sku: spaced(sku),
+          /* A test may set name to null on purpose: a feed item with no name
+             is not enough to create a product, and the store must say so
+             rather than invent one. */
+          ...("name" in m ? (m.name === null ? {} : { name: m.name }) : { name: `Portal ${spaced(sku)}` }),
+          stock: s,
+          ...(prices.has(sku) ? { price_cents: prices.get(sku) } : {}),
+          ...(m.category ? { category: m.category } : {}),
+          ...(m.photo ? {
+            image_url: `http://127.0.0.1:8200/media/${m.photo}.png`,
+            image_updated_at: m.marker,
+          } : {}),
+        };
+      }),
     });
   }
 

@@ -20,7 +20,7 @@
  */
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { CART_EVENT, NAV_LINKS, STORE, TABS, cartCount, fmtRM, waLink, type StoreConfig } from "@/lib/config";
 
@@ -161,13 +161,48 @@ export function SiteHeader() {
 export function BottomTabBar() {
   const path = usePathname();
   const wishes = useWishlist();
+  const ref = useRef<HTMLElement | null>(null);
   const ICONS: Record<string, IconName> = {
     home: "home", shop: "bag", categories: "grid", wishlist: "heart", account: "user",
   };
   const isActive = (href: string) => (href === "/" ? path === "/" : path.startsWith(href));
 
+  /* v1.4.1 — the bar publishes its own height.
+     The CEO photographed the shop with the last row of products running under
+     the bar. The cause was a guessed clearance (5.25rem) that is shorter than
+     the bar actually is on a notched iPhone, where it grows by
+     env(safe-area-inset-bottom) to clear the home indicator. Guessing again
+     with a bigger number would just be a luckier guess, so the bar now
+     measures itself and every page reads --elfia-tabbar (see globals.css).
+     On a desktop the bar is display:none, so the height is 0 and the padding
+     collapses on its own. */
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const publish = () => {
+      document.documentElement.style.setProperty("--elfia-tabbar", `${el.getBoundingClientRect().height}px`);
+    };
+    publish();
+    /* border-box, not the default content-box: the height that matters here is
+       the one that grows with the home-indicator padding, and a content-box
+       observer never fires when only padding changes. */
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(publish) : null;
+    ro?.observe(el, { box: "border-box" });
+    window.addEventListener("resize", publish);
+    window.addEventListener("orientationchange", publish);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener("resize", publish);
+      window.removeEventListener("orientationchange", publish);
+      document.documentElement.style.removeProperty("--elfia-tabbar");
+    };
+  }, []);
+
+  /* Solid white, not a blurred translucent panel: iOS Safari repaints a
+     backdrop-filter on a FIXED element badly while the page is scrolling,
+     which is the smear the CEO caught in her screenshot. */
   return (
-    <nav aria-label="Main" className="fixed inset-x-0 bottom-0 z-40 border-t border-elfia-line bg-white/95 pb-[env(safe-area-inset-bottom)] backdrop-blur sm:hidden">
+    <nav ref={ref} aria-label="Main" className="fixed inset-x-0 bottom-0 z-40 border-t border-elfia-line bg-white pb-[env(safe-area-inset-bottom)] sm:hidden">
       <div className="flex">
         {TABS.map((t) => {
           const on = isActive(t.href);

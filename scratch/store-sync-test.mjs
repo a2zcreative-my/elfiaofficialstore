@@ -35,6 +35,13 @@ const admin = (p, o = {}) => fetch(`${API}${p}`, { ...o, headers: { "X-Admin-Key
 const portalState = () => jget(`${PORTAL}/_state`);
 const portalSet = (sku, stock) => fetch(`${PORTAL}/_set`, { method: "POST", body: JSON.stringify({ sku, stock }) });
 const portalDown = (down) => fetch(`${PORTAL}/_down`, { method: "POST", body: JSON.stringify({ down }) });
+/* v1.5.0 controls: introduce a SKU the STORE has never had, and attach or
+   replace its photo. */
+const portalAdd = (body) => fetch(`${PORTAL}/_add`, { method: "POST", body: JSON.stringify(body) });
+const portalPhoto = (body) => fetch(`${PORTAL}/_photo`, { method: "POST", body: JSON.stringify(body) }).then((r) => r.json());
+const portalRemove = (sku) => fetch(`${PORTAL}/_remove`, { method: "POST", body: JSON.stringify({ sku }) });
+const adminProducts = () => admin("/admin/products").then((r) => r.json()).then((j) => j.products);
+const bySku = async (sku) => (await adminProducts()).find((p) => p.sku && p.sku.replace(/\s+/g, "").toUpperCase() === sku);
 const syncNow = () => admin("/admin/sync-stock", { method: "POST" }).then((r) => r.json());
 const status = () => admin("/admin/sync-status").then((r) => r.json());
 /* v1.0.0 — the store now caps unpaid orders per phone and orders per IP, so
@@ -281,6 +288,239 @@ step("a portal-managed SKU shows and enforces the portal's exact count (v1.1.2)"
   ok(`the portal heard about the sale (${before} → ${after})`, after === before - 2);
   const mineNow = (await jget(`${API}/products/${p.id}`)).product.stock;
   ok(`the store's shelf moved with it (${mineNow})`, mineNow === before - 2);
+}
+
+/* ------------------------------------------------------------------ v1.5.0
+   The CEO, 25-08-2026: "on portal I want an option for me to upload the photo
+   and also to bridge directly to ELFIA … Shawl seem not yet being sync yet."
+
+   The shawls were never a sync failure — the store simply had no shawl
+   products, and a pull can only refresh what already exists. These steps prove
+   the feed can now bring one INTO existence, with its photo, without letting
+   the portal put anything in front of a customer unreviewed. */
+
+/* A code this store has never seen, fresh every run. The local D1 keeps
+   products between runs, so a fixed SHWL001 would test creation exactly once
+   and then quietly test nothing. Letters-then-digits so the stand-in portal
+   still spells it with a space ("SHWL 123456") — the whitespace match matters
+   on the creation path too. */
+const stamp = String(Date.now() % 1_000_000).padStart(6, "0");
+const SHAWL = `SHWL${stamp}`;
+const SHAWL_B = `SHWL${String((Number(stamp) + 1) % 1_000_000).padStart(6, "0")}`;
+let shawlId = null;
+
+step("start clean: retire fixtures other suites left in the store");
+{
+  /* scratch/portal-live-e2e.mjs (the real-portal rig) publishes a SHWL001.
+     The stand-in portal here does not carry that SKU, so a leftover row
+     would show up as "unknown there" in every reconciliation below. Same
+     retire trick as that suite uses: rename the SKU away and hide it. */
+  for (let i = 0; i < 5; i++) {
+    const left = await bySku("SHWL001");
+    if (!left) break;
+    await admin(`/admin/products/${left.id}`, {
+      method: "PUT", body: JSON.stringify({ sku: `RET${Date.now() % 1e9}${i}`, active: false }),
+    });
+  }
+  ok("no cross-suite fixture is still live", !(await bySku("SHWL001")));
+}
+
+step("start from an empty review queue");
+{
+  /* The same reasoning as "start from a settled outbox" above: the local
+     database survives between runs, and a row an earlier run left waiting
+     would make this one's counts read wrong. Dismissing leaves them hidden. */
+  for (const p of await adminProducts()) {
+    if (p.portal_pending === 1) {
+      await admin(`/admin/products/${p.id}/publish`, { method: "POST", body: JSON.stringify({ publish: false }) });
+    }
+  }
+  ok("nothing is waiting to be published", (await status()).portal_pending === 0);
+}
+
+step("a SKU the store has never had is CREATED, hidden (v1.5.0)");
+{
+  await portalAdd({ sku: SHAWL, name: "Shawl Premium — Beige", category: "shawl", price_cents: 5500, stock: 8, photo: "beige", marker: "v1" });
+  const r = await syncNow();
+  ok("the pull reports it as created", r.pull.created.some((c) => c.sku.replace(/\s+/g, "") === SHAWL),
+     JSON.stringify(r.pull.created));
+  ok("it is NOT reported as unmatched any more", !r.pull.unmatched_portal.some((x) => /SHWL/i.test(x)),
+     JSON.stringify(r.pull.unmatched_portal));
+
+  const p = await bySku(SHAWL);
+  shawlId = p?.id ?? null;
+  ok("the product exists in the store", Boolean(p));
+  ok("with the portal's name", p?.name === "Shawl Premium — Beige", p?.name);
+  ok("in the shawl collection", p?.category === "shawl", p?.category);
+  ok("at the portal's price and count", p?.price_cents === 5500 && p?.stock === 8,
+     JSON.stringify({ price: p?.price_cents, stock: p?.stock }));
+  ok("counted, not always-available", p?.track_stock === 1);
+  ok("marked as the portal's creation", p?.portal_created === 1);
+
+  /* The whole safety of this feature: the portal can propose, only a human
+     can publish. */
+  ok("it is HIDDEN — no customer can see it yet", p?.active === 0, `active=${p?.active}`);
+  ok("and it is waiting in the review queue", p?.portal_pending === 1);
+  const shopfront = (await jget(`${API}/products`)).products;
+  ok("the public catalogue does not carry it", !shopfront.some((x) => x.id === shawlId));
+}
+
+step("its photo was copied into the store's own storage");
+{
+  const p = await bySku(SHAWL);
+  ok("the product has a photo", Boolean(p?.image_key), String(p?.image_key));
+  ok("stored under the store's own key, not the portal's URL",
+     typeof p?.image_key === "string" && p.image_key.startsWith("products/") && !/^https?:/i.test(p.image_key),
+     String(p?.image_key));
+  /* Both spellings of the same key. The storefront used to build the second
+     one — encodeURIComponent over the whole key, slash and all — and the
+     Worker answered 404, which meant every uploaded photo was invisible.
+     Fixed on both sides in v1.5.0; asserted here so it cannot come back. */
+  const plain = await fetch(`${API}/media/${p.image_key}`);
+  ok("the store serves it", plain.status === 200, `${plain.status}`);
+  ok("as an image", (plain.headers.get("content-type") ?? "").startsWith("image/"), plain.headers.get("content-type"));
+  const encoded = await fetch(`${API}/media/${encodeURIComponent(p.image_key)}`);
+  ok("and serves it when the slash arrives percent-encoded", encoded.status === 200, `${encoded.status}`);
+}
+
+step("an unchanged marker costs nothing");
+{
+  const before = (await bySku(SHAWL)).image_key;
+  const r = await syncNow();
+  ok("no photo was downloaded again", r.pull.photos === 0, `photos=${r.pull.photos}`);
+  ok("and the photo is untouched", (await bySku(SHAWL)).image_key === before);
+}
+
+step("a changed marker replaces the photo");
+{
+  const before = (await bySku(SHAWL)).image_key;
+  await portalPhoto({ sku: SHAWL, photo: "beige2", marker: "v2" });
+  const r = await syncNow();
+  ok("the new photo was fetched", r.pull.photos === 1, `photos=${r.pull.photos}`);
+  const after = (await bySku(SHAWL)).image_key;
+  ok("and the product points at it", after && after !== before, `${before} -> ${after}`);
+}
+
+step("the portal never overwrites a photo chosen in /admin");
+{
+  /* LUMI003 ships with a hand-picked campaign shot. The portal offering one
+     must not be able to wipe it — prices moved to the portal, photography
+     did not. */
+  const p3 = await bySku("LUMI003");
+  const before = p3.image_key;
+  ok("the store's own photo is not a portal one to begin with", !p3.image_marker, String(p3.image_marker));
+  await portalPhoto({ sku: "LUMI 003", photo: "hijack", marker: "x1" });
+  const r = await syncNow();
+  const after = await bySku("LUMI003");
+  ok("the store's photo stands", after.image_key === before, `${before} -> ${after.image_key}`);
+  ok("and nothing was counted as copied", r.pull.photos === 0, `photos=${r.pull.photos}`);
+  await portalPhoto({ sku: "LUMI 003", photo: null });
+}
+
+step("a hidden product keeps syncing while it waits for review");
+{
+  await portalSet(SHAWL, 20);
+  await fetch(`${PORTAL}/_price`, { method: "POST", body: JSON.stringify({ sku: SHAWL, price_cents: 5900 }) });
+  await syncNow();
+  const p = await bySku(SHAWL);
+  ok("its count followed the portal (20)", p.stock === 20, `stock=${p.stock}`);
+  ok("its price followed the portal (RM 59)", p.price_cents === 5900, `price=${p.price_cents}`);
+  ok("it is still hidden", p.active === 0);
+}
+
+step("a waiting product is not accused of being unknown to the portal");
+{
+  const r = await syncNow();
+  ok("the report leaves the pending row out of 'unknown there'",
+     !r.pull.unmatched_store.some((x) => /SHWL/i.test(x)), JSON.stringify(r.pull.unmatched_store));
+}
+
+step("Publish puts it in the shop");
+{
+  const pendingBefore = (await status()).portal_pending;
+  const res = await admin(`/admin/products/${shawlId}/publish`, { method: "POST", body: "{}" });
+  ok("publish accepted", res.status === 200, `${res.status}`);
+  const p = await bySku(SHAWL);
+  ok("it is live", p.active === 1);
+  ok("and out of the review queue", p.portal_pending === 0);
+  const shopfront = (await jget(`${API}/products`)).products;
+  ok("customers can now see it", shopfront.some((x) => x.id === shawlId));
+  const st = await status();
+  ok("the review counter went down by one", st.portal_pending === pendingBefore - 1,
+     `${pendingBefore} -> ${st.portal_pending}`);
+}
+
+step("a photo the store will not accept is reported, and stops nothing");
+{
+  const pendingBefore = (await status()).portal_pending;
+  await portalAdd({ sku: SHAWL_B, name: "Shawl Premium — Taupe", category: "shawl", price_cents: 5500, stock: 5, photo: "html", marker: "h1" });
+  const r = await syncNow();
+  ok("the product is still created", r.pull.created.some((c) => c.sku.replace(/\s+/g, "") === SHAWL_B), JSON.stringify(r.pull.created));
+  ok("the pull itself did not fail", !r.pull.error, String(r.pull.error));
+  ok("the bad photo is named for a human", r.pull.photo_errors.some((e) => /SHWL/i.test(e)), JSON.stringify(r.pull.photo_errors));
+  ok("and it says what was wrong", r.pull.photo_errors.some((e) => /JPEG|PNG|WEBP|type/i.test(e)), JSON.stringify(r.pull.photo_errors));
+  const p = await bySku(SHAWL_B);
+  ok("the product simply has no photo yet", !p.image_key, String(p.image_key));
+  const st = await status();
+  ok("/admin sees the photo problem on its own line", /SHWL/i.test(st.last_photo_error ?? ""), st.last_photo_error ?? "(none)");
+  ok("and it joined the review queue", st.portal_pending === pendingBefore + 1,
+     `${pendingBefore} -> ${st.portal_pending}`);
+}
+
+step("an oversized photo is refused too");
+{
+  await portalPhoto({ sku: SHAWL_B, photo: "huge", marker: "h2" });
+  const r = await syncNow();
+  ok("the 6 MB file is refused", r.pull.photo_errors.some((e) => /5 MB/i.test(e)), JSON.stringify(r.pull.photo_errors));
+  ok("nothing was stored", !(await bySku(SHAWL_B)).image_key);
+}
+
+step("Dismiss clears the queue without publishing");
+{
+  const p = await bySku(SHAWL_B);
+  await admin(`/admin/products/${p.id}/publish`, { method: "POST", body: JSON.stringify({ publish: false }) });
+  const after = await bySku(SHAWL_B);
+  ok("still hidden", after.active === 0);
+  ok("but out of the queue", after.portal_pending === 0);
+  const shopfront = (await jget(`${API}/products`)).products;
+  ok("and still invisible to customers", !shopfront.some((x) => x.id === after.id));
+}
+
+step("a feed item with no name is reported, never invented");
+{
+  await portalAdd({ sku: "NONAME 001", name: null, price_cents: 4900, stock: 3 });
+  const r = await syncNow();
+  ok("it is reported as unknown here", r.pull.unmatched_portal.some((x) => /NONAME/i.test(x)),
+     JSON.stringify(r.pull.unmatched_portal));
+  ok("and no nameless product was created", !r.pull.created.some((c) => /NONAME/i.test(c.sku)));
+  ok("the store did not make one up", !(await bySku("NONAME001")));
+  await portalRemove("NONAME 001");
+}
+
+step("a feed item with no price is reported, never sold for nothing");
+{
+  await portalAdd({ sku: "NOPRICE 001", name: "Shawl Premium — Nothing", stock: 3 });
+  const r = await syncNow();
+  ok("it is reported rather than created", r.pull.unmatched_portal.some((x) => /NOPRICE/i.test(x)),
+     JSON.stringify(r.pull.unmatched_portal));
+  ok("no priceless product exists", !(await bySku("NOPRICE001")));
+  await portalRemove("NOPRICE 001");
+}
+
+step("tidy up after this run");
+{
+  /* The store keeps products; the stand-in portal forgets everything when it
+     restarts. Left alone, this run's two shawls would show up as "unknown
+     there" at the start of the next one — the same reason the GHOST001 step
+     retires its product. */
+  for (const sku of [SHAWL, SHAWL_B]) {
+    const p = await bySku(sku);
+    if (p) await admin(`/admin/products/${p.id}`, { method: "PUT", body: JSON.stringify({ active: false }) });
+    await portalRemove(sku);
+  }
+  const r = await syncNow();
+  ok("the store and the portal agree again", r.pull.unmatched_store.length === 0 && r.pull.unmatched_portal.length === 0,
+     JSON.stringify({ store: r.pull.unmatched_store, portal: r.pull.unmatched_portal }));
 }
 
 console.log(`\n${fail === 0 ? "ALL PASS" : "FAILURES"} — ${pass} passed, ${fail} failed`);

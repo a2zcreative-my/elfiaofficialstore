@@ -74,7 +74,7 @@ export interface Env {
   STORE_ORIGIN?: string;     // override for local testing
 }
 
-const VERSION = "1.3.0";
+const VERSION = "1.5.1";
 const STATUSES = ["pending_payment", "payment_review", "paid", "shipped", "completed", "cancelled"] as const;
 type Status = (typeof STATUSES)[number];
 
@@ -281,11 +281,12 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
       const probe = async (q: string): Promise<boolean> => {
         try { await env.DB.prepare(q).first(); return true; } catch { return false; }
       };
-      const [accounts, progress, syncReady, traffic, consent] = await Promise.all([
+      const [accounts, progress, syncReady, traffic, consent, portalProducts] = await Promise.all([
         table("customers"), table("order_events"), table("stock_events"), table("traffic_hits"),
         probe("SELECT marketing_consent_at FROM customers LIMIT 1"),
+        probe("SELECT portal_pending FROM products LIMIT 1"),
       ]);
-      const migrationsCurrent = accounts && progress && syncReady && traffic && consent;
+      const migrationsCurrent = accounts && progress && syncReady && traffic && consent && portalProducts;
       const cfg = storeConfig(env);
       return json({
         ok: db && migrationsCurrent, version: VERSION, db, r2,
@@ -298,6 +299,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
             ...(syncReady ? [] : ["stock_events (0008 — inventory sync will fail)"]),
             ...(traffic ? [] : ["traffic_hits (0011 — visitor traffic will not count)"]),
             ...(consent ? [] : ["marketing_consent (0012 — PDPA consent will not record)"]),
+            ...(portalProducts ? [] : ["portal_products (0013 — the portal cannot create products or send photos)"]),
           ],
         }),
         admin_key_configured: Boolean(env.ADMIN_KEY),
@@ -357,8 +359,20 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
       return json({ product });
     }
 
-    // Product photos are public; receipts are NOT under this route.
-    const mediaMatch = path.match(/^\/media\/(products\/[\w.-]+)$/);
+    /* Product photos are public; receipts are NOT under this route.
+
+       v1.5.0 — the pattern is matched against the DECODED path. The
+       storefront builds this URL with encodeURIComponent over the whole key,
+       which turns the slash in "products/12-….jpg" into %2F, and
+       URL.pathname keeps it that way — so every photo uploaded in /admin was
+       answered 404 while every photo shipped under /collection/ (which never
+       comes through here) looked fine. It surfaced the moment the portal
+       started delivering photos in v1.5.0. lib/config.ts no longer encodes
+       the slash either; this side stays tolerant so an already-deployed page
+       is not left broken. */
+    let decodedPath = path;
+    try { decodedPath = decodeURIComponent(path); } catch { /* malformed % — match the raw form */ }
+    const mediaMatch = decodedPath.match(/^\/media\/(products\/[\w.-]+)$/);
     if (mediaMatch && method === "GET") {
       const obj = await env.MEDIA.get(mediaMatch[1]!);
       if (!obj) return err("not_found", "No such file", 404);
@@ -1062,6 +1076,25 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
         return json({ image_key: key }, 201);
       }
 
+      /* v1.5.0 — the review queue for products the PORTAL created.
+         The bridge creates them hidden (portal_pending = 1); this is where a
+         human decides. Publish puts it in the shop; Dismiss takes it out of
+         the queue and leaves it hidden, so the same SKU is not re-proposed on
+         every pull — the row exists now, so later pulls just refresh it.
+         Neither action can be taken by the portal itself: this endpoint is
+         behind the admin key like everything else under /admin. */
+      const adminPublish = path.match(/^\/admin\/products\/(\d+)\/publish$/);
+      if (adminPublish && method === "POST") {
+        const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
+        const publish = body?.publish !== false;   // default: yes, publish it
+        const row = await env.DB.prepare(`SELECT id, name, active, portal_pending FROM products WHERE id = ?1`)
+          .bind(adminPublish[1]!).first<{ id: number; name: string; active: number; portal_pending: number }>();
+        if (!row) return err("not_found", "Product not found", 404);
+        await env.DB.prepare(`UPDATE products SET active = ?1, portal_pending = 0 WHERE id = ?2`)
+          .bind(publish ? 1 : row.active, row.id).run();
+        return json({ ok: true, id: row.id, active: publish ? 1 : row.active });
+      }
+
       /* v0.6.0 — the restock waitlist. Open requests first, oldest first:
          the person who has waited longest is the one to message next. */
       if (path === "/admin/notify" && method === "GET") {
@@ -1149,6 +1182,11 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
           last_pull_result: state.last_pull_result ?? null,
           last_push_at: state.last_push_at ?? null,
           last_push_error: state.last_push_error || null,
+          /* v1.5.0 — photo trouble is reported on its own line so a clean
+             count sync cannot make a failed photo look like success. */
+          last_photo_error: state.last_photo_error || null,
+          portal_pending: await env.DB.prepare(`SELECT COUNT(*) AS n FROM products WHERE portal_pending = 1`)
+            .first<{ n: number }>().then((r) => r?.n ?? 0).catch(() => 0),
           recent,
         });
       }

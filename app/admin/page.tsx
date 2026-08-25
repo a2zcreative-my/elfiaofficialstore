@@ -76,6 +76,11 @@ interface SyncStatus {
   pending: number; stuck: number; oldest_unsent: string | null;
   last_pull_at: string | null; last_pull_result: string | null;
   last_push_at: string | null; last_push_error: string | null;
+  /* v1.5.0 — photo trouble on its own line (a clean count sync must not make
+     a failed photo look like success), and how many products the portal has
+     proposed and nobody has published yet. */
+  last_photo_error?: string | null;
+  portal_pending?: number;
 }
 
 /** v0.6.0 — a "tell me when it's back" request from a sold-out product page. */
@@ -242,6 +247,19 @@ export default function Admin() {
     void load(key);
   };
 
+  /* v1.5.0 — decide on a product the portal proposed. `publish: true` puts it
+     in the shop; `false` only clears it from this list and leaves it hidden. */
+  const reviewPortal = async (id: number, publish: boolean) => {
+    await fetch(`/api/v1/admin/products/${id}/publish`, {
+      method: "POST", headers: hdr(key), body: JSON.stringify({ publish }),
+    });
+    void load(key);
+  };
+
+  /* Waiting for review. Oldest first — the one that has been sitting longest
+     is the one to look at next. */
+  const fromPortal = products.filter((p) => p.portal_pending === 1).sort((a, b) => a.id - b.id);
+
   if (!authed) {
     return (
       <main className="px-6 py-24">
@@ -262,8 +280,12 @@ export default function Admin() {
     <main className="px-6 py-10">
       <div className="mx-auto w-full max-w-4xl">
         <div className="flex items-center gap-3">
+          {/* v1.5.0 — the Products tab carries the review count, so a product
+              the portal proposed cannot sit unnoticed behind another tab. */}
           {(["orders", "products", "waitlist"] as const).map((t) => {
-            const open = t === "waitlist" ? waitlist.filter((w) => !w.notified_at).length : 0;
+            const open = t === "waitlist" ? waitlist.filter((w) => !w.notified_at).length
+                       : t === "products" ? fromPortal.length
+                       : 0;
             return (
               <button key={t} type="button"
                 className={`rounded-lg px-4 py-2 text-sm font-semibold capitalize ${tab === t ? "bg-[#7a2648] text-white" : "bg-white text-stone-600 hover:bg-stone-100"}`}
@@ -426,6 +448,7 @@ export default function Admin() {
                       <>
                         <p className="text-stone-600">{sync.last_pull_result ?? "not run yet"}</p>
                         {sync.last_pull_at && <p className="text-stone-500">last read {sync.last_pull_at.slice(0, 16).replace("T", " ")}</p>}
+                        {sync.last_photo_error && <p className="text-red-700">Photo: {sync.last_photo_error}</p>}
                       </>
                     )}
                   </div>
@@ -434,6 +457,57 @@ export default function Admin() {
 
               {syncMsg && <p className="mt-3 border-t border-stone-100 pt-3 text-xs font-medium whitespace-pre-wrap text-stone-700">{syncMsg}</p>}
             </div>
+            {/* v1.5.0 — From portal. The bridge can now CREATE a product the
+                store has never had (this is how the shawls finally arrive),
+                but it creates it HIDDEN. Nothing the portal proposes reaches a
+                customer until someone here says so. Publish puts it in the
+                shop; Dismiss takes it out of this list and leaves it hidden —
+                the row still exists, so later pulls just refresh it instead of
+                proposing it again. */}
+            {fromPortal.length > 0 && (
+              <div className="mt-4 rounded-xl border border-[#7a2648]/30 bg-[#7a2648]/5 p-4">
+                <p className="text-sm font-semibold text-[#7a2648]">
+                  From portal — {fromPortal.length} waiting for you
+                </p>
+                <p className="mt-0.5 text-xs text-stone-600">
+                  The portal sent these; they are hidden from the shop until you publish them.
+                  Check the photo, the name and the price first.
+                </p>
+                <div className="mt-3 space-y-2">
+                  {fromPortal.map((p) => (
+                    <div key={p.id} className="flex items-center gap-3 rounded-lg border border-stone-200 bg-white p-3">
+                      <div className="h-14 w-12 shrink-0 overflow-hidden rounded-lg bg-stone-100">
+                        {p.image_key ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={imageUrl(p.image_key)} alt="" className="h-full w-full object-cover object-top" />
+                        ) : (
+                          <span className="flex h-full items-center justify-center text-[9px] text-stone-400">no photo</span>
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium">{p.name}</p>
+                        <p className="text-xs text-stone-500">
+                          {p.sku ? `${p.sku} · ` : ""}{(p.category ?? "bawal") === "shawl" ? "Shawl" : "Bawal"} ·{" "}
+                          {fmtRM(p.price_cents)} · stock {p.stock}
+                        </p>
+                        {!p.image_key && (
+                          <p className="text-xs text-amber-700">No photo came through — add one before publishing.</p>
+                        )}
+                      </div>
+                      <button type="button" className={btnClass}
+                        onClick={() => void reviewPortal(p.id, true)}>
+                        Publish
+                      </button>
+                      <button type="button" className="text-xs text-stone-500 underline"
+                        onClick={() => void reviewPortal(p.id, false)}>
+                        dismiss
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <form onSubmit={saveProduct} className="mt-4 rounded-xl border border-stone-200 bg-white p-4">
               <p className="text-sm font-semibold text-[#7a2648]">
                 {editing ? `Editing #${editing}` : "Add product"}

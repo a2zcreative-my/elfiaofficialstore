@@ -1,24 +1,29 @@
-elfia-store v1.3.0 — 74 files
+elfia-store v1.5.0 — 82 files
 
-CHANGELOG.md	31993
+CHANGELOG.md	44904
 DEPLOY.bat	7697
 FILE-MANIFEST.txt	this file
 PORTAL-BRIDGE-SPEC.md	12750
+PORTAL-PHOTO-SYNC-HANDOFF.md	6289
 README.md	8084
-app/account/page.tsx	16011
-app/admin/page.tsx	33626
-app/cart/page.tsx	6426
-app/checkout/page.tsx	7492
-app/chrome.tsx	9684
-app/globals.css	210
+app/account/page.tsx	24849
+app/admin/page.tsx	37847
+app/cart/page.tsx	8088
+app/categories/page.tsx	5261
+app/checkout/page.tsx	12212
+app/chrome.tsx	15323
+app/globals.css	3296
 app/icon.png	2280
-app/layout.tsx	3366
-app/order/page.tsx	16771
-app/p/page.tsx	9060
-app/page.tsx	10100
+app/layout.tsx	2748
+app/order/page.tsx	23189
+app/p/page.tsx	13128
+app/page.tsx	12738
 app/policies/page.tsx	7166
-app/track/page.tsx	5587
-lib/config.ts	10358
+app/shop/page.tsx	8581
+app/track/page.tsx	5916
+app/ui.tsx	12129
+app/wishlist/page.tsx	3689
+lib/config.ts	15880
 next-env.d.ts	262
 next.config.ts	222
 package.json	456
@@ -43,12 +48,14 @@ public/collection/shawl-grey-profile.jpg	57062
 public/collection/shawl-grey.jpg	82129
 public/collection/shawl-taupe.jpg	93391
 public/logo.png	21125
-scratch/fake-portal.mjs	4047
+scratch/fake-portal.mjs	7947
+scratch/preview-server.mjs	5329
 scratch/serve-local.mjs	2548
 scratch/store-e2e-live.mjs	24277
 scratch/store-e2e.mjs	9690
 scratch/store-journey.mjs	9479
-scratch/store-sync-test.mjs	15079
+scratch/store-sync-test.mjs	26679
+scratch/tabbar-check.mjs	3979
 tests/brand-isolation.mjs	1529
 tests/no-secrets.mjs	5329
 tests/worker-compile-gate.mjs	426
@@ -65,11 +72,12 @@ worker/migrations/0009_order_progress.sql	2506
 worker/migrations/0010_accounts_and_holds.sql	4107
 worker/migrations/0011_traffic.sql	2379
 worker/migrations/0012_marketing_consent.sql	1253
+worker/migrations/0013_portal_products.sql	1971
 worker/package.json	358
 worker/src/auth.ts	8245
 worker/src/billplz.ts	9791
-worker/src/index.ts	72312
-worker/src/portal.ts	15118
+worker/src/index.ts	75059
+worker/src/portal.ts	26921
 worker/src/traffic.ts	8332
 worker/tsconfig.json	288
 worker/wrangler.e2e.toml	2408

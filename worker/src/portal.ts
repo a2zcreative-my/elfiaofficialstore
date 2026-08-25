@@ -21,6 +21,22 @@
  *   that still has unsent events, because that count was computed before the
  *   portal saw our sales and would silently put sold pieces back.
  *
+ * PHOTOS AND NEW PRODUCTS (v1.5.0, CEO: "on portal I want an option for me to
+ *   upload the photo and also to bridge directly to ELFIA … Shawl seem not yet
+ *   being sync yet").
+ *   The shawls were never a sync failure: the pull can only refresh a SKU the
+ *   store already has, and ELFIA has no shawl products at all. So a feed item
+ *   that matches nothing is no longer just reported — if it carries a `name`
+ *   and a usable `price_cents`, the store CREATES it, hidden, and puts it in
+ *   /admin -> Products -> From portal for a human to publish. Nothing the
+ *   portal invents reaches a customer unseen.
+ *   A photo arrives as `image_url` + `image_updated_at`. The file is copied
+ *   into ELFIA's own R2 once and re-copied only when the marker changes, so
+ *   the shop never hot-links the portal and a five-minute cron costs nothing.
+ *   Photo ownership follows the same doctrine as everything else here: the
+ *   portal may fill an EMPTY photo, and may replace a photo IT provided, but
+ *   it never overwrites one uploaded in /admin. See takesPortalPhoto().
+ *
  * PRICES (v1.1.0, CEO: "make the prices sync with my system which is easier
  *   for me to control in /portal"). When the feed carries `price_cents` for a
  *   SKU, the portal owns that price and every pull applies it. When it does
@@ -43,6 +59,22 @@ import type { Env } from "./index";
     needs to look — but the row is kept, never dropped. */
 const MAX_ATTEMPTS = 25;
 const BATCH = 50;
+
+/* v1.5.0 — photo copying. A portal photo is a product shot, not a raw camera
+   dump: 5 MB is generous for 4:5 at 900px and small enough that a mistake
+   cannot fill the bucket. Only the three formats the storefront and /admin
+   already accept. */
+const MAX_PHOTO_BYTES = 5 * 1024 * 1024;
+const PHOTO_TIMEOUT_MS = 10_000;
+const PHOTO_EXT: Record<string, string> = {
+  "image/jpeg": "jpg", "image/jpg": "jpg", "image/png": "png", "image/webp": "webp",
+};
+/* Refuse anything that would make the Worker fetch the inside of a network:
+   loopback, link-local and the RFC1918 ranges. */
+const PRIVATE_HOST = /^(localhost|\[?::1\]?|0\.0\.0\.0|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/i;
+
+/** Trim and cap a string the portal sent. Anything empty comes back "". */
+const clean = (v: unknown, max: number): string => String(v ?? "").trim().slice(0, max);
 
 const configured = (v: string | undefined): boolean => Boolean(v && !v.startsWith("REPLACE"));
 
@@ -192,6 +224,106 @@ export async function flushStockEvents(env: Env): Promise<FlushResult> {
   return { configured: true, sent: done.length, ...(await counts()) };
 }
 
+/* ---------------------------------------------------------------- photos --
+   v1.5.0. The portal serves a public URL; the store copies the bytes into its
+   own R2 and serves them from /api/v1/media/products/…, exactly like a photo
+   uploaded in /admin. Hot-linking the portal would mean the ELFIA shop shows
+   broken images the day a file is moved or the portal is down. */
+
+/** Where a photo may legitimately come from.
+
+    Same origin as the inventory feed = the portal itself, allowed on any
+    scheme so the local test rig (http://127.0.0.1:8200) works. Anywhere else
+    must be public https — a URL pointing at 127.0.0.1 or 10.x from a feed
+    would turn this Worker into a probe of whatever network it runs on. */
+function photoTarget(env: Env, raw: string): { url: URL; sameOrigin: boolean } | { error: string } {
+  let u: URL;
+  try { u = new URL(raw); } catch { return { error: "image_url is not a URL" }; }
+  let feedOrigin = "";
+  try { feedOrigin = new URL(env.BRIDGE_URL!).origin; } catch { /* unset — handled below */ }
+  if (feedOrigin && u.origin === feedOrigin) return { url: u, sameOrigin: true };
+  if (u.protocol !== "https:") return { error: "image_url must be https, or served from the portal's own host" };
+  if (PRIVATE_HOST.test(u.hostname)) return { error: "image_url points at a private address" };
+  return { url: u, sameOrigin: false };
+}
+
+/**
+ * Who owns this product's photo?
+ *
+ * The portal may FILL an empty one, and may REPLACE one it provided itself
+ * (a row it created, or a row whose current photo it already delivered —
+ * that is what a non-null image_marker means). It never overwrites a photo
+ * uploaded in /admin: the campaign shots shipped with the site were chosen by
+ * hand, and a feed should not be able to wipe them.
+ */
+const takesPortalPhoto = (p: { image_key: string | null; portal_created: number; image_marker: string | null }): boolean =>
+  !p.image_key || p.portal_created === 1 || p.image_marker !== null;
+
+/** Copy one photo into R2 and point the product at it. Never throws — a photo
+    problem must not stop counts and prices from syncing. */
+async function syncPhoto(
+  env: Env,
+  product: { id: number; image_key: string | null; portal_created: number; image_marker: string | null },
+  imageUrl: string,
+  marker: string,
+): Promise<{ ok: true } | { ok: false; error: string } | { ok: "skip" }> {
+  if (!imageUrl) return { ok: "skip" };
+  if (!takesPortalPhoto(product)) return { ok: "skip" };
+  /* The whole point of the marker: an unchanged one means an unchanged file,
+     so a feed can repeat image_url every five minutes for free. A feed that
+     sends no marker at all is taken at its word once — the photo is fetched
+     only while the product still has none. */
+  const seen = product.image_marker ?? "";
+  if (marker && seen === marker) return { ok: "skip" };
+  if (!marker && product.image_key) return { ok: "skip" };
+
+  const target = photoTarget(env, imageUrl);
+  if ("error" in target) return { ok: false, error: target.error };
+
+  let r: Response;
+  try {
+    r = await fetch(target.url.toString(), {
+      /* The key travels only to the portal's own host. A photo hosted
+         elsewhere is public by contract and gets no secret from us. */
+      headers: target.sameOrigin && env.BRIDGE_KEY ? { "X-Bridge-Key": env.BRIDGE_KEY } : {},
+      signal: AbortSignal.timeout(PHOTO_TIMEOUT_MS),
+    });
+  } catch (e) {
+    return { ok: false, error: e instanceof Error && e.name === "TimeoutError" ? "photo download timed out" : "photo download failed" };
+  }
+  if (!r.ok) return { ok: false, error: `photo download answered ${r.status}` };
+
+  const ct = (r.headers.get("Content-Type") ?? "").split(";")[0]!.trim().toLowerCase();
+  const ext = PHOTO_EXT[ct];
+  if (!ext) return { ok: false, error: `photo is ${ct || "an unknown type"} — only JPEG, PNG or WEBP` };
+
+  const declared = Number(r.headers.get("Content-Length"));
+  if (Number.isFinite(declared) && declared > MAX_PHOTO_BYTES) {
+    return { ok: false, error: `photo is ${(declared / 1048576).toFixed(1)} MB — the limit is 5 MB` };
+  }
+  let bytes: ArrayBuffer;
+  try { bytes = await r.arrayBuffer(); } catch { return { ok: false, error: "photo download broke off" }; }
+  if (bytes.byteLength === 0) return { ok: false, error: "photo was empty" };
+  if (bytes.byteLength > MAX_PHOTO_BYTES) {
+    return { ok: false, error: `photo is ${(bytes.byteLength / 1048576).toFixed(1)} MB — the limit is 5 MB` };
+  }
+
+  /* Same key shape as an /admin upload, so /api/v1/media/products/… serves it
+     with no special case, and the timestamp busts any CDN copy of the old one. */
+  const key = `products/${product.id}-${Date.now()}.${ext}`;
+  try {
+    await env.MEDIA.put(key, bytes, { httpMetadata: { contentType: ct === "image/jpg" ? "image/jpeg" : ct } });
+  } catch {
+    return { ok: false, error: "could not store the photo" };
+  }
+  await env.DB.prepare(`UPDATE products SET image_key = ?1, image_marker = ?2 WHERE id = ?3`)
+    .bind(key, marker || new Date().toISOString(), product.id).run();
+  /* The previous file is deliberately left in the bucket, exactly as an
+     /admin re-upload leaves its predecessor: a page already served to a
+     customer may still be pointing at it. */
+  return { ok: true };
+}
+
 export interface PullResult {
   configured: boolean;
   updated: { sku: string; from: number; to: number }[];
@@ -202,11 +334,19 @@ export interface PullResult {
   unmatched_store: string[];
   /** SKUs left alone because the portal has not yet seen our sales for them. */
   deferred: string[];
+  /** v1.5.0 — products the feed brought in that the store did not have.
+      Created HIDDEN; they wait in /admin -> Products -> From portal. */
+  created: { sku: string; name: string }[];
+  /** Photos copied into R2 this pull. */
+  photos: number;
+  /** Photos that could not be copied, already phrased for a human. */
+  photo_errors: string[];
   error?: string;
 }
 
 const EMPTY_PULL: Omit<PullResult, "configured" | "error"> = {
   updated: [], price_updated: [], unchanged: 0, unmatched_portal: [], unmatched_store: [], deferred: [],
+  created: [], photos: 0, photo_errors: [],
 };
 
 /** Refresh piece counts from the portal, by SKU — case- and whitespace-
@@ -215,7 +355,15 @@ export async function pullStock(env: Env): Promise<PullResult> {
   if (!pullConfigured(env)) {
     return { configured: false, ...EMPTY_PULL, error: "Set BRIDGE_URL (wrangler.toml) and the BRIDGE_KEY secret first — see PORTAL-BRIDGE-SPEC.md" };
   }
-  let items: { sku: string; name?: string; stock: number; price_cents?: number }[];
+  /* v1.5.0 — four optional additions, all documented in
+     PORTAL-PHOTO-SYNC-HANDOFF.md. Every one of them is optional and an absent
+     field means "the store keeps what it has", so a portal that has not
+     shipped its half yet keeps working exactly as before. */
+  let items: {
+    sku: string; stock: number; price_cents?: number;
+    name?: string; category?: string; description?: string;
+    image_url?: string; image_updated_at?: string;
+  }[];
   try {
     const r = await fetch(env.BRIDGE_URL!, { headers: { "X-Bridge-Key": env.BRIDGE_KEY! } });
     if (!r.ok) throw new Error(`portal answered ${r.status} — check the key matches on both sides`);
@@ -226,12 +374,21 @@ export async function pullStock(env: Env): Promise<PullResult> {
     return { configured: true, ...EMPTY_PULL, error: msg };
   }
 
-  /* Active products only. A hidden or retired row is not something the
-     portal needs to carry, and listing it as "missing there" turns the
-     reconciliation report into noise nobody reads. */
+  /* Active products, plus (v1.5.0) the hidden ones the portal itself created
+     and is still waiting to have published: their counts and prices must stay
+     current while they sit in the review list, or the CEO publishes a stale
+     number. A hidden or retired row that the portal did NOT create is still
+     left out — listing it as "missing there" turns the reconciliation report
+     into noise nobody reads. */
   const { results: mine } = await env.DB.prepare(
-    `SELECT id, sku, stock, price_cents, track_stock FROM products WHERE sku IS NOT NULL AND active = 1`,
-  ).all<{ id: number; sku: string; stock: number; price_cents: number; track_stock: number }>();
+    `SELECT id, sku, name, category, description, stock, price_cents, track_stock,
+            image_key, image_marker, portal_created, portal_pending
+       FROM products WHERE sku IS NOT NULL AND (active = 1 OR portal_pending = 1)`,
+  ).all<{
+    id: number; sku: string; name: string; category: string | null; description: string | null;
+    stock: number; price_cents: number; track_stock: number;
+    image_key: string | null; image_marker: string | null; portal_created: number; portal_pending: number;
+  }>();
   const bySku = new Map(mine.map((m) => [normSku(m.sku), m]));
 
   /* Any SKU whose sales are still sitting in the outbox must not be
@@ -245,15 +402,64 @@ export async function pullStock(env: Env): Promise<PullResult> {
   const price_updated: PullResult["price_updated"] = [];
   const unmatched_portal: string[] = [];
   const deferred: string[] = [];
+  const created: PullResult["created"] = [];
+  const photo_errors: string[] = [];
   let unchanged = 0;
+  let photos = 0;
+
+  /** One place to run a photo through, so creation and refresh behave the same. */
+  const doPhoto = async (
+    product: { id: number; image_key: string | null; portal_created: number; image_marker: string | null },
+    it: { sku: string; image_url?: string; image_updated_at?: string },
+  ) => {
+    const src = clean(it.image_url, 2000);
+    if (!src) return;
+    const res = await syncPhoto(env, product, src, clean(it.image_updated_at, 200));
+    if (res.ok === true) photos += 1;
+    else if (res.ok === false) photo_errors.push(`${clean(it.sku, 40)}: ${res.error}`);
+  };
 
   for (const it of items) {
     const sku = normSku(it.sku);
     const stock = Math.max(0, Math.round(Number(it.stock)));
     const m = sku ? bySku.get(sku) : undefined;
-    /* Report the portal's own spelling — "LUMI 999 is unknown here" is a code
-       the CEO can find on her portal screen; the squashed form is not. */
-    if (!m || !Number.isFinite(stock)) { if (sku) unmatched_portal.push(String(it.sku).trim()); continue; }
+
+    /* ---- v1.5.0: a SKU this store has never heard of ----
+       Until now this was only reported, which is why the shawls sat in the
+       portal forever: the pull can refresh a product, but nothing could ever
+       bring one into existence. Now, if the item carries a name and a usable
+       price, it is created HIDDEN and queued for review. Without those two
+       facts there is nothing honest to create — a product needs a name to be
+       called and a price to be sold — so it is reported exactly as before. */
+    if (!m) {
+      if (!sku || !Number.isFinite(stock)) continue;
+      const name = clean(it.name, 200);
+      const newPrice = Math.round(Number(it.price_cents));
+      if (!name || !Number.isFinite(newPrice) || newPrice <= 0) {
+        /* Report the portal's own spelling — "LUMI 999 is unknown here" is a
+           code the CEO can find on her portal screen; the squashed form is
+           not. */
+        unmatched_portal.push(clean(it.sku, 40));
+        continue;
+      }
+      const category = clean(it.category, 20).toLowerCase() === "shawl" ? "shawl" : "bawal";
+      /* v1.5.1 — the portal's ELFIA tab also writes the product's
+         description; a feed that carries one hands it over at birth. */
+      const desc = clean(it.description, 2000) || null;
+      const row = await env.DB.prepare(
+        `INSERT INTO products (name, description, price_cents, stock, active, sort, sku, category,
+                               featured, track_stock, portal_created, portal_pending)
+         VALUES (?1, ?2, ?3, ?4, 0, 100, ?5, ?6, 0, 1, 1, 1) RETURNING id`,
+      ).bind(name, desc, newPrice, stock, clean(it.sku, 40), category)
+       .first<{ id: number }>()
+       .catch(() => null);
+      if (!row) { unmatched_portal.push(clean(it.sku, 40)); continue; }
+      created.push({ sku: clean(it.sku, 40), name });
+      await doPhoto({ id: row.id, image_key: null, portal_created: 1, image_marker: null }, it);
+      continue;
+    }
+
+    if (!Number.isFinite(stock)) { unmatched_portal.push(clean(it.sku, 40)); continue; }
     bySku.delete(sku);
 
     /* Price first, and independently of the stock decision below: a SKU whose
@@ -266,6 +472,33 @@ export async function pullStock(env: Env): Promise<PullResult> {
       await env.DB.prepare(`UPDATE products SET price_cents = ?1 WHERE id = ?2`).bind(price, m.id).run();
       price_updated.push({ sku: m.sku, from: m.price_cents, to: price });
     }
+
+    /* v1.5.1 — a product the PORTAL created follows the portal's words, the
+       same way it follows the portal's photo: its name, collection and
+       description were authored in the portal's ELFIA tab, so an edit there
+       lands here on the next pull. A product made by hand in /admin is never
+       touched — the feed does not get to rewrite copy it did not write. */
+    if (m.portal_created === 1) {
+      const newName = clean(it.name, 200);
+      const newCat = clean(it.category, 20).toLowerCase();
+      const newDesc = it.description !== undefined ? (clean(it.description, 2000) || null) : undefined;
+      const sets: string[] = [];
+      const vals: (string | null)[] = [];
+      const push = (col: string, val: string | null) => { sets.push(`${col} = ?${sets.length + 1}`); vals.push(val); };
+      if (newName && newName !== m.name) push("name", newName);
+      if ((newCat === "bawal" || newCat === "shawl") && newCat !== (m.category ?? "bawal")) push("category", newCat);
+      if (newDesc !== undefined && newDesc !== (m.description ?? null)) push("description", newDesc);
+      if (sets.length > 0) {
+        await env.DB.prepare(`UPDATE products SET ${sets.join(", ")} WHERE id = ?${sets.length + 1}`)
+          .bind(...vals, String(m.id)).run();
+      }
+    }
+
+    /* The photo, if the portal sent one and this product's photo is the
+       portal's to set (takesPortalPhoto). Done before the deferred check for
+       the same reason as the price: a customer looking at the shop right now
+       should see the current picture even if the count is being held back. */
+    await doPhoto(m, it);
 
     /* v1.1.2 — a SKU the portal carries is portal-managed: its count is real,
        so the storefront shows and enforces it from this pull on. "Always
@@ -282,15 +515,27 @@ export async function pullStock(env: Env): Promise<PullResult> {
     updated.push({ sku: m.sku, from: m.stock, to: stock });
   }
 
-  const unmatched_store = [...bySku.values()].map((m) => m.sku);
+  /* A row still waiting in the review list came FROM the portal, so calling
+     it "unknown there" the moment the feed drops it would be noise. Only
+     published products are reconciled against the portal. */
+  const unmatched_store = [...bySku.values()].filter((m) => m.portal_pending !== 1).map((m) => m.sku);
   await setState(env, "last_pull_at", new Date().toISOString());
   await setState(env, "last_pull_result",
     `ok: ${updated.length} updated, ${unchanged} unchanged` +
     `${price_updated.length ? `, ${price_updated.length} price${price_updated.length === 1 ? "" : "s"} updated` : ""}` +
+    `${created.length ? `, ${created.length} new product${created.length === 1 ? "" : "s"} waiting to publish` : ""}` +
+    `${photos ? `, ${photos} photo${photos === 1 ? "" : "s"}` : ""}` +
     `${deferred.length ? `, ${deferred.length} deferred` : ""}` +
     `${unmatched_portal.length ? `, ${unmatched_portal.length} unknown here` : ""}` +
     `${unmatched_store.length ? `, ${unmatched_store.length} unknown there` : ""}`);
-  return { configured: true, updated, price_updated, unchanged, unmatched_portal, unmatched_store, deferred };
+  /* Photo trouble is its own line: it must not be buried inside an otherwise
+     cheerful "ok:" summary, and it must not be wiped by a later clean pull
+     without saying so. */
+  await setState(env, "last_photo_error", photo_errors.length ? photo_errors.slice(0, 5).join(" · ") : "");
+  return {
+    configured: true, updated, price_updated, unchanged,
+    unmatched_portal, unmatched_store, deferred, created, photos, photo_errors,
+  };
 }
 
 /** What the cron and the /admin button both do: deliver, then refresh. */

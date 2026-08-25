@@ -237,7 +237,7 @@ function ProductInner() {
       {/* phone: the buy bar, pinned just above the tab bar. Appears only once
           the real button has scrolled away — see the observer above. */}
       {!out && showBar && (
-        <div className="animate-rise fixed inset-x-0 bottom-0 z-30 border-t border-elfia-line bg-white/95 px-4 pt-2.5 pb-[calc(0.625rem+4.5rem+env(safe-area-inset-bottom))] backdrop-blur sm:hidden">
+        <div className="animate-rise above-tabbar fixed inset-x-0 z-30 border-t border-elfia-line bg-white px-4 py-2.5 sm:hidden">
           <div className="flex items-center gap-2.5">
             <div className="flex h-12 shrink-0 items-center rounded-full border border-elfia-line">
               <button type="button" aria-label="Decrease quantity" className="h-12 w-10 text-lg text-elfia-body" onClick={() => setQty((q) => Math.max(1, q - 1))}>−</button>

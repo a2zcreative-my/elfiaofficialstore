@@ -31,6 +31,15 @@ export interface Product {
      product never reads Sold out); 1 = count pieces. Absent on a worker
      deployed ahead of migration 0007, where everything counted. */
   track_stock?: number;
+  /* v1.5.0 — products the portal bridge created (migration 0013).
+     portal_created: made by the bridge rather than by hand in /admin.
+     portal_pending: still waiting in /admin -> Products -> From portal;
+                     it is hidden from the shop until someone publishes it.
+     image_marker:   the portal's change-marker for the photo we last copied.
+     All absent on a worker deployed ahead of 0013. */
+  portal_created?: number;
+  portal_pending?: number;
+  image_marker?: string | null;
 }
 
 /** The single answer to "can this be bought right now?". Everything on the
@@ -149,8 +158,15 @@ export const fmtRM = (cents: number): string =>
 export const imageUrl = (key: string | null | undefined): string => {
   if (!key) return "";
   // "/collection/…" = a file shipped with the site; anything else is an R2
-  // key served through the worker (admin uploads).
-  return key.startsWith("/") ? key : `/api/v1/media/${encodeURIComponent(key)}`;
+  // key served through the worker (admin uploads, and from v1.5.0 photos the
+  // portal delivers).
+  //
+  // v1.5.0 — encode each SEGMENT, not the whole key. encodeURIComponent over
+  // "products/12-….jpg" turns the slash into %2F, which stays encoded in
+  // URL.pathname, so the Worker's media route never matched and every
+  // uploaded photo came back 404. Only the shipped /collection/ files, which
+  // return above, ever worked.
+  return key.startsWith("/") ? key : `/api/v1/media/${key.split("/").map(encodeURIComponent).join("/")}`;
 };
 
 /* ---- cart (browser-only; the server re-prices everything at checkout) ---- */

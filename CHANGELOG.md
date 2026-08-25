@@ -1,3 +1,178 @@
+# ELFIA OFFICIAL STORE — v1.5.1 (25-08-2026)
+
+## The portal's words, and the proof
+
+The CEO's correction: the photo upload, description and product controls
+belong in HER PORTAL, not in this store's /admin. The portal side was built
+for real today, in the portal's own repo (its new ELFIA tab: photo upload,
+description, collection and publish controls; the portal's own changelog
+carries the detail — this repo deliberately names no other company). This
+release is the store's half of the remaining gap, plus the cross-system
+proof.
+
+- **Feed A may now carry `description`.** A product the portal creates is
+  born with it; and a **portal-created** product follows the portal's name,
+  collection and description on every pull — the same ownership doctrine as
+  photos: the portal authors what it created, and never overwrites copy typed
+  in this store's /admin.
+- `scratch/portal-live-e2e.mjs` — **both real workers, no stand-ins** (this
+  store's Worker against the actual portal Worker, each on wrangler dev with
+  real D1 + R2): **22 assertions, passing twice over**. The portal-only shawl
+  arrives here hidden with its photo (copied into ELFIA's R2, byte-checked),
+  description and collection; an unchanged photo is not re-downloaded; a
+  portal description edit lands on the next pull while LUMI001's hand-written
+  copy is untouched; Publish puts it on the shopfront; and an ELFIA sale
+  walks back into the portal's stock ledger through the movements feed.
+- `scratch/store-sync-test.mjs` grew a start-clean step (cross-suite fixture
+  retirement) and stands at **92 assertions, all passing**.
+- `PORTAL-PHOTO-SYNC-HANDOFF.md` rewritten: it is no longer a request to a
+  portal chat — it is the record of the implemented contract on both sides.
+
+Worker-only change on this side and no migration; it rides along with the
+v1.5.0 deploy (DEPLOY.bat).
+
+# ELFIA OFFICIAL STORE — v1.5.0 (25-08-2026)
+
+## The portal can send a product, and its photo
+
+The CEO, on 25-08-2026: *"on portal I want an option for me to upload the
+photo and also to bridge directly to ELFIA. Which is all this must sync
+nicely, Shawl seem not yet being sync yet to ELFIA."*
+
+**The shawls were never a sync failure.** The pull can only refresh a SKU the
+store already has, and ELFIA has **no shawl products at all** — the collection
+was created in v0.2.0 and never filled, and no SKU series was ever assigned to
+it. So the portal's shawls matched nothing, every five minutes, forever, and
+were dutifully reported as "unknown here".
+
+### What the store now does
+
+- **Feed A may carry four more optional fields** — `name`, `category`,
+  `image_url`, `image_updated_at`. Every one is optional; a portal that has
+  not shipped its half yet behaves exactly as before.
+- **An unmatched SKU with a name and a usable price is CREATED**, not just
+  reported. Created **hidden** (`active = 0`, `portal_pending = 1`) and queued
+  in **/admin → Products → From portal**, where a human presses Publish or
+  Dismiss. Nothing the portal invents reaches a customer unseen — that was the
+  CEO's own choice when asked.
+  Without a name or a positive price it is still only reported: a product
+  needs something to be called and something to be sold for, and inventing
+  either is how two systems start lying to each other.
+- **Photos are copied into ELFIA's own R2**, never hot-linked. Re-copied only
+  when `image_updated_at` changes, so repeating the URL every five minutes
+  costs nothing. 5 MB cap, JPEG/PNG/WEBP only, 10s timeout.
+- **Photo ownership follows the same doctrine as everything else here**: the
+  portal may fill an EMPTY photo and may replace one it provided itself, but
+  it never overwrites a photo uploaded in /admin. The campaign shots were
+  chosen by hand; a feed does not get to wipe them.
+- **Hidden-but-pending products keep syncing** — their counts and prices stay
+  current while they wait, or the CEO would publish a stale number.
+- A photo that cannot be fetched is reported on its own line
+  (`last_photo_error`) and stops nothing: counts and prices still sync.
+- The Worker will only fetch a photo from the portal's own origin, or from a
+  public https host. A feed cannot point it at 127.0.0.1 or 10.x, and the
+  bridge key travels only to the portal's own host.
+
+New: migration `0013_portal_products.sql`, `POST /admin/products/:id/publish`,
+`portal_pending` + `last_photo_error` on `/admin/sync-status`, and the
+"From portal" review panel with a count on the Products tab.
+
+### Fixed along the way: every /admin photo upload was a 404
+
+Found by the new tests, and **live on the site right now**.
+
+`imageUrl()` built the URL with `encodeURIComponent` over the *whole* R2 key,
+turning the slash in `products/12-….jpg` into `%2F`. `URL.pathname` keeps it
+encoded, so the Worker's `/media/(products/…)` route never matched and the
+photo came back 404. Nobody noticed because all ten Bawal photos ship with
+the site under `/collection/` and return before that line — but a photo
+uploaded in /admin has never once been displayed.
+
+Fixed on both sides: the storefront encodes each path segment, and the Worker
+matches against the decoded path so any page already in someone's browser
+keeps working. Both spellings are now asserted in the sync test.
+
+### Verified
+
+- `scratch/store-sync-test.mjs` against `scratch/fake-portal.mjs` —
+  **91 assertions, all passing**, and passing again on an immediate re-run
+  (the suite cleans up after itself and uses a fresh SKU each time, so
+  "created" is genuinely exercised every run, not just the first).
+  New ground covered: a never-seen SKU is created hidden with the portal's
+  name/price/count/category; its photo lands in R2 and is served; an
+  unchanged marker downloads nothing; a changed marker replaces it; an
+  /admin photo is never overwritten; a pending row keeps syncing and is not
+  reported as "unknown there"; Publish makes it live; Dismiss clears it
+  without publishing; a text/html photo and a 6 MB photo are both refused
+  with a message a human can act on, and neither stops the sync; a nameless
+  or priceless item is reported, never invented.
+- Real Worker, real D1, real R2, real HTTP (wrangler dev --local).
+- `next build` clean · worker `tsc --noEmit` clean · `tests/no-secrets.mjs`,
+  `tests/brand-isolation.mjs`, `tests/worker-compile-gate.mjs` all PASS.
+- The From portal panel was driven in a browser end to end: two shawls
+  proposed, one photo accepted, one refused with the reason shown in red.
+
+### Deploying this one
+
+**Not Pages-only.** `DEPLOY.bat` handles it — it applies the migration
+(`wrangler d1 migrations apply elfia-store --remote`) before deploying the
+Worker, so one run does everything.
+
+### The portal still has to do its half
+
+`PORTAL-PHOTO-SYNC-HANDOFF.md` (repo root) is written to be pasted into the
+portal chat: a photo upload with a public image URL, the four feed fields, and
+a SKU series for the shawls (**`SHWL001` upward**). Until that lands, this
+release changes nothing visible — which is the point: it is safe to deploy
+first.
+
+# ELFIA OFFICIAL STORE — v1.4.1 (25-08-2026)
+
+## The dock sat on top of the shop
+
+The CEO sent a photo of the live site on her iPhone with the last row of
+products running underneath the bottom tab bar.
+
+It was a real bug, not a bad moment. Every screen cleared the bar with a
+hard-coded `5.25rem` (84px) — but the bar is **taller than that on a notched
+iPhone**, because it adds `env(safe-area-inset-bottom)` (34px) of its own
+padding to clear the home indicator. 62 + 34 = 96px of bar against 84px of
+clearance, so the bottom 12px of every page was covered.
+
+- **The bar now measures itself.** `BottomTabBar` publishes its real rendered
+  height as `--elfia-tabbar` (ResizeObserver on the **border box** — a
+  content-box observer never fires when only padding changes, which is exactly
+  what the safe-area inset is). `pb-tabbar`, `bottom-tabbar` and the new
+  `above-tabbar` all read that variable. Guessing a bigger number would only
+  have been a luckier guess.
+- **The bar is solid white, not translucent + `backdrop-blur`.** iOS Safari
+  repaints a backdrop-filter on a *fixed* element badly while the page is
+  scrolling, which is the smear visible in her screenshot.
+- The product page's phone buy bar now sits **on** the tab bar
+  (`above-tabbar`) instead of on its own hard-coded offset.
+
+### Verified
+
+- `scratch/tabbar-check.mjs` — **54 assertions, all passing**, over nine
+  screens, run twice: once plain, once with 34px injected into the bar to
+  simulate a notched iPhone (Chromium cannot emulate the real inset). Asserts
+  the published variable equals the bar's true height, that each page's
+  clearance is at least the bar height, and that with the page scrolled to the
+  very bottom **nothing** overlaps the bar. Against the pre-fix build the
+  simulated-notch half of this suite fails on 8 of 9 screens, which is the bug
+  she photographed.
+- `next build` clean; `tests/brand-isolation.mjs` PASS.
+
+Pages-only, like v1.4.0 — no migration, no Worker deploy.
+
+### Also in this release
+
+`PORTAL-PHOTO-SYNC-HANDOFF.md` — the portal-side spec for uploading a product
+photo in the portal and having it bridge into ELFIA, and for the Shawls.
+**The Shawls are not a sync failure**: ELFIA has no shawl products at all and
+the collection never got a SKU series, so the feed matches nothing. The store
+half of that work (create-hidden + photo into R2) is v1.5.0, still to come.
+
 # ELFIA OFFICIAL STORE — v1.4.0 (25-08-2026)
 
 ## The app layout
