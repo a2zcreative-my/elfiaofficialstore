@@ -63,7 +63,27 @@ export interface PortalSlide {
   fit?: string | null;
   /** v1.9.0 — per cent. 100 = the whole photo fits in the hero. */
   zoom?: number | null;
+  /* v1.11.0 — the cut-out model who steps out of the banner. A PNG with a
+     transparent background, drawn over the slide and above its top edge.
+     Absent = the slide draws as a plain banner, exactly as before. */
+  cutout_key?: string | null;
+  cutout_side?: string | null;
+  cutout_scale?: number | null;
 }
+
+/** v1.11.0 — how far above the banner the tallest cut-out reaches, as a
+    fraction of the banner's height. The hero reserves exactly this much room
+    above the cards so nobody is decapitated by the carousel's own clipping —
+    and reserves NOTHING when no slide has a cut-out. */
+export const cutoutHeadroom = (slides: { cutout_key?: string | null; cutout_scale?: number | null }[]): number => {
+  let most = 0;
+  for (const s of slides) {
+    if (!s.cutout_key) continue;
+    const n = Math.round(Number(s.cutout_scale));
+    most = Math.max(most, (Number.isFinite(n) ? Math.min(160, Math.max(100, n)) : 118) - 100);
+  }
+  return most / 100;
+};
 
 /** v1.8.0 — the CSS a slide's framing turns into. Kept next to the type so
     the hero and any future banner frame a photo the same way, and so the

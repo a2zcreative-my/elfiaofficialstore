@@ -40,7 +40,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <SiteHeader />
         {/* Every screen ends above the phone tab bar; on desktop there is no
             tab bar and the padding collapses. */}
-        <div className="pb-tabbar sm:pb-0">{children}</div>
+        <div className="pb-tabbar lg:pb-0">{children}</div>
         <WhatsAppButton />
         <ScrollTopButton />
         <BottomTabBar />

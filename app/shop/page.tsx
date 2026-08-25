@@ -77,7 +77,7 @@ function ShopInner() {
         {/* title row */}
         <div className="flex items-center gap-3">
           <Link href="/" aria-label="Back to home"
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-elfia-ink hover:bg-elfia-veil sm:hidden">
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-elfia-ink hover:bg-elfia-veil lg:hidden">
             <Icon name="back" size={19} />
           </Link>
           <div className="min-w-0">

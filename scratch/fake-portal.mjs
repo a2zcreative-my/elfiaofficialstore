@@ -194,6 +194,14 @@ http.createServer(async (req, res) => {
           fit: sl.fit ?? "cover",
           /* v1.48.0 — zoom. `noZoom` models a portal older than its 0089. */
           ...(sl.noZoom ? {} : { zoom: sl.zoom ?? 100 }),
+          /* v1.50.0 — the cut-out. Sent as a pair (URL + marker) or not at
+             all, exactly as the real serializer does. */
+          ...(sl.cutout ? {
+            cutout_url: `http://127.0.0.1:8200/media/${sl.cutout}.png`,
+            cutout_updated_at: sl.cutoutMarker ?? "c1",
+            cutout_side: sl.cutoutSide ?? "right",
+            cutout_scale: sl.cutoutScale ?? 118,
+          } : {}),
         }),
       })),
     });

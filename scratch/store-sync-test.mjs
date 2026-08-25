@@ -297,7 +297,14 @@ step("the portal can pull every web order");
   const badKey = await fetch(`${API}/bridge/orders`, { headers: { "X-Bridge-Key": "wrong" } });
   ok("a wrong key is refused", badKey.status === 401);
 
-  const placed = await order(products.find((x) => x.sku === "LUMI003").id, 1, "Feed Test");
+  /* Make sure there IS something to sell before selling it. Earlier steps
+     (and earlier runs) move this SKU around, and an out-of-stock 400 here
+     would fail three assertions that are about the ORDER FEED, not stock. */
+  await portalSet("LUMI003", 40);
+  await syncNow();
+  const feedProducts = (await jget(`${API}/products`)).products;
+  const placed = await order(feedProducts.find((x) => x.sku === "LUMI003").id, 1, "Feed Test");
+  ok("the order under test was accepted", Boolean(placed.order_number), JSON.stringify(placed).slice(0, 140));
   await sleep(400);
   let page = await (await feed()).json();
   let cursor = page.cursor;
@@ -682,6 +689,11 @@ step("a sale nobody could deliver stops freezing the shelf (v1.8.0)");
   /* …while a sale still IN FLIGHT is protected exactly as before. */
   /* Readable, but refusing our sales — the only state in which a pull can
      be watched while a sale is genuinely still in flight. */
+  /* Same guard as the order-feed step: earlier steps and earlier runs move
+     this SKU's count around, and an out-of-stock 400 here would fail an
+     assertion that is about DEFERRAL, not stock. */
+  await portalSet("LUMI004", 40);
+  await syncNow();
   await fetch(`${PORTAL}/_down`, { method: "POST", body: JSON.stringify({ down: true, only: "movements" }) });
   const p4 = await bySku("LUMI004");
   const o4 = await order(p4.id, 1, "In Flight");
@@ -879,6 +891,56 @@ step("the portal names its own collections (v1.10.0)");
   await admin(`/admin/products/${made.id}`, { method: "PUT", body: JSON.stringify({ sku: `RET${Date.now() % 1e9}`, active: false }) });
   await portalRemove(NEWSKU);
   await fetch(`${PORTAL}/_add`, { method: "POST", body: JSON.stringify({ sku: "LUMI001", category: "bawal" }) });
+  await syncNow();
+}
+
+step("a cut-out model steps out of the banner (v1.11.0)");
+{
+  /* The CEO's reference image: the model standing OUT of the carousel. It
+     is a second picture, not an effect — a PNG with a see-through
+     background, drawn over the slide and above its top edge. */
+  await fetch(`${PORTAL}/_slides`, { method: "POST", body: JSON.stringify({ slides: [
+    { id: 61, photo: "hero1", marker: "k1", title: "New Arrivals",
+      cutout: "model", cutoutMarker: "c1", cutoutSide: "left", cutoutScale: 135 },
+  ] }) });
+  await syncNow();
+  const a = ((await jget(`${API}/products`)).slides ?? []).find((x) => x.portal_id === 61);
+  ok("the cut-out was copied into the store's own storage",
+     typeof a?.cutout_key === "string" && a.cutout_key.startsWith("slides/cut-"), String(a?.cutout_key));
+  ok("with the side and height the portal chose", a?.cutout_side === "left" && a?.cutout_scale === 135,
+     JSON.stringify({ side: a?.cutout_side, scale: a?.cutout_scale }));
+  const img = await fetch(`${API}/media/${a.cutout_key}`);
+  ok("and the store serves it itself", img.status === 200 && (img.headers.get("content-type") ?? "").startsWith("image/"),
+     `${img.status}`);
+
+  // an unchanged marker costs nothing
+  const key = a.cutout_key;
+  const r = await syncNow();
+  const again = ((await jget(`${API}/products`)).slides ?? []).find((x) => x.portal_id === 61);
+  ok("an unchanged cut-out is not re-downloaded", again?.cutout_key === key, String(again?.cutout_key));
+  ok("the pull reports no copies", r.pull.photos === 0, String(r.pull.photos));
+
+  // moving her to the other side is a cheap edit, no re-download
+  await fetch(`${PORTAL}/_slides`, { method: "POST", body: JSON.stringify({ slides: [
+    { id: 61, photo: "hero1", marker: "k1", title: "New Arrivals",
+      cutout: "model", cutoutMarker: "c1", cutoutSide: "right", cutoutScale: 160 },
+  ] }) });
+  await syncNow();
+  const moved = ((await jget(`${API}/products`)).slides ?? []).find((x) => x.portal_id === 61);
+  ok("moving and resizing her costs no download", moved?.cutout_side === "right"
+     && moved?.cutout_scale === 160 && moved?.cutout_key === key,
+     JSON.stringify({ side: moved?.cutout_side, scale: moved?.cutout_scale }));
+
+  // removing it in the portal returns the slide to a plain banner
+  await fetch(`${PORTAL}/_slides`, { method: "POST", body: JSON.stringify({ slides: [
+    { id: 61, photo: "hero1", marker: "k1", title: "New Arrivals" },
+  ] }) });
+  await syncNow();
+  const plain = ((await jget(`${API}/products`)).slides ?? []).find((x) => x.portal_id === 61);
+  ok("removing it leaves a plain banner", (plain?.cutout_key ?? null) === null, String(plain?.cutout_key));
+  ok("and the slide itself is untouched", plain?.image_key === a.image_key);
+
+  await fetch(`${PORTAL}/_slides`, { method: "POST", body: JSON.stringify({ slides: [] }) });
   await syncNow();
 }
 

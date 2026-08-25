@@ -74,7 +74,7 @@ export interface Env {
   STORE_ORIGIN?: string;     // override for local testing
 }
 
-const VERSION = "1.10.0";
+const VERSION = "1.11.0";
 const STATUSES = ["pending_payment", "payment_review", "paid", "shipped", "completed", "cancelled"] as const;
 type Status = (typeof STATUSES)[number];
 
@@ -281,15 +281,16 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
       const probe = async (q: string): Promise<boolean> => {
         try { await env.DB.prepare(q).first(); return true; } catch { return false; }
       };
-      const [accounts, progress, syncReady, traffic, consent, portalProducts, saleSlides, framing, slideZoom] = await Promise.all([
+      const [accounts, progress, syncReady, traffic, consent, portalProducts, saleSlides, framing, slideZoom, cutout] = await Promise.all([
         table("customers"), table("order_events"), table("stock_events"), table("traffic_hits"),
         probe("SELECT marketing_consent_at FROM customers LIMIT 1"),
         probe("SELECT portal_pending FROM products LIMIT 1"),
         probe("SELECT compare_price_cents FROM products LIMIT 1"),
         probe("SELECT focus_x FROM portal_slides LIMIT 1"),
         probe("SELECT zoom FROM portal_slides LIMIT 1"),
+        probe("SELECT cutout_key FROM portal_slides LIMIT 1"),
       ]);
-      const migrationsCurrent = accounts && progress && syncReady && traffic && consent && portalProducts && saleSlides && framing && slideZoom;
+      const migrationsCurrent = accounts && progress && syncReady && traffic && consent && portalProducts && saleSlides && framing && slideZoom && cutout;
       const cfg = storeConfig(env);
       return json({
         ok: db && migrationsCurrent, version: VERSION, db, r2,
@@ -306,6 +307,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
             ...(saleSlides ? [] : ["sale_price_and_slides (0014 — discounts and the portal carousel will not show)"]),
             ...(framing ? [] : ["slide_framing (0015 — the portal cannot aim or un-crop a carousel photo)"]),
             ...(slideZoom ? [] : ["slide_zoom (0016 — the portal cannot zoom a carousel photo out)"]),
+            ...(cutout ? [] : ["slide_cutout (0017 — the carousel cannot show a cut-out model)"]),
           ],
         }),
         admin_key_configured: Boolean(env.ADMIN_KEY),
@@ -362,7 +364,8 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
            just without the portal's aiming. */
         try {
           slides = (await env.DB.prepare(
-            `SELECT portal_id, image_key, title, subtitle, sort, focus_x, focus_y, fit, zoom
+            `SELECT portal_id, image_key, title, subtitle, sort, focus_x, focus_y, fit, zoom,
+                    cutout_key, cutout_side, cutout_scale
                FROM portal_slides ORDER BY sort, portal_id LIMIT 12`,
           ).all()).results;
         } catch {

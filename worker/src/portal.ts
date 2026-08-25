@@ -98,6 +98,15 @@ const zoomPct = (v: unknown): number | null => {
   return Math.min(300, Math.max(100, n));
 };
 
+/* v1.11.0 — how tall the cut-out stands, as a per cent of the banner.
+   100 = exactly the banner's height (no step-out); the portal's default is
+   118. Clamped so a mistyped number cannot push her off the page. */
+const cutoutScale = (v: unknown): number => {
+  const n = Math.round(Number(v));
+  if (!Number.isFinite(n)) return 118;
+  return Math.min(160, Math.max(100, n));
+};
+
 const framePct = (v: unknown): number => {
   const n = Math.round(Number(v));
   if (!Number.isFinite(n)) return 50;
@@ -407,6 +416,9 @@ export async function pullStock(env: Env): Promise<PullResult> {
        than its 0088 sends neither, and the middle of the photo is then the
        honest answer. */
     focus_x?: number; focus_y?: number; fit?: string; zoom?: number;
+    /* v1.11.0 — the cut-out that steps out of the banner. */
+    cutout_url?: string; cutout_updated_at?: string;
+    cutout_side?: string; cutout_scale?: number;
   }[] | undefined;
   try {
     const r = await fetch(env.BRIDGE_URL!, { headers: { "X-Bridge-Key": env.BRIDGE_KEY! } });
@@ -644,8 +656,15 @@ export async function pullStock(env: Env): Promise<PullResult> {
   if (feedSlides !== undefined) {
     try {
       const { results: haveRows } = await env.DB.prepare(
-        `SELECT portal_id, image_key, image_marker FROM portal_slides`,
-      ).all<{ portal_id: number; image_key: string; image_marker: string }>();
+        `SELECT portal_id, image_key, image_marker, cutout_key, cutout_marker FROM portal_slides`,
+      ).all<{ portal_id: number; image_key: string; image_marker: string;
+              cutout_key: string | null; cutout_marker: string | null }>()
+        .catch(async () => ({
+          /* pre-0017 — the cut-out columns are not there yet. */
+          results: (await env.DB.prepare(`SELECT portal_id, image_key, image_marker FROM portal_slides`)
+            .all<{ portal_id: number; image_key: string; image_marker: string }>()).results
+            .map((r) => ({ ...r, cutout_key: null, cutout_marker: null })),
+        }));
       const have = new Map(haveRows.map((r) => [r.portal_id, r]));
       const seen = new Set<number>();
       for (const sl of feedSlides.slice(0, 12)) {
@@ -680,6 +699,45 @@ export async function pullStock(env: Env): Promise<PullResult> {
           }
         }
         if (!key) continue;
+        /* v1.11.0 — the cut-out rides the same pipeline as every other
+           portal image: copied into our own R2 once, re-copied only when
+           its marker moves, a failure reported per slide and never fatal.
+           It is fetched only when the portal sends BOTH a URL and a marker
+           (the serializer sends them together or not at all). */
+        let cutKey = cur?.cutout_key ?? null;
+        const cutMarker = clean(sl.cutout_updated_at, 200);
+        if (sl.cutout_url && cutMarker) {
+          if (!cur || cur.cutout_marker !== cutMarker || !cur.cutout_key) {
+            const ct = photoTarget(env, clean(sl.cutout_url, 2000));
+            if ("error" in ct) photo_errors.push(`slide ${sl.id} cut-out: ${ct.error}`);
+            else {
+              try {
+                const r3 = await fetch(ct.url.toString(), {
+                  headers: ct.sameOrigin && env.BRIDGE_KEY ? { "X-Bridge-Key": env.BRIDGE_KEY } : {},
+                  signal: AbortSignal.timeout(PHOTO_TIMEOUT_MS),
+                });
+                const ctype = (r3.headers.get("Content-Type") ?? "").split(";")[0]!.trim().toLowerCase();
+                const cext = PHOTO_EXT[ctype];
+                if (!r3.ok || !cext) {
+                  photo_errors.push(`slide ${sl.id} cut-out: download ${r3.ok ? `is ${ctype || "unknown"}` : `answered ${r3.status}`}`);
+                } else {
+                  const cb = await r3.arrayBuffer();
+                  if (cb.byteLength === 0 || cb.byteLength > MAX_PHOTO_BYTES) {
+                    photo_errors.push(`slide ${sl.id} cut-out: ${(cb.byteLength / 1048576).toFixed(1)} MB — the limit is 5 MB`);
+                  } else {
+                    cutKey = `slides/cut-${sl.id}-${Date.now()}.${cext}`;
+                    await env.MEDIA.put(cutKey, cb, { httpMetadata: { contentType: ctype === "image/jpg" ? "image/jpeg" : ctype } });
+                    slides_synced += 1;
+                  }
+                }
+              } catch { photo_errors.push(`slide ${sl.id} cut-out: download failed`); }
+            }
+          }
+        } else {
+          /* The portal removed it — the slide goes back to a plain banner. */
+          cutKey = null;
+        }
+
         const marker = clean(sl.image_updated_at, 200);
         const title = clean(sl.title, 120) || null;
         const subtitle = clean(sl.subtitle, 200) || null;
@@ -691,15 +749,20 @@ export async function pullStock(env: Env): Promise<PullResult> {
         if (framingCols) {
           try {
             await env.DB.prepare(
-              `INSERT INTO portal_slides (portal_id, image_key, image_marker, title, subtitle, sort, focus_x, focus_y, fit, zoom, updated_at)
-               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, datetime('now'))
+              `INSERT INTO portal_slides (portal_id, image_key, image_marker, title, subtitle, sort, focus_x, focus_y, fit, zoom,
+                                          cutout_key, cutout_marker, cutout_side, cutout_scale, updated_at)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, datetime('now'))
                ON CONFLICT (portal_id) DO UPDATE SET image_key = ?2, image_marker = ?3,
                  title = ?4, subtitle = ?5, sort = ?6, focus_x = ?7, focus_y = ?8, fit = ?9,
-                 zoom = ?10, updated_at = datetime('now')`,
+                 zoom = ?10, cutout_key = ?11, cutout_marker = ?12, cutout_side = ?13,
+                 cutout_scale = ?14, updated_at = datetime('now')`,
             ).bind(sl.id, key, marker, title, subtitle, sort,
                    framePct(sl.focus_x), framePct(sl.focus_y),
                    sl.fit === "contain" ? "contain" : "cover",
-                   zoomPct(sl.zoom)).run();
+                   zoomPct(sl.zoom),
+                   cutKey, cutKey ? cutMarker : null,
+                   sl.cutout_side === "left" ? "left" : "right",
+                   cutoutScale(sl.cutout_scale)).run();
             continue;
           } catch { framingCols = false; /* pre-0015 — fall through, once */ }
         }

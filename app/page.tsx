@@ -21,23 +21,43 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
 import {
-  BRAND_SLIDES, categoryChips, collectionKey, collectionOf, collectionsOf, fmtRM,
-  imageUrl, slideFraming, splitName, type PortalSlide, type Product,
+  BRAND_SLIDES, categoryChips, collectionKey, collectionOf, collectionsOf,
+  cutoutHeadroom, fmtRM, imageUrl, slideFraming, splitName,
+  type PortalSlide, type Product,
 } from "@/lib/config";
 
 import { CardSkeleton, Icon, ProductCard, SectionHeader, type IconName } from "./ui";
 
 interface Slide {
   image: string; title: string; subtitle: string; href?: string;
+  /* v1.11.0 — the cut-out model who steps out of the banner. */
+  cutout?: string; cutoutSide?: "left" | "right"; cutoutScale?: number;
   /** CSS object-position — which part of the photo survives the crop. */
   position?: string;
   /** v1.9.0 — how far the photo is zoomed in. 1 = every edge visible. */
   scale?: number;
 }
 
-function Carousel({ slides }: { slides: Slide[] }) {
+function Carousel({ slides, headroom = 0 }: { slides: Slide[]; headroom?: number }) {
   const [idx, setIdx] = useState(0);
   const paused = useRef(false);
+  /* v1.11.0 — the room reserved above the banner is a fraction of the
+     banner's own height, and the banner's height comes from its aspect
+     ratio, which changes with the viewport. So it is measured rather than
+     guessed — the same lesson as the tab bar, where a guessed clearance was
+     shorter than the bar on a notched iPhone. */
+  const trackRef = useRef<HTMLDivElement | null>(null);
+  const [cardH, setCardH] = useState(0);
+  useEffect(() => {
+    const el = trackRef.current;
+    if (!el || headroom <= 0) return;
+    const measure = () => setCardH(el.getBoundingClientRect().height);
+    measure();
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null;
+    ro?.observe(el, { box: "border-box" });
+    window.addEventListener("resize", measure);
+    return () => { ro?.disconnect(); window.removeEventListener("resize", measure); };
+  }, [headroom, slides.length]);
 
   useEffect(() => {
     if (slides.length <= 1) return;
@@ -49,13 +69,26 @@ function Carousel({ slides }: { slides: Slide[] }) {
 
   if (slides.length === 0) return null;
   return (
-    <div className="group/car relative overflow-hidden rounded-3xl bg-elfia-blush shadow-sm ring-1 ring-elfia-line"
+    /* v1.11.0 — the CEO's reference: the model stands OUT of the banner.
+       The trick is not a 3D transform, it is where the clipping happens. The
+       carousel must still clip sideways (that is how the slides slide), and
+       CSS cannot clip one axis and not the other — so instead the track gets
+       PADDING above it, equal to the tallest cut-out's overhang, and the
+       cut-out rises into that reserved space. The card's own background
+       stops at its rounded edge, so she reads as standing in front of it.
+       No cut-outs anywhere = headroom 0 = the hero is exactly as it was. */
+    <div className="group/car relative overflow-hidden"
+      style={headroom > 0 && cardH > 0 ? { paddingTop: Math.round(cardH * headroom) } : undefined}
       onMouseEnter={() => { paused.current = true; }}
       onMouseLeave={() => { paused.current = false; }}>
-      <div className="flex transition-transform duration-700 ease-out" style={{ transform: `translateX(-${idx * 100}%)` }}>
+      <div ref={trackRef} className="flex transition-transform duration-700 ease-out"
+        style={{ transform: `translateX(-${idx * 100}%)` }}>
         {slides.map((s, i) => {
           const inner = (
-            <div className="relative aspect-[4/3] w-full sm:aspect-[21/9]">
+            /* The CARD clips (rounded corners, the photo, the wash); the
+               slide around it does NOT, so the cut-out can rise above the
+               card's top edge into the room reserved by the container. */
+            <div className="relative aspect-[4/3] w-full overflow-hidden rounded-3xl bg-elfia-blush shadow-sm ring-1 ring-elfia-line sm:aspect-[21/9]">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               {/* v1.9.0 — the portal's zoom. The photo is laid in whole
                   (object-contain) and then scaled up around its focus point,
@@ -71,19 +104,42 @@ function Carousel({ slides }: { slides: Slide[] }) {
                 loading={i === 0 ? "eager" : "lazy"} />
               {/* A rose wash rather than a black scrim — the blush palette
                   stays intact and the type still passes contrast. */}
-              <div className="absolute inset-0 bg-gradient-to-r from-[#40292f]/75 via-[#40292f]/35 to-transparent" />
-              <div className="absolute right-5 bottom-6 left-5 max-w-md sm:bottom-10 sm:left-10">
+              <div className={`absolute inset-0 bg-gradient-to-r ${
+                s.cutout && s.cutoutSide === "left"
+                  ? "from-transparent via-[#40292f]/35 to-[#40292f]/75"
+                  : "from-[#40292f]/75 via-[#40292f]/35 to-transparent"}`} />
+              <div className={`absolute bottom-6 max-w-md sm:bottom-10 ${
+                s.cutout && s.cutoutSide === "left"
+                  ? "right-5 left-auto text-right sm:right-10"
+                  : "right-5 left-5 sm:left-10"} ${s.cutout ? "max-w-[60%] sm:max-w-md" : ""}`}>
                 <p className="text-2xl leading-tight font-bold text-white drop-shadow-sm sm:text-4xl">{s.title}</p>
                 <p className="mt-1.5 text-sm text-white/85 sm:text-base">{s.subtitle}</p>
                 <span className="mt-4 inline-flex h-10 items-center rounded-full bg-white px-5 text-xs font-semibold text-elfia-deep sm:text-sm">
                   {s.href ? "View this shade" : "Shop now"}
                 </span>
               </div>
+
             </div>
           );
+
+          /* She stands on the card's floor and rises past its top edge — so
+             she is a SIBLING of the card, not a child of it, inside a
+             wrapper the same size as the card. A child would be clipped by
+             the very box she is meant to step out of. */
+          const framed = s.cutout ? (
+            <div className="relative">
+              {inner}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={s.cutout} alt="" aria-hidden
+                className={`pointer-events-none absolute bottom-0 w-auto max-w-[58%] object-contain object-bottom drop-shadow-2xl ${
+                  s.cutoutSide === "left" ? "left-1 sm:left-6" : "right-1 sm:right-6"}`}
+                style={{ height: `${s.cutoutScale ?? 118}%` }}
+                loading={i === 0 ? "eager" : "lazy"} />
+            </div>
+          ) : inner;
           return (
             <div key={i} className="w-full shrink-0">
-              {s.href ? <Link href={s.href}>{inner}</Link> : <Link href="/shop">{inner}</Link>}
+              {s.href ? <Link href={s.href}>{framed}</Link> : <Link href="/shop">{framed}</Link>}
             </div>
           );
         })}
@@ -119,14 +175,14 @@ function ProductRail({ items }: { items: Product[] }) {
   if (items.length === 0) return null;
   return (
     <>
-      <div className="rail -mx-4 px-4 sm:hidden">
+      <div className="rail -mx-4 px-4 lg:hidden">
         {items.map((p) => (
           <div key={p.id} className="rail-item w-[43vw] max-w-[190px]">
             <ProductCard p={p} compact />
           </div>
         ))}
       </div>
-      <div className="hidden gap-5 sm:grid sm:grid-cols-3 lg:grid-cols-4">
+      <div className="hidden gap-5 lg:grid lg:grid-cols-4">
         {items.slice(0, 4).map((p) => <ProductCard key={p.id} p={p} />)}
       </div>
     </>
@@ -165,6 +221,12 @@ export default function Home() {
           subtitle: s.subtitle ?? "",
           position: f.position,
           scale: f.scale,
+          /* v1.11.0 — the cut-out, when the portal has given this slide one. */
+          ...(s.cutout_key ? {
+            cutout: imageUrl(s.cutout_key),
+            cutoutSide: (s.cutout_side === "left" ? "left" : "right") as "left" | "right",
+            cutoutScale: Math.min(160, Math.max(100, Math.round(Number(s.cutout_scale)) || 118)),
+          } : {}),
         };
       })
     : [...BRAND_SLIDES];
@@ -207,7 +269,7 @@ export default function Home() {
   return (
     <main className="px-4 pt-4 pb-10 sm:px-6 sm:pt-8">
       <div className="mx-auto w-full max-w-6xl">
-        <Carousel slides={slides} />
+        <Carousel slides={slides} headroom={cutoutHeadroom(portalSlides)} />
 
         {/* trust strip */}
         <div className="mt-5 grid grid-cols-3 gap-2.5 sm:gap-4">

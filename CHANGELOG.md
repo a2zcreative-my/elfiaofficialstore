@@ -1,3 +1,149 @@
+# ELFIA OFFICIAL STORE — v1.11.1 (25-08-2026)
+
+## The deploy that stopped at "Database changes"
+
+PUSH.bat failed on the CEO's machine with:
+
+```
+SQL code did not contain a statement. [code: 7500]
+```
+
+Migration 0017 was valid SQLite. It applied perfectly to the local database,
+and wrangler's own splitter (the same 4.125.0 she runs) turned it into four
+clean `ALTER` statements — checked directly by calling
+`unstable_splitSqlQuery` on the exact file. The **remote D1 API parses
+submitted SQL its own way**, and something in the file's long prose comment
+defeated it: an em dash, an ellipsis, a semicolon mid-sentence, a pair of
+quoted words — chasing which character exactly is not worth an evening.
+
+The fix is to stop writing migrations that need a clever parser. 0017 is
+rewritten as plain ASCII with `--` comments and nothing quotable inside them;
+the explanation it used to carry lives here, where it is read by people
+rather than by a parser.
+
+**`tests/migration-safety.mjs`** now enforces that on every NEW migration
+(0017 onward — the files already applied to the live database are
+grandfathered, because editing an applied migration to satisfy a linter is a
+worse idea than the prose it would remove):
+
+- plain ASCII only
+- `--` line comments, never `/* */`
+- no apostrophes or semicolons inside a comment
+- every statement terminated
+
+This is the second time a deploy has been stopped by something that passed
+every local check, and both times the cost was hers, at midnight. The guard
+runs with the other gates so the rule is enforced *before* a deploy.
+
+### Verified
+
+- Every migration re-applied from an **empty database**, 0001 through 0017,
+  on both projects.
+- `scratch/store-sync-test.mjs` — 151 assertions, twice, against the rebuilt
+  database. `overflow-check.mjs` 30/30. brand-isolation, no-secrets,
+  migration-safety PASS.
+
+**Deploy**: migration 0017 (the rewritten one). PUSH.bat.
+
+# ELFIA OFFICIAL STORE — v1.11.0 (25-08-2026)
+
+## The model steps out of the carousel
+
+The CEO, with a reference image: **"It is good that I can have this carousel
+which is the ladies 3D outside the carousel. Which is suitable for both view
+web and mobile apps view."**
+
+That effect is not a filter or a 3D transform — it is a **second picture**.
+The banner keeps its own background inside its rounded corners, and a
+background-removed cut-out of the model is drawn over it, rising above the
+top edge so she appears to stand out of the card. Migration **0017** adds
+`cutout_key`, `cutout_marker`, `cutout_side` and `cutout_scale` to
+`portal_slides`; the portal uploads the PNG, the store copies it into its own
+R2 (marker-gated, same 5 MB pipeline as every other portal image) and draws
+it.
+
+Two details that are the whole trick:
+
+- **The card clips, the slide does not.** The carousel must clip sideways —
+  that is how slides slide — and CSS cannot clip one axis without the other.
+  So the rounded, overflow-hidden box moved from the track onto each slide's
+  CARD, and the cut-out became a SIBLING of that card. A child would be cut
+  off by the very box she is meant to step out of.
+- **The room above is measured, not guessed.** The container reserves
+  headroom equal to the tallest cut-out's overhang × the banner's real
+  height, via a ResizeObserver — the banner's height comes from an aspect
+  ratio that changes with the viewport, and the tab-bar lesson was that a
+  guessed clearance is just a luckier guess. No cut-outs anywhere = zero
+  headroom = the hero is byte-for-byte what it was.
+
+The caption automatically takes the opposite end from the model, and the
+gradient wash flips with it, so the words never sit behind her.
+
+### Verified
+
+- `scratch/store-sync-test.mjs` — **151 assertions**, twice: the cut-out is
+  copied into the store's own storage and served by it; side and height cross
+  over; an unchanged marker is not re-downloaded; moving and resizing her
+  costs no download; removing her in the portal returns a plain banner and
+  leaves the slide's own photo untouched.
+- `scratch/overflow-check.mjs` — still **30/30**: the reserved headroom does
+  not reintroduce sideways scroll at any width.
+- Rendered and checked at 390px and 1280px with a genuinely transparent PNG,
+  so a JPEG masquerading as a cut-out (a white box) could not pass unnoticed.
+- Worker `tsc` clean; `next build` clean; brand-isolation, no-secrets PASS.
+
+**What to upload**: a PNG (or WEBP) of the model with the background removed
+— the store refuses a JPEG for this slot, because a JPEG cannot be
+see-through and would paint a white box across the banner.
+
+**Deploy**: migration 0017. PUSH.bat.
+
+# ELFIA OFFICIAL STORE — v1.10.1 (25-08-2026, late night)
+
+## The phone layout could scroll sideways — that is the "offset"
+
+The CEO: **"Mobile view apps why looks like this? Seem like offset!!! Check
+on the webpage also to ensure no outspec!!!!"** — with a screenshot of the
+home page shifted left, the logo and the product row cut off at the edge.
+
+Nothing was mis-positioned. The page was **wider than the screen**, so one
+stray sideways swipe moved everything left and left it there. Measured, not
+guessed — `scratch/overflow-check.mjs` reports document scrollWidth against
+clientWidth at five widths and NAMES the elements sticking out:
+
+| width | was | now |
+| --- | --- | --- |
+| 320 (iPhone SE) | **77px** past the edge | 0 |
+| 390 (iPhone 12) | **7px** | 0 |
+| 430 | 0 | 0 |
+| 768 (tablet) | **237px** | 0 |
+| 1280 | 0 | 0 |
+
+Three separate causes, all now fixed:
+
+- **The bottom tab bar.** `flex-1` does not shrink an item below the width of
+  its own text, so "Collections" held the bar wider than the phone. Added
+  `min-w-0` and truncation — the labels give way instead of pushing the
+  layout off-screen. This alone was the 7px on her iPhone.
+- **The phone app bar.** The search box had `min-w-0` on its input but not on
+  the form, so it could not shrink; the lock-up had no ceiling either. 77px
+  on a 320px screen.
+- **The web header at tablet size.** It needs roughly 1000px for lock-up +
+  links + search + three actions, and it was appearing from `sm` (640px) —
+  so every tablet drew a header 240px too wide. The phone/desktop split moved
+  from `sm` to `lg` everywhere it exists (header, footer, tab bar, floating
+  buttons, page padding, product rails, the buy bar), which also gives
+  tablets the app layout they actually want.
+
+### Verified
+
+- `scratch/overflow-check.mjs` — **30 checks** across 6 pages × 5 widths, all
+  green. Kept in the repo: this is the class of bug that is invisible in a
+  screenshot review and obvious to whoever is holding the phone.
+- `next build` clean; `tsc` clean; brand-isolation, no-secrets PASS.
+
+**Deploy**: website only, no migration. PUSH.bat.
+
 # ELFIA OFFICIAL STORE — v1.10.0 (25-08-2026, late night)
 
 ## Collections are named in the portal now
