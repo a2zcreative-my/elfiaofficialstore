@@ -21,7 +21,7 @@ import { useSearchParams } from "next/navigation";
 
 import Link from "next/link";
 
-import { btnClass, fmtRM, fmtWhen, rememberOrder, type OrderEvent, type OrderView } from "@/lib/config";
+import { accountDigits, btnClass, fmtRM, fmtWhen, rememberOrder, type OrderEvent, type OrderView } from "@/lib/config";
 
 import { Icon, StatusPill } from "./../ui";
 
@@ -364,12 +364,21 @@ function OrderInner() {
                 <p className="text-xs text-elfia-body">
                   Transfer <span className="font-bold text-elfia-deep">{fmtRM(order.total_cents)}</span> to:
                 </p>
+                {/* v1.12.3 — the line is read in full, but Copy hands over
+                    the ACCOUNT NUMBER alone. Since the bank name was added
+                    the line is a sentence, and a sentence pasted into a
+                    banking app's account field is refused. accountDigits()
+                    falls back to null on a line with no plausible number,
+                    and then Copy behaves as it always did. */}
                 <div className="mt-1.5 flex items-center gap-2 rounded-xl bg-elfia-cream px-3 py-2.5">
                   <span className="min-w-0 flex-1 font-mono text-sm font-semibold break-words text-elfia-ink">{order.config.bank_line}</span>
                   <button type="button"
-                    onClick={() => { void navigator.clipboard?.writeText(order.config.bank_line).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); }); }}
+                    onClick={() => {
+                      const toCopy = accountDigits(order.config.bank_line) ?? order.config.bank_line;
+                      void navigator.clipboard?.writeText(toCopy).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
+                    }}
                     className="shrink-0 rounded-full bg-white px-3 py-1.5 text-[11px] font-semibold text-elfia-deep ring-1 ring-elfia-line">
-                    {copied ? "Copied" : "Copy"}
+                    {copied ? "Copied" : accountDigits(order.config.bank_line) ? "Copy number" : "Copy"}
                   </button>
                 </div>
                 <p className="mt-2 text-xs text-elfia-muted">

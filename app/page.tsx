@@ -89,13 +89,49 @@ function Carousel({ slides, headroom = 0 }: { slides: Slide[]; headroom?: number
                slide around it does NOT, so the cut-out can rise above the
                card's top edge into the room reserved by the container. */
             <div className="relative aspect-[4/3] w-full overflow-hidden rounded-3xl bg-elfia-blush shadow-sm ring-1 ring-elfia-line sm:aspect-[21/9]">
+              {/* v1.12.2 — the backdrop, and the CEO's third "offset".
+                  The studio shoots PORTRAIT (896x1200); the banner is 4:3 on
+                  a phone and 21:9 on a desktop. A contained portrait photo in
+                  a landscape banner therefore leaves the blush showing down
+                  both sides, and measured at her own zoom of 150% those gaps
+                  were 29px wide each: the photo read as sitting off-centre in
+                  a box that did not fit it. Turning the zoom up to 180% would
+                  close them on a phone and still leave them on a desktop,
+                  which is not a setting anyone can get right once.
+                  So the same photo is laid in behind, COVERING the banner and
+                  blurred, and the sharp contained copy sits on top of it. The
+                  banner is full-bleed for any photo at any zoom, the CEO's
+                  "at least I can see the full" is untouched, and nothing she
+                  has already framed in the portal changes.
+
+                  scale-150, not the 110 this was first written with: a CSS
+                  blur samples past the element's own edge, finds nothing
+                  there, and fades to transparent — so a 40px blur on a box
+                  the exact size of the banner left a 40px see-through band
+                  down every side, and the blush came back through it. Caught
+                  by painting the banner lime and looking for lime in the
+                  pixels, which is what rail-check.mjs now does on every run.
+                  The overhang has to stay larger than the blur radius. */}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={s.image} alt="" aria-hidden data-slide-backdrop
+                className="absolute inset-0 h-full w-full scale-150 object-cover blur-2xl"
+                style={{ objectPosition: s.position ?? "50% 50%" }}
+                loading={i === 0 ? "eager" : "lazy"} />
+              {/* A blush veil over the blur so the backdrop reads as the
+                  shop's own ground rather than a smeared photograph. */}
+              <div className="absolute inset-0 bg-elfia-blush/45" />
               {/* eslint-disable-next-line @next/next/no-img-element */}
               {/* v1.9.0 — the portal's zoom. The photo is laid in whole
                   (object-contain) and then scaled up around its focus point,
-                  so 100% shows every edge against the blush and anything
-                  higher fills and crops. One dial, no switch. */}
+                  so 100% shows every edge and anything higher fills and
+                  crops. One dial, no switch. */}
               <img src={s.image} alt={s.title}
-                className="h-full w-full object-contain"
+                /* `relative` is load-bearing: the backdrop above is
+                   positioned, and a positioned box paints over a static one
+                   whatever the source order. Without it a slide left at 100%
+                   zoom (no transform, so no stacking context of its own)
+                   would be drawn UNDERNEATH its own blurred backdrop. */
+                className="relative h-full w-full object-contain"
                 style={{
                   objectPosition: s.position ?? "50% 50%",
                   transform: s.scale && s.scale !== 1 ? `scale(${s.scale})` : undefined,

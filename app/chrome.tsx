@@ -26,16 +26,33 @@ import { CART_EVENT, NAV_LINKS, STORE, TABS, cartCount, fmtRM, waLink, type Stor
 
 import { Icon, useWishlist, type IconName } from "./ui";
 
-/** One fetch of the store config, shared by the header and the bubble. */
+/** One fetch of the store config, shared by the header and the bubble.
+ *
+ * v1.12.2 — genuinely one fetch now. Three components on the same page ask
+ * for this (header, WhatsApp bubble, back-to-top), and each used to open its
+ * own request for the same handful of bytes. The promise is cached at module
+ * scope, so the second and third callers await the first one's answer. */
+let configOnce: Promise<StoreConfig | null> | null = null;
 function useStoreConfig(): StoreConfig | null {
   const [config, setConfig] = useState<StoreConfig | null>(null);
   useEffect(() => {
-    void fetch("/api/v1/store-config")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((j: StoreConfig | null) => setConfig(j))
+    configOnce ??= fetch("/api/v1/store-config")
+      .then((r) => (r.ok ? r.json() as Promise<StoreConfig> : null))
       .catch(() => null);
+    let live = true;
+    void configOnce.then((j) => { if (live) setConfig(j); });
+    return () => { live = false; };
   }, []);
   return config;
+}
+
+/** Whether the WhatsApp bubble is drawn at all. ONE answer, asked by the
+    bubble itself and by the button that has to stack above it — two copies
+    of this test is how they end up disagreeing. A bubble that opens a chat
+    with 60000000000 is worse than no bubble. */
+function hasWhatsApp(config: StoreConfig | null): boolean {
+  const digits = config?.whatsapp_digits ?? "";
+  return !!digits && digits !== "60000000000" && digits.replace(/\D/g, "").length >= 9;
 }
 
 /** The cart count, live in this tab and in others. */
@@ -252,9 +269,22 @@ export function BottomTabBar() {
 /**
  * Back-to-top (v0.7.0, asked for by the CEO after seeing the live site).
  * Sits above the WhatsApp bubble, and above the tab bar on a phone.
+ *
+ * v1.12.2 — it now actually does. The CEO, 25-08-2026: "Whatsapp button
+ * overlapped with the arrow up button." The comment above had said "sits
+ * above the WhatsApp bubble" since v0.7.0, but on a phone both buttons wore
+ * the same `bottom-tabbar right-4`, so the white arrow was drawn inside the
+ * green circle. (On a desktop they were already apart — lg:bottom-24 against
+ * lg:bottom-6 — which is why this survived so long: it was invisible on the
+ * screen it was built on.)
+ *
+ * The offset is CONDITIONAL, because the bubble is: it hides itself when no
+ * WhatsApp number is configured, and an arrow parked 68px up with nothing
+ * underneath it is its own small bug. Both components ask hasWhatsApp().
  */
 export function ScrollTopButton() {
   const [show, setShow] = useState(false);
+  const stacked = hasWhatsApp(useStoreConfig());
   useEffect(() => {
     const onScroll = () => setShow(window.scrollY > 600);
     onScroll();
@@ -264,7 +294,8 @@ export function ScrollTopButton() {
   return (
     <button type="button" aria-label="Back to top" aria-hidden={!show} tabIndex={show ? 0 : -1}
       onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
-      className={`bottom-tabbar fixed right-4 z-30 flex h-11 w-11 items-center justify-center rounded-full border border-elfia-line bg-white text-elfia-deep shadow-lg shadow-elfia-deep/10 transition-all duration-200 hover:bg-elfia-veil lg:right-6 lg:bottom-24 ${
+      className={`fixed right-4 z-30 flex h-11 w-11 items-center justify-center rounded-full border border-elfia-line bg-white text-elfia-deep shadow-lg shadow-elfia-deep/10 transition-all duration-200 hover:bg-elfia-veil lg:right-6 ${
+        stacked ? "bottom-tabbar-2 lg:bottom-24" : "bottom-tabbar lg:bottom-6"} ${
         show ? "translate-y-0 opacity-100" : "pointer-events-none translate-y-2 opacity-0"}`}>
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
         strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -274,12 +305,13 @@ export function ScrollTopButton() {
   );
 }
 
-/** The floating WhatsApp bubble. Hidden until a real number is configured —
-    a bubble that opens a chat with 60000000000 is worse than no bubble. */
+/** The floating WhatsApp bubble. Hidden until a real number is configured
+    (see hasWhatsApp above). It keeps the lower slot; the back-to-top button
+    stacks on it. */
 export function WhatsAppButton() {
   const config = useStoreConfig();
-  const digits = config?.whatsapp_digits ?? "";
-  if (!digits || digits === "60000000000" || digits.replace(/\D/g, "").length < 9) return null;
+  if (!hasWhatsApp(config)) return null;
+  const digits = config!.whatsapp_digits;
   return (
     <a href={waLink(digits, "Hi ELFIA! I have a question about an order.")}
       target="_blank" rel="noopener noreferrer" aria-label="Chat with ELFIA on WhatsApp"

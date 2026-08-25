@@ -28,8 +28,14 @@
  */
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const DIR = new URL("../worker/migrations", import.meta.url).pathname;
+/* fileURLToPath, not .pathname. v1.12.4: on Windows a file URL's pathname is
+   "/C:/Users/..." — a leading slash in front of the drive letter, which is
+   not a path Windows can open. This guard had only ever run on Linux until
+   PUSH.bat started running it, and the CEO's first Windows deploy would have
+   died here with an unreadable ENOENT the moment the check above it passed. */
+const DIR = fileURLToPath(new URL("../worker/migrations", import.meta.url));
 
 /* Everything up to and including this number is GRANDFATHERED: those files
    are already applied on the live database, several of them break the rule,
@@ -45,6 +51,15 @@ const ok = (label, cond, extra = "") => {
 };
 
 const all = readdirSync(DIR).filter((f) => f.endsWith(".sql")).sort();
+
+/* A guard that checked nothing must not report success. If the migrations
+   folder ever resolves to the wrong place — the Windows path bug above was
+   exactly that — this says so instead of printing PASS over an empty list. */
+if (all.length === 0) {
+  console.log(`FAIL — no .sql files found in ${DIR}\n` +
+              "  This guard checked NOTHING. That is a broken path, not a clean repo.");
+  process.exit(1);
+}
 const files = all.filter((f) => numberOf(f) >= FIRST_ENFORCED);
 console.log(`migration-safety: checking ${files.length} of ${all.length} files (${String(FIRST_ENFORCED).padStart(4, "0")} onward)`);
 

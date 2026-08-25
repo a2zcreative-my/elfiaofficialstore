@@ -22,10 +22,19 @@ MAX_OPEN_ORDERS = "2"
 # the company that runs this shop, so its legal name appears here: a customer
 # whose banking app shows a different payee than the shop told them to expect
 # abandons the transfer, and a name mismatch is how a transfer bounces.
-# ^ The BANK NAME still has to be added in front of the number — a Malaysian
-#   transfer needs it to pick the destination bank. Until then this line is
-#   incomplete, though no longer the "REPLACE" placeholder customers saw.
-BANK_LINE = "5511 0086 5300 — A 2 Z Creative Marketing"
+# The bank is Maybank (the CEO, 26-08-2026). It leads the line because that is
+# the order the customer works in: choose the destination bank in their banking
+# app, key the account number, then check the payee name the app shows them
+# against the one printed here. The line is complete now — bank, account,
+# holder — and this is the whole payment instruction the shop gives.
+#
+# DO NOT COPY THIS VALUE ANYWHERE ELSE IN THIS REPO. Not into a CHANGELOG
+# entry, not into a test fixture, not into an explaining comment.
+# tests/brand-isolation.mjs exempts THIS LINE and nothing else, and it has
+# already refused a deploy for each of those three mistakes. Describe the
+# value, never paste it: a repo that names the account in six places is a
+# repo where changing the account misses five of them.
+BANK_LINE = "Maybank 5511 0086 5300 — A 2 Z Creative Marketing"
 # Digits only, country code first, no + and no spaces — this is pasted
 # straight into a wa.me link. +60 12 383 4821 -> 60123834821.
 WHATSAPP_DIGITS = "60123834821"

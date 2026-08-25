@@ -164,6 +164,38 @@ export interface StoreConfig {
   hold_hours?: number;
 }
 
+/**
+ * The account NUMBER out of the payee line, for the Copy button beside it.
+ *
+ * v1.12.3 — BANK_LINE gained its bank name on 26-08-2026, so it now reads
+ * as a sentence: "<bank> <account> — <holder>". Copy used to put that whole
+ * sentence on the clipboard, which was survivable while the line was mostly
+ * digits and is not now: a customer taps Copy, pastes into their banking
+ * app's account field, and it is refused — or worse, they trim it by hand
+ * and mistype. Beside a payee line, Copy means "give me the number".
+ *
+ * The longest run of digits wins, and it must be at least 8 long. Both
+ * halves of that rule matter, because holders' names contain digits: on a
+ * line ending "— A 2 Z Trading", stripping every non-digit welds that 2 onto
+ * the account and returns a number that is the wrong one and still looks
+ * like the right one. Taking runs instead leaves it out.
+ *
+ * Returns null when the line holds no plausible number, and the caller then
+ * copies it whole — an odd clipboard beats an empty one.
+ *
+ * The real account is NOT written here, or anywhere in this repo except
+ * BANK_LINE in worker/wrangler.toml; tests/brand-isolation.mjs enforces
+ * that, and caught the first draft of this very comment.
+ */
+export const accountDigits = (bankLine: string): string | null => {
+  let best: string | null = null;
+  for (const run of bankLine.match(/\d[\d\s-]*\d/g) ?? []) {
+    const digits = run.replace(/\D/g, "");
+    if (digits.length >= 8 && (!best || digits.length > best.length)) best = digits;
+  }
+  return best;
+};
+
 /* ---- customer accounts (v1.0.0) ----
    Optional everywhere: a guest can buy without one. */
 

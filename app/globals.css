@@ -38,12 +38,33 @@ body {
 }
 
 /* Horizontal rails (New arrivals, Best sellers) scroll like an app's do —
-   no visible scrollbar, snapping to each card. */
+   no visible scrollbar, snapping to each card.
+
+   v1.12.2 — scroll-padding is the whole fix for the CEO's second "offset".
+   A rail is pulled out to the screen edges with `-mx-4` and puts the gutter
+   back inside itself with `px-4`, so its first tile should line up with the
+   heading above it. It did not: measured on three phone widths, every rail
+   loaded with scrollLeft = 16, slicing the first tile against the left edge.
+
+   The cause is the line below it. `scroll-snap-align: start` on a tile means
+   "line my start edge up with the SNAPPORT's start edge", and the snapport
+   is the scrollport — the padding is not what it measures from. So the
+   browser scrolled 16px to bring the first tile flush with the border edge
+   and threw the gutter away, and `mandatory` made it do that on load, before
+   anyone had touched the rail.
+
+   scroll-padding-inline-start tells the snapport where the content actually
+   begins, so scrollLeft = 0 is the snap position and the gutter survives. It
+   has to stay equal to the rail's own padding-left (1rem = px-4). Where a
+   rail becomes a grid on a wide screen and drops that padding this is inert:
+   there is nothing left to scroll. scratch/rail-check.mjs measures it and
+   fails if a rail ever eats its gutter again. */
 @utility rail {
   display: flex;
   gap: 0.875rem;
   overflow-x: auto;
   scroll-snap-type: x mandatory;
+  scroll-padding-inline-start: 1rem;
   scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
 }
@@ -71,6 +92,18 @@ body {
 /* Floating buttons (WhatsApp, back-to-top) ride just above the bar. */
 @utility bottom-tabbar {
   bottom: calc(var(--elfia-tabbar, 6rem) + 0.75rem);
+}
+/* v1.12.2 — the SECOND floating button, stacked on the first.
+   The CEO, 25-08-2026: "Whatsapp button overlapped with the arrow up
+   button." Both buttons carried `bottom-tabbar right-4`, which is one
+   position, so they were drawn on top of each other and the arrow sat inside
+   the green circle. This is that position plus the bubble's own height
+   (h-14 = 3.5rem) and a 0.75rem gap. It is only used when the bubble is
+   actually on screen — see ScrollTopButton in chrome.tsx, which asks the
+   store config rather than assuming, so a shop with no WhatsApp number
+   configured does not leave a hole where the bubble would have been. */
+@utility bottom-tabbar-2 {
+  bottom: calc(var(--elfia-tabbar, 6rem) + 0.75rem + 3.5rem + 0.75rem);
 }
 /* A page's own sticky footer (the product buy bar) sits directly on it. */
 @utility above-tabbar {

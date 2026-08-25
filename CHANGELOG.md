@@ -1,3 +1,256 @@
+# ELFIA OFFICIAL STORE — v1.12.4 (26-08-2026)
+
+## The safety checks had never run on Windows
+
+v1.12.3 put four guards into PUSH.bat at step [3/7]. They had all been
+written on Linux and run on Linux. The CEO's machine is Windows, and the
+first two deploys after that change both stopped at step [3] — once on my
+mistake, and once on the guards' own.
+
+Nothing reached the live shop either time, which is the system working. But
+a guard that only runs where it was written is not doing its job, so:
+
+### no-secrets.mjs was failing on its own doc comment
+
+```
+FAIL - tests\no-secrets.mjs:74 - a secret assigned a literal value: 1abd033b-...
+```
+
+The gate exempts itself by name, because its own comments have to show what
+a leaked Billplz key looks like in order to explain the rule. The exemption
+compared against the literal `"tests/no-secrets.mjs"`. `path.join` produces
+`tests\no-secrets.mjs` on Windows, which never matched — so the file scanned
+itself and failed the build on the example in its own explanation.
+
+Every path this gate compares or reports now goes through one `norm()` that
+forces forward slashes.
+
+### migration-safety.mjs would have died on the next line
+
+It located the migrations folder with `new URL(...).pathname`, which on
+Windows returns `/C:/Users/...` — a leading slash in front of the drive
+letter, and not a path Windows can open. It only survived the CEO's run
+because the check before it failed first. `fileURLToPath` now does the
+conversion properly.
+
+It also refuses to pass on an empty list. A guard that checked nothing must
+not print PASS: if that folder ever resolves to the wrong place again, it
+says so.
+
+Both fixes were checked against simulated Windows paths rather than assumed
+— `path.win32.join` reproduces the exact string, and the old comparison
+scans itself while the new one skips.
+
+### bank-line.mjs no longer depends on a Node flag
+
+v1.12.3 invoked it as `node --experimental-strip-types tests\bank-line.mjs`,
+which is a trap of the same family: an unrecognised flag stops Node BEFORE
+the script runs, so on a Node older than 22.6 the deploy would have died
+with "bad option" and no way to tell what to do about it.
+
+PUSH.bat now runs it plainly and the script sorts itself out — Node 22.18+
+reads the TypeScript helper with no setup; 22.6-22.17 gets one silent
+re-exec with the flag; anything older prints a loud SKIPPED and exits 0,
+because blocking a deploy over a tooling gap is worse than the check not
+running on that one machine. All three paths were exercised, and a genuine
+test failure still exits 1 and stops the deploy.
+
+## Deploy
+
+**No migration.** Nothing in this release touches the shop, the worker or
+the database — it is the deploy checks themselves.
+
+# ELFIA OFFICIAL STORE — v1.12.3 (26-08-2026)
+
+## The payment instruction is complete
+
+The CEO, 26-08: *"under Maybank"*. `BANK_LINE` in `worker/wrangler.toml` now
+carries the bank in front of the account, so its shape is:
+
+```
+BANK_LINE = "<bank> <account number> — <account holder>"
+```
+
+The filled-in values are deliberately NOT repeated here; see the last section
+of this entry. The bank leads because that is the order the customer works in:
+choose the destination bank in their banking app, key the account number,
+then check the payee name the app shows them against the one printed here.
+Bank, account, holder — the shop's whole payment instruction, and no part of
+it is a placeholder any more.
+
+Verified against a local run of the worker rather than by reading the file:
+`GET /api/v1/store-config` returns the completed line, and the WhatsApp
+bubble's number with it.
+
+## Copy now copies the NUMBER, not the sentence
+
+A consequence of the line above, and the reason this is a release rather
+than a one-word edit. The order page's Copy button put the whole payee line
+on the clipboard. That was survivable while the line was mostly digits. It
+is not now: a customer taps Copy, pastes into their banking app's account
+field, and it is refused — or worse, trims it by hand and mistypes.
+
+`accountDigits()` (lib/config.ts) takes the longest run of digits, minimum
+eight. Both halves of that rule earn their place, because holders' names
+contain digits: strip every non-digit from a line ending "— Studio 2 Z ..."
+and the 2 is welded onto the account number, giving a value that is the wrong
+one and still looks like the right one. On a line with no plausible number
+it returns null and Copy behaves exactly as before — an odd clipboard beats
+an empty one.
+
+The button reads "Copy number" when it has one, so nobody is surprised by
+what lands in the clipboard.
+
+**This is the one value on the shop that must not be wrong.** A mistyped
+account number does not bounce; it pays a stranger. So it has a test of its
+own — `tests/bank-line.mjs`, 11 cases across spaced, unspaced,
+hyphen-grouped and bank-last lines. It runs under Node's TypeScript
+stripping (`node --experimental-strip-types`) so it tests the shipped helper
+rather than a copy of it.
+
+## PUSH.bat runs the safety checks now
+
+Until this release the guards were only ever run by hand, which meant
+`tests/migration-safety.mjs` — written the day a bad migration stopped this
+very script dead at "Database changes" — could not do the one job it was
+written for. Step [3/7] now runs brand-isolation, no-secrets,
+migration-safety and bank-line before anything is published, and stops with
+"NOTHING WAS DEPLOYED" if any of them fails. They take seconds.
+
+## brand-isolation caught this release three times
+
+Worth recording, because all three catches were mine, and the third one is
+the reason the section above exists.
+
+1. The fixture in `scratch/stub-api.mjs` was first written with the real
+   payee line and the real WhatsApp number in it. A test fixture is not a
+   reason to make a second copy of an account number.
+2. The doc comment on `accountDigits()` explained itself using the real
+   account — and the wrong number the naive version produces from it.
+3. **This changelog.** The entry above originally opened by quoting the
+   completed `BANK_LINE` in full. It was written after the last hand-run of
+   the guards, so it went out unchecked and stopped the CEO's deploy at
+   step [3/7] — the first real run of the checks that this same release
+   added to PUSH.bat. The guard did exactly what it was put there for, on
+   its author, within the hour. Nothing reached the live shop.
+
+All three now use invented values or a shape. The shop's real account
+appears in exactly one place in this repo — `BANK_LINE` in
+`worker/wrangler.toml`, the one narrow exemption added in v1.12.1 — and
+`wrangler.toml` now says so in a comment beside the value, which is where
+the next person to change it will be looking.
+
+Note the guard skips `tests/` (it has to — `brand-isolation.mjs` holds the
+forbidden patterns as its own rules), so that directory is on the honour
+system.
+
+**The lesson, for whoever writes the next entry:** describe the payment
+values, never paste them. A changelog is committed, and the guard is not
+being fussy — a repo that names the account in six places is a repo where
+changing the account misses five of them.
+
+## Deploy
+
+**No migration.** Engine + website, as always.
+
+# ELFIA OFFICIAL STORE — v1.12.2 (26-08-2026)
+
+## Three phone faults, measured instead of judged
+
+The CEO, 26-08, with three screenshots: *"Whatsapp button overlapped with the
+arrow up button. Carousel photo on mobile offset, shop by collection, new
+arrival and studio pick still offset!!!!"*
+
+v1.10.1 had already fixed an "offset" — the page could be dragged sideways —
+and `scratch/overflow-check.mjs` still proves it cannot. That was a different
+fault from this one, and the guard passing is exactly why this survived: the
+page was the right width while the content inside it was not where it looked
+like it should be. So this release measures three specific things at five
+viewport widths rather than judging screenshots, in
+`scratch/rail-check.mjs` — 76 checks, all of which failed before the changes
+below.
+
+### 1. Every rail was eating its own gutter
+
+Reproduced on all three phone widths: `scrollLeft = 16` on every horizontal
+rail on load, so the first tile of *Shop by collection*, *New arrivals*,
+*Studio picks* and the shop's filter chips was sliced off against the left
+edge of the screen while the headings above them sat correctly inset.
+
+A rail is pulled out to the screen edges with `-mx-4` and puts the 16px
+gutter back inside itself with `px-4`. The cause was one line in
+`app/globals.css`: `scroll-snap-type: x mandatory`. `scroll-snap-align: start`
+means "line my start edge up with the snapport's start edge", and the
+snapport is the scrollport — padding is not what it measures from. The
+browser therefore scrolled 16px on load, before anyone touched the rail, to
+bring the first tile flush with the border edge, throwing the gutter away.
+
+The fix is `scroll-padding-inline-start: 1rem` on the rail: it tells the
+snapport where the content actually starts, so `scrollLeft = 0` becomes the
+snap position. It must stay equal to the rail's own `padding-left`.
+
+### 2. The two floating buttons were one floating button
+
+The WhatsApp bubble and the back-to-top arrow both carried
+`bottom-tabbar right-4`, which is one position — the arrow was drawn inside
+the green circle. Measured overlap: 56px on every phone width.
+
+The comment on `ScrollTopButton` has claimed "sits above the WhatsApp bubble"
+since v0.7.0. On a desktop it did (`lg:bottom-24` against `lg:bottom-6`),
+which is why this was never seen: it was invisible on the screen it was
+built on. The new `bottom-tabbar-2` utility is that position plus the
+bubble's own height and a gap, and it is applied **conditionally** — the
+bubble hides itself when no WhatsApp number is configured, and an arrow
+parked 68px up with nothing underneath it is its own small bug. Both
+components now ask one `hasWhatsApp()` function rather than keeping two
+copies of the same test.
+
+While there: the store config was being fetched three times per page, once
+per component. The promise is cached at module scope now, so it is fetched
+once.
+
+### 3. The carousel photo did not fit its banner
+
+The studio shoots **portrait** (896x1200). The banner is 4:3 on a phone and
+21:9 on a desktop. A contained portrait photo in a landscape banner leaves
+the shop's blush showing down both sides, and at the CEO's own zoom of 150%
+those gaps measured **29px each** — the photo read as sitting off-centre in a
+box that did not fit it.
+
+Turning the zoom up would close them: the arithmetic says 180% on a phone.
+It would not close them on a desktop, and a setting that has to be different
+per screen is not a setting anyone can get right once.
+
+So the same photo is now laid in **behind** the banner, cover-fitted and
+blurred, with the sharp contained copy on top. The banner is full-bleed for
+any photo at any zoom, and nothing already framed in the portal changes.
+
+**The first attempt at this passed a geometric check and was still wrong.**
+The blurred layer measured as covering the banner on every side while a 40px
+band down each edge was still see-through: a CSS blur samples past its
+element's edge, finds nothing there, and fades out — the box was covering,
+the paint was not. The guard is therefore a pixel test: the banner's own
+background is painted an impossible green, the screenshot is read back, and
+any green pixel is a hole. Verified by breaking it on purpose — with the
+backdrop removed 7.6% of the banner comes back green; with the first
+version's overhang, 2 pixels do; as shipped, none.
+
+## New in scratch/
+
+- `rail-check.mjs` — the 76 checks above, at 320 / 390 / 430 / 768 / 1280,
+  including a minimal PNG reader so the banner check can look at pixels.
+- `stub-api.mjs` — answers `/api/v1/products` and `/api/v1/store-config` with
+  a 22-product fixture, so a layout can be measured without standing up
+  wrangler, D1 and R2. Its payee line and phone number are invented; the
+  brand-isolation guard caught the first draft for carrying the real ones,
+  which is the guard doing its job.
+
+## Unchanged and still true
+
+The bank line is still missing its BANK NAME (see v1.12.1). Nothing in this
+release touches money, the bridge, the worker or the database — it is
+storefront CSS and one React component. **No migration.**
+
 # ELFIA OFFICIAL STORE — v1.12.1 (26-08-2026)
 
 ## The shop can take money again

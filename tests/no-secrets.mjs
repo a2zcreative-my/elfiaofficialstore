@@ -45,6 +45,20 @@ const ALLOWED = new Set([
 /** Files whose sample UUIDs are documentation, not credentials. */
 const ALLOWED_FILES = new Set(["PORTAL-BRIDGE-SPEC.md", "tests/no-secrets.mjs"]);
 
+/**
+ * The path a file is KNOWN by here — always forward slashes, no leading "./".
+ *
+ * v1.12.4. This gate had never run anywhere but Linux until PUSH.bat started
+ * running it (v1.12.3), and the CEO's first Windows deploy stopped dead on
+ * it. `path.join` uses backslashes there, so "tests\\no-secrets.mjs" never
+ * matched the "tests/no-secrets.mjs" in ALLOWED_FILES above — this file
+ * scanned ITSELF and failed the build on the example in its own doc comment.
+ *
+ * Every path compared or reported below goes through here. A guard that only
+ * works on the machine it was written on is not a guard.
+ */
+const norm = (p) => p.replace(/\\/g, "/").replace(/^\.\//, "");
+
 const RULES = [
   {
     name: "a secret assigned a literal value",
@@ -82,7 +96,7 @@ const walk = (dir) => {
     const p = join(dir, entry);
     if (statSync(p).isDirectory()) { walk(p); continue; }
     if (!TEXT.test(entry)) continue;
-    const rel = p.replace(/^\.\//, "");
+    const rel = norm(p);
     if (ALLOWED_FILES.has(rel)) continue;
     const src = readFileSync(p, "utf8");
     for (const rule of RULES) {

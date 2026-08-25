@@ -29,18 +29,36 @@ echo   This takes a few minutes. Leave the window open until it
 echo   says DONE.
 echo.
 
-echo   [1/6] Checking the Cloudflare login...
+echo   [1/7] Checking the Cloudflare login...
 cd worker
 call npx wrangler whoami >nul 2>&1
 if errorlevel 1 goto :nologin
 cd ..
 echo         signed in.
 
-echo   [2/6] Installing what the build needs...
+echo   [2/7] Installing what the build needs...
 call npm install --no-audit --no-fund
 if errorlevel 1 goto :failed
 
-echo   [3/6] Database changes...
+REM  These four take seconds, and each one exists because something went
+REM  wrong once. Until v1.12.3 they were only ever run by hand - which meant
+REM  the migration check, written the day a bad migration stopped this very
+REM  script dead at "Database changes", could not do the one job it was
+REM  written for.
+echo   [3/7] Safety checks...
+call node tests\brand-isolation.mjs
+if errorlevel 1 goto :checkfailed
+call node tests\no-secrets.mjs
+if errorlevel 1 goto :checkfailed
+call node tests\migration-safety.mjs
+if errorlevel 1 goto :checkfailed
+REM  No flag here on purpose - the script picks the right way to read the
+REM  TypeScript helper for whatever Node is installed. An unrecognised flag
+REM  would stop Node before the script could explain itself.
+call node tests\bank-line.mjs
+if errorlevel 1 goto :checkfailed
+
+echo   [4/7] Database changes...
 REM  CI=true is REQUIRED: without it wrangler asks "continue?" and
 REM  answering no exits 0, which would publish new code against an
 REM  un-migrated database.
@@ -51,18 +69,18 @@ if errorlevel 1 goto :failedpop
 cd ..
 set CI=
 
-echo   [4/6] Publishing the ENGINE (elfia-api)...
+echo   [5/7] Publishing the ENGINE (elfia-api)...
 cd worker
 call npx wrangler deploy
 if errorlevel 1 goto :failedpop
 cd ..
 
-echo   [5/6] Building the shop...
+echo   [6/7] Building the shop...
 call npx next build
 if errorlevel 1 goto :failed
 if not exist "out\index.html" goto :nobuild
 
-echo   [6/6] Publishing the WEBSITE (elfia-store)...
+echo   [7/7] Publishing the WEBSITE (elfia-store)...
 echo         ^(this is the half that was missing before^)
 call npx wrangler pages deploy out --project-name=elfia-store --commit-dirty=true
 if errorlevel 1 goto :sitefailed
@@ -127,6 +145,18 @@ echo   ============================================
 echo    The engine is already live, but the pages customers look
 echo    at were NOT updated - exactly the half-deployed state this
 echo    file exists to prevent. Copy this window and send it over.
+echo.
+pause
+exit /b 1
+
+:checkfailed
+echo.
+echo   ============================================
+echo    [X] A SAFETY CHECK FAILED - NOTHING WAS DEPLOYED.
+echo   ============================================
+echo    Nothing has changed on the live shop. Scroll up to the
+echo    lines just above this box - the check names the file and
+echo    the line - and send them over.
 echo.
 pause
 exit /b 1
