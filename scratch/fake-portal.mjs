@@ -40,6 +40,7 @@ const stock = new Map([
 const applied = new Set();   // event ids already counted — the dedupe store
 const prices = new Map();    // sku -> price_cents; absent = feed omits the field
 let down = false;
+let downOnly = null;   // null = everything is down; "movements" = writes only
 
 /* v1.5.0 — per-SKU metadata the feed may carry: a real name, a collection and
    a photo. `meta` only holds what a test has set; everything absent falls back
@@ -83,8 +84,13 @@ http.createServer(async (req, res) => {
     return send(res, 200, { ok: true });
   }
   if (url.pathname === "/_down") {
+    /* v1.8.0 — `only: "movements"` models the state that actually bit the
+       CEO: the portal is perfectly readable, but it will not accept our
+       sales. That is the only way to watch a pull run while a sale is
+       genuinely still in flight. */
     const b = await body(req); down = Boolean(b.down);
-    return send(res, 200, { down });
+    downOnly = down && b.only === "movements" ? "movements" : null;
+    return send(res, 200, { down, downOnly });
   }
   if (url.pathname === "/_add") {
     const b = await body(req);
@@ -140,7 +146,9 @@ http.createServer(async (req, res) => {
     return res.end(PNG_1PX);
   }
 
-  if (down) { res.writeHead(503); return res.end("portal down"); }
+  if (down && (downOnly === null || url.pathname.endsWith("/elfia-movements"))) {
+    res.writeHead(503); return res.end("portal down");
+  }
   if (req.headers["x-bridge-key"] !== KEY) return send(res, 401, { error: "bad key" });
 
   if (url.pathname === "/bridge/elfia-inventory" && req.method === "GET") {
@@ -176,6 +184,15 @@ http.createServer(async (req, res) => {
         ...(sl.title ? { title: sl.title } : {}),
         ...(sl.subtitle ? { subtitle: sl.subtitle } : {}),
         sort: sl.sort ?? (i + 1) * 10,
+        /* v1.47.0 framing. The real portal ALWAYS sends these three (the
+           serializer defaults them), so the rig does too — except when a
+           test asks for the old shape by setting `noFraming`, which is how
+           "a portal older than 0088" is expressed. */
+        ...(sl.noFraming ? {} : {
+          focus_x: sl.focus_x ?? 50,
+          focus_y: sl.focus_y ?? 50,
+          fit: sl.fit ?? "cover",
+        }),
       })),
     });
   }

@@ -21,12 +21,19 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
 import {
-  BRAND_SLIDES, CATEGORIES, GROUPS, fmtRM, imageUrl, splitName, type PortalSlide, type Product,
+  BRAND_SLIDES, CATEGORIES, GROUPS, fmtRM, imageUrl, slideFraming, splitName,
+  type PortalSlide, type Product,
 } from "@/lib/config";
 
 import { CardSkeleton, Icon, ProductCard, SectionHeader, type IconName } from "./ui";
 
-interface Slide { image: string; title: string; subtitle: string; href?: string; position?: string }
+interface Slide {
+  image: string; title: string; subtitle: string; href?: string;
+  /** CSS object-position — which part of the photo survives the crop. */
+  position?: string;
+  /** v1.8.0 — true shows the WHOLE photo letterboxed instead of cropping. */
+  contain?: boolean;
+}
 
 function Carousel({ slides }: { slides: Slide[] }) {
   const [idx, setIdx] = useState(0);
@@ -50,7 +57,11 @@ function Carousel({ slides }: { slides: Slide[] }) {
           const inner = (
             <div className="relative aspect-[4/3] w-full sm:aspect-[21/9]">
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={s.image} alt={s.title} className="h-full w-full object-cover"
+              {/* v1.8.0 — a "whole photo" slide is letterboxed, and the
+                  blush behind it is the band the customer sees at the edges;
+                  a filling slide crops around the point the portal aimed at. */}
+              <img src={s.image} alt={s.title}
+                className={`h-full w-full ${s.contain ? "object-contain" : "object-cover"}`}
                 style={{ objectPosition: s.position ?? "50% 0%" }}
                 loading={i === 0 ? "eager" : "lazy"} />
               {/* A rose wash rather than a black scrim — the blush palette
@@ -139,12 +150,18 @@ export default function Home() {
      shots. No portal slides = the shipped pair, exactly as before. Featured
      products ride after either set, unchanged. */
   const heroSlides: Slide[] = portalSlides.length > 0
-    ? portalSlides.map((s) => ({
-        image: imageUrl(s.image_key),
-        title: s.title ?? "",
-        subtitle: s.subtitle ?? "",
-        position: "50% 30%",
-      }))
+    ? portalSlides.map((s) => {
+        /* v1.8.0 (CEO: "I want to adjustable the photo … it is look too zoom")
+           — the crop is no longer this file's guess. The portal aims it. */
+        const f = slideFraming(s);
+        return {
+          image: imageUrl(s.image_key),
+          title: s.title ?? "",
+          subtitle: s.subtitle ?? "",
+          position: f.position,
+          contain: f.contain,
+        };
+      })
     : [...BRAND_SLIDES];
 
   const slides: Slide[] = [

@@ -1,3 +1,80 @@
+# ELFIA OFFICIAL STORE — v1.8.0 (25-08-2026, late night)
+
+## Two dead ends removed, and the photo you can aim
+
+Three complaints in one evening, and two of them were the same fault wearing
+different clothes: something in this store was quietly waiting for a human to
+visit `/admin` — an `/admin` the live store cannot even open, because
+ADMIN_KEY has never been set.
+
+### "Shawl set in the portal doesnt listed there!"
+
+Twelve shawls, ticked **Publish** in the portal, never reached the shop. Not
+a sync failure: feed A carries ONLY items with the portal's publish flag, and
+this store was taking each new SKU and hiding it (`active = 0`,
+`portal_pending = 1`) to wait for a *second* approval under
+/admin → Products → From portal. That gate was mine, not hers. It asked the
+CEO to approve her own approval, in a screen she cannot reach.
+
+**A feed item is now created LIVE.** The portal's tick IS the publish
+decision. And a row still sitting in the old queue is **released on the next
+pull** — which is what clears the twelve without anyone touching /admin.
+What still guards the shopfront is upstream and unchanged: an item with no
+name or no positive price is reported, never invented. The store's own
+/admin keeps its off switch for emergencies, and un-ticking Publish in the
+portal drops the SKU from the feed as before.
+
+### "I still notice that the stock doesnt sync correctly!!"
+
+LUMI001 and LUMI002 read **SOLD OUT** against a portal count of 20, and
+stayed that way through two deploys. A real deadlock, and an ugly one:
+
+- An unsent movement rightly stops the pull overwriting that SKU's count —
+  the portal computed it before it knew about the sale.
+- But the push loop **stops retrying** at `MAX_ATTEMPTS`. From that moment
+  the row could never be sent *and* never be overwritten. The shelf froze
+  forever, and the only key was `/admin/sync-retry`.
+
+Now the hold applies only while a sale is genuinely **in flight**
+(`attempts < MAX_ATTEMPTS`). Once the push has given up, the local number is
+a guess nobody can deliver, so the portal's count wins and the stuck SKU is
+**reported** in the pull result (`stuck_skus`) instead of silently freezing a
+product out of the shop.
+
+### "I want to adjustable the photo … it is look too zoom"
+
+The hero is a wide letterbox and v1.7.0 cropped every slide the same way —
+`50% 30%`, hard-coded here — so tall group photos lost their heads and
+nothing in the portal could change it. Migration **0015** adds `focus_x`,
+`focus_y` and `fit` to `portal_slides`:
+
+- **Aim** — the CEO clicks the spot on the photo in the portal's carousel
+  card; that arrives as two percentages and becomes CSS `object-position`.
+  The stored file is never re-encoded, so reframing costs nothing and can be
+  redone as often as she likes.
+- **Whole photo** — `fit: contain` shows the entire picture letterboxed
+  instead of cropping, for the shots that must not lose their edges.
+- A portal that sends no framing gets the middle of the photo, filling —
+  exactly v1.7.0's behaviour, so nothing jumps.
+
+### Verified
+
+- `scratch/store-sync-test.mjs` — **117 assertions**, twice in a row. The
+  hidden-queue assertions are deliberately REVERSED (live on arrival;
+  released from the legacy queue by the pull), plus new steps for the stuck
+  outbox (given-up sale no longer freezes the shelf; an in-flight one still
+  defers) and framing (aim crosses, re-aiming costs no download, contain
+  survives, no framing = the middle).
+- `scratch/portal-live-e2e.mjs` — **37 assertions against the real portal
+  worker**, twice: a portal-published shawl lands in the shop with no /admin
+  visit, and an aim point set in the portal reframes the shopfront's hero.
+- The rig gained a movements-only outage (`_down {only:"movements"}`) — the
+  one state in which a pull can be watched while a sale is still in flight.
+- Worker `tsc` clean; `next build` clean; brand-isolation, no-secrets PASS.
+
+**Deploy**: migration 0015. ADMIN_KEY is still worth setting one day, but
+nothing in the shop waits on it any more.
+
 # ELFIA OFFICIAL STORE — v1.7.0 (25-08-2026, late night)
 
 ## The slashed price and the portal-run carousel

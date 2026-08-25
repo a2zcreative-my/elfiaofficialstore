@@ -88,7 +88,10 @@ step("the created product carries the portal's dressing");
 {
   shawl = await bySku("SHWL001");
   ok("exists", Boolean(shawl));
-  ok("hidden, pending review", shawl.active === 0 && shawl.portal_pending === 1, JSON.stringify({ a: shawl.active, p: shawl.portal_pending }));
+  /* v1.8.0 — the CEO's rule: the portal's Publish tick IS the decision, so
+     a feed item arrives LIVE. (The feed only carries bridge_enabled rows.) */
+  ok("live immediately — the portal already published it", shawl.active === 1 && shawl.portal_pending === 0,
+     JSON.stringify({ a: shawl.active, p: shawl.portal_pending }));
   ok("the portal's name", shawl.name === "Shawl Premium — Beige", shawl.name);
   ok("the portal's collection", shawl.category === "shawl", shawl.category);
   ok("the portal's description", shawl.description === "Long-cut, lightweight and opaque. Finished by hand.", String(shawl.description));
@@ -142,9 +145,8 @@ step("v1.6.0 — a portal photo TAKES OVER a store-made product");
     `${before} -> ${after.image_key}`);
 }
 
-step("Publish in the store's admin puts it in the shop");
+step("no /admin visit is needed — it is already in the shop (v1.8.0)");
 {
-  await admin(`/admin/products/${shawl.id}/publish`, { method: "POST", body: "{}" });
   const pub = await bySku("SHWL001");
   ok("live", pub.active === 1 && pub.portal_pending === 0);
   const shop = await (await fetch(`${STORE}/products`)).json();
@@ -212,6 +214,22 @@ step("v1.46.0 — a slide uploaded in the portal becomes the shop's carousel");
      String(got?.image_key));
   const img = got ? await fetch(`${STORE}/media/${got.image_key}`) : { status: 0, headers: new Headers() };
   ok("and ELFIA serves it itself", img.status === 200 && (img.headers.get("content-type") ?? "").startsWith("image/"), `${img.status}`);
+
+  /* v1.47.0/v1.8.0 — the CEO aims the photo in the portal and the shop
+     crops to match; "whole photo" turns the crop off altogether. */
+  await portalStaff(`/elfia/slides/${slide.id}`, {
+    method: "PATCH", body: JSON.stringify({ focus_x: 25, focus_y: 75 }),
+  });
+  await syncNow();
+  const framed = ((await (await fetch(`${STORE}/products`)).json()).slides ?? [])
+    .find((x) => x.portal_id === slide.id);
+  ok("the aim point reached the shop", framed?.focus_x === 25 && framed?.focus_y === 75,
+     JSON.stringify({ x: framed?.focus_x, y: framed?.focus_y }));
+  await portalStaff(`/elfia/slides/${slide.id}`, { method: "PATCH", body: JSON.stringify({ fit: "contain" }) });
+  await syncNow();
+  const whole = ((await (await fetch(`${STORE}/products`)).json()).slides ?? [])
+    .find((x) => x.portal_id === slide.id);
+  ok("and 'show the whole photo' reached it too", whole?.fit === "contain", String(whole?.fit));
 
   /* Remove in the portal — the ONE feed section where absence means delete. */
   await portalStaff(`/elfia/slides/${slide.id}`, { method: "PATCH", body: JSON.stringify({ remove: true }) });

@@ -20,6 +20,8 @@
  *      (wrangler.e2e.toml points BRIDGE_URL/BRIDGE_PUSH_URL at :8200)
  *   3. node scratch/store-sync-test.mjs
  */
+import { execFileSync } from "node:child_process";
+
 const API = process.env.ELFIA_API ?? "http://127.0.0.1:8787/api/v1";
 const PORTAL = process.env.PORTAL ?? "http://127.0.0.1:8200";
 const KEY = process.env.ELFIA_ADMIN_KEY ?? "test-passcode-123";
@@ -62,6 +64,23 @@ const order = (id, qty, name = "Sync Test") => {
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/* v1.8.0 — the ONE thing this rig cannot make over HTTP any more: a row in
+   the OLD hidden review queue. v1.5.0 created those; v1.8.0 does not, by
+   design. So the legacy state is built straight in the local D1 — fixture
+   setup only, never an assertion — because "a row the previous version
+   left behind" is exactly what the release path has to cope with. */
+/* Same idea for an event the push loop has given up on: 25 real failures
+   would take minutes and prove nothing extra. */
+const exhaustAttempts = (sku) => execFileSync("npx", [
+  "wrangler", "d1", "execute", "elfia-store", "--local", "--config", "wrangler.e2e.toml",
+  "--command", `UPDATE stock_events SET attempts = 99 WHERE sent_at IS NULL AND REPLACE(UPPER(sku),' ','') = '${String(sku).toUpperCase()}'`,
+], { cwd: new URL("../worker", import.meta.url).pathname, stdio: "pipe" });
+
+const legacyPending = (id) => execFileSync("npx", [
+  "wrangler", "d1", "execute", "elfia-store", "--local", "--config", "wrangler.e2e.toml",
+  "--command", `UPDATE products SET active = 0, portal_pending = 1 WHERE id = ${Number(id)}`,
+], { cwd: new URL("../worker", import.meta.url).pathname, stdio: "pipe" });
+
 step("both directions are configured");
 {
   const h = await jget(`${API}/health`);
@@ -83,6 +102,29 @@ step("start from a settled outbox");
   }
   ok("no sales are waiting to be delivered", st.pending === 0 && st.stuck === 0,
      `${st.pending} pending, ${st.stuck} stuck`);
+}
+
+step("start clean: retire fixtures other suites left in the store");
+{
+  /* scratch/portal-live-e2e.mjs (the real-portal rig) publishes a SHWL001.
+     The stand-in portal here does not carry that SKU, so a leftover row
+     would show up as "unknown there" in every reconciliation below. Same
+     retire trick as that suite uses: rename the SKU away and hide it. */
+  /* v1.8.0 — this has to sweep WIDER than SHWL001 now. Portal-created rows
+     are live from birth, so a run that died half way leaves an ACTIVE shawl
+     the stand-in portal has since forgotten, and every reconciliation below
+     would report it as "unknown there" forever. Every SHWL* fixture goes. */
+  for (let i = 0; i < 12; i++) {
+    const left = (await adminProducts()).find(
+      (x) => x.sku && /^SHWL/i.test(x.sku.replace(/\s+/g, "")) && (x.active === 1 || x.portal_pending === 1));
+    if (!left) break;
+    await admin(`/admin/products/${left.id}`, {
+      method: "PUT", body: JSON.stringify({ sku: `RET${Date.now() % 1e9}${i}`, active: false }),
+    });
+  }
+  const stillLive = (await adminProducts()).filter(
+    (x) => x.sku && /^SHWL/i.test(x.sku.replace(/\s+/g, "")) && (x.active === 1 || x.portal_pending === 1));
+  ok("no cross-suite fixture is still live", stillLive.length === 0, JSON.stringify(stillLive.map((x) => x.sku)));
 }
 
 let products, target;
@@ -309,22 +351,6 @@ const SHAWL = `SHWL${stamp}`;
 const SHAWL_B = `SHWL${String((Number(stamp) + 1) % 1_000_000).padStart(6, "0")}`;
 let shawlId = null;
 
-step("start clean: retire fixtures other suites left in the store");
-{
-  /* scratch/portal-live-e2e.mjs (the real-portal rig) publishes a SHWL001.
-     The stand-in portal here does not carry that SKU, so a leftover row
-     would show up as "unknown there" in every reconciliation below. Same
-     retire trick as that suite uses: rename the SKU away and hide it. */
-  for (let i = 0; i < 5; i++) {
-    const left = await bySku("SHWL001");
-    if (!left) break;
-    await admin(`/admin/products/${left.id}`, {
-      method: "PUT", body: JSON.stringify({ sku: `RET${Date.now() % 1e9}${i}`, active: false }),
-    });
-  }
-  ok("no cross-suite fixture is still live", !(await bySku("SHWL001")));
-}
-
 step("start from an empty review queue");
 {
   /* The same reasoning as "start from a settled outbox" above: the local
@@ -357,12 +383,15 @@ step("a SKU the store has never had is CREATED, hidden (v1.5.0)");
   ok("counted, not always-available", p?.track_stock === 1);
   ok("marked as the portal's creation", p?.portal_created === 1);
 
-  /* The whole safety of this feature: the portal can propose, only a human
-     can publish. */
-  ok("it is HIDDEN — no customer can see it yet", p?.active === 0, `active=${p?.active}`);
-  ok("and it is waiting in the review queue", p?.portal_pending === 1);
+  /* v1.8.0 — REVERSED on the CEO's instruction. v1.5.0 created this hidden
+     and demanded a second approval in /admin; the feed only ever carries
+     items the portal has ticked Publish on, so that gate asked her to
+     approve her own approval — and on 25-08 it silently held back twelve
+     published shawls. The portal's tick IS the publish decision. */
+  ok("it is LIVE — the portal already published it", p?.active === 1, `active=${p?.active}`);
+  ok("and nothing is parked in a review queue", p?.portal_pending === 0);
   const shopfront = (await jget(`${API}/products`)).products;
-  ok("the public catalogue does not carry it", !shopfront.some((x) => x.id === shawlId));
+  ok("the public catalogue carries it straight away", shopfront.some((x) => x.id === shawlId));
 }
 
 step("its photo was copied into the store's own storage");
@@ -442,7 +471,7 @@ step("a hidden product keeps syncing while it waits for review");
   const p = await bySku(SHAWL);
   ok("its count followed the portal (20)", p.stock === 20, `stock=${p.stock}`);
   ok("its price followed the portal (RM 59)", p.price_cents === 5900, `price=${p.price_cents}`);
-  ok("it is still hidden", p.active === 0);
+  ok("it stays live while the portal keeps sending it", p.active === 1);
 }
 
 step("a waiting product is not accused of being unknown to the portal");
@@ -452,19 +481,25 @@ step("a waiting product is not accused of being unknown to the portal");
      !r.pull.unmatched_store.some((x) => /SHWL/i.test(x)), JSON.stringify(r.pull.unmatched_store));
 }
 
-step("Publish puts it in the shop");
+step("a row left in the OLD review queue is released by the next pull (v1.8.0)");
 {
-  const pendingBefore = (await status()).portal_pending;
-  const res = await admin(`/admin/products/${shawlId}/publish`, { method: "POST", body: "{}" });
-  ok("publish accepted", res.status === 200, `${res.status}`);
+  /* The migration path that matters to her right now: twelve shawls she
+     published in the portal are sitting hidden in this store from the
+     v1.5.0 rule. Hiding one by hand and pulling again must set it free —
+     no /admin visit, which is the whole point, since ADMIN_KEY is not even
+     configured on the live store. */
+  legacyPending(shawlId);
+  const before = await bySku(SHAWL);
+  ok("the fixture is hidden and pending again", before.active === 0 && before.portal_pending === 1,
+     JSON.stringify({ a: before.active, p: before.portal_pending }));
+  const r = await syncNow();
+  ok("the pull says it released it", r.pull.published.some((x) => x.replace(/\s+/g, "") === SHAWL),
+     JSON.stringify(r.pull.published));
   const p = await bySku(SHAWL);
   ok("it is live", p.active === 1);
   ok("and out of the review queue", p.portal_pending === 0);
   const shopfront = (await jget(`${API}/products`)).products;
   ok("customers can now see it", shopfront.some((x) => x.id === shawlId));
-  const st = await status();
-  ok("the review counter went down by one", st.portal_pending === pendingBefore - 1,
-     `${pendingBefore} -> ${st.portal_pending}`);
 }
 
 step("a photo the store will not accept is reported, and stops nothing");
@@ -480,7 +515,7 @@ step("a photo the store will not accept is reported, and stops nothing");
   ok("the product simply has no photo yet", !p.image_key, String(p.image_key));
   const st = await status();
   ok("/admin sees the photo problem on its own line", /SHWL/i.test(st.last_photo_error ?? ""), st.last_photo_error ?? "(none)");
-  ok("and it joined the review queue", st.portal_pending === pendingBefore + 1,
+  ok("and it went straight into the shop, queue untouched", st.portal_pending === pendingBefore,
      `${pendingBefore} -> ${st.portal_pending}`);
 }
 
@@ -492,15 +527,17 @@ step("an oversized photo is refused too");
   ok("nothing was stored", !(await bySku(SHAWL_B)).image_key);
 }
 
-step("Dismiss clears the queue without publishing");
+step("the store's own /admin can still retire a product (v1.8.0)");
 {
+  /* The portal decides what is published; the store keeps its own off
+     switch for an emergency. Un-ticking Publish in the portal drops the
+     SKU from the feed, which is the everyday way — this is the other one. */
   const p = await bySku(SHAWL_B);
-  await admin(`/admin/products/${p.id}/publish`, { method: "POST", body: JSON.stringify({ publish: false }) });
+  await admin(`/admin/products/${p.id}`, { method: "PUT", body: JSON.stringify({ active: false }) });
   const after = await bySku(SHAWL_B);
-  ok("still hidden", after.active === 0);
-  ok("but out of the queue", after.portal_pending === 0);
+  ok("hidden by hand", after.active === 0);
   const shopfront = (await jget(`${API}/products`)).products;
-  ok("and still invisible to customers", !shopfront.some((x) => x.id === after.id));
+  ok("and invisible to customers", !shopfront.some((x) => x.id === after.id));
 }
 
 step("a feed item with no name is reported, never invented");
@@ -593,6 +630,98 @@ step("the portal's slides become the shop's carousel (v1.7.0)");
   await syncNow();
   const none = await jget(`${API}/products`);
   ok("no portal slides = no slides key (the shop uses its built-ins)", !("slides" in none), JSON.stringify(none.slides));
+}
+
+step("a sale nobody could deliver stops freezing the shelf (v1.8.0)");
+{
+  /* THE BUG the CEO hit on 25-08: the portal said 20, the shop said SOLD
+     OUT, and it stayed that way through two deploys.
+     An unsent movement rightly holds its SKU's count — until the push loop
+     gives up on it at MAX_ATTEMPTS and stops retrying. From that moment the
+     old rule deadlocked: the push would never send it, the pull would never
+     overwrite it, and only /admin/sync-retry could break the tie — in an
+     /admin the live store cannot even open, because ADMIN_KEY is unset.
+     Now: still in flight = deferred; given up on = the portal's count wins
+     and the stuck SKU is REPORTED instead of silently freezing. */
+  const p3 = await bySku("LUMI003");
+  await portalDown(true);
+  await order(p3.id, 1, "Stuck Sale");
+  await sleep(900);
+  await portalDown(false);
+
+  /* Age the event out by hand — 25 real failed attempts would be the same
+     state, several minutes slower. Fixture setup, not an assertion. */
+  exhaustAttempts("LUMI003");
+
+  await portalSet("LUMI003", 77);
+  const r = await syncNow();
+  ok("the stuck SKU is named, not hidden", r.pull.stuck_skus.some((x) => /LUMI\s*003/i.test(x)),
+     JSON.stringify(r.pull.stuck_skus));
+  ok("and it is NOT deferred any more", !r.pull.deferred.some((x) => /LUMI\s*003/i.test(x)),
+     JSON.stringify(r.pull.deferred));
+  const after = await bySku("LUMI003");
+  ok("the shelf follows the portal again (77)", after.stock === 77, `stock=${after.stock}`);
+
+  /* …while a sale still IN FLIGHT is protected exactly as before. */
+  /* Readable, but refusing our sales — the only state in which a pull can
+     be watched while a sale is genuinely still in flight. */
+  await fetch(`${PORTAL}/_down`, { method: "POST", body: JSON.stringify({ down: true, only: "movements" }) });
+  const p4 = await bySku("LUMI004");
+  const o4 = await order(p4.id, 1, "In Flight");
+  ok("the in-flight order was accepted", Boolean(o4.token), JSON.stringify(o4).slice(0, 160));
+  await sleep(900);
+  await portalSet("LUMI004", 55);
+  const r2 = await syncNow();
+  ok("the pull itself ran fine", !r2.pull.error, String(r2.pull.error));
+  ok("an in-flight sale still defers its SKU", r2.pull.deferred.some((x) => /LUMI\s*004/i.test(x)),
+     JSON.stringify(r2.pull.deferred));
+  ok("its count was left alone", (await bySku("LUMI004")).stock !== 55);
+  await portalDown(false);
+  for (let i = 0; i < 6; i++) { await syncNow(); if ((await status()).pending === 0) break; }
+}
+
+step("the portal frames the carousel photo (v1.8.0)");
+{
+  /* The CEO: "I want to adjustable the photo so that I can focus on what I
+     want. it is look too zoom and which is cause the photo cant be seen the
+     overall!!" — the crop is no longer the storefront's guess. */
+  await fetch(`${PORTAL}/_slides`, { method: "POST", body: JSON.stringify({ slides: [
+    { id: 41, photo: "hero1", marker: "f1", title: "Framed", focus_x: 20, focus_y: 80, fit: "cover" },
+    { id: 42, photo: "hero2", marker: "f2", fit: "contain" },
+  ] }) });
+  await syncNow();
+  const j = await jget(`${API}/products`);
+  const a = (j.slides ?? []).find((x) => x.portal_id === 41);
+  const b = (j.slides ?? []).find((x) => x.portal_id === 42);
+  ok("the aim point crossed over", a?.focus_x === 20 && a?.focus_y === 80,
+     JSON.stringify({ x: a?.focus_x, y: a?.focus_y }));
+  ok("cropping stays the default", a?.fit === "cover", String(a?.fit));
+  ok("and 'show the whole photo' crossed over too", b?.fit === "contain", String(b?.fit));
+
+  /* Re-aiming is a caption-style edit: no marker change, so no re-download. */
+  const key = a.image_key;
+  await fetch(`${PORTAL}/_slides`, { method: "POST", body: JSON.stringify({ slides: [
+    { id: 41, photo: "hero1", marker: "f1", title: "Framed", focus_x: 65, focus_y: 15, fit: "cover" },
+    { id: 42, photo: "hero2", marker: "f2", fit: "contain" },
+  ] }) });
+  await syncNow();
+  const j2 = await jget(`${API}/products`);
+  const a2 = (j2.slides ?? []).find((x) => x.portal_id === 41);
+  ok("re-aiming lands", a2?.focus_x === 65 && a2?.focus_y === 15, JSON.stringify({ x: a2?.focus_x, y: a2?.focus_y }));
+  ok("without re-downloading the photo", a2?.image_key === key);
+
+  /* A portal older than its framing migration sends neither field, and the
+     honest answer is the middle of the photo, filling the banner. */
+  await fetch(`${PORTAL}/_slides`, { method: "POST", body: JSON.stringify({ slides: [
+    { id: 41, photo: "hero1", marker: "f1", title: "Framed", noFraming: true },
+  ] }) });
+  await syncNow();
+  const j3 = await jget(`${API}/products`);
+  const a3 = (j3.slides ?? []).find((x) => x.portal_id === 41);
+  ok("no framing from the portal = the middle, filling", a3?.focus_x === 50 && a3?.focus_y === 50 && a3?.fit === "cover",
+     JSON.stringify({ x: a3?.focus_x, y: a3?.focus_y, fit: a3?.fit }));
+  await fetch(`${PORTAL}/_slides`, { method: "POST", body: JSON.stringify({ slides: [] }) });
+  await syncNow();
 }
 
 step("tidy up after this run");

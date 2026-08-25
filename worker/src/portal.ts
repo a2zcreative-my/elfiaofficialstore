@@ -17,9 +17,13 @@
  *
  * PULL (portal → store), previously a button nobody could press because it
  *   was never configured.
- *   Runs on the cron and refreshes counts BY SKU. It refuses to touch any SKU
- *   that still has unsent events, because that count was computed before the
- *   portal saw our sales and would silently put sold pieces back.
+ *   Runs on the cron and refreshes counts BY SKU. It refuses to touch a SKU
+ *   whose sales are still IN FLIGHT, because that count was computed before
+ *   the portal saw them and would silently put sold pieces back. v1.8.0: only
+ *   while in flight — an event past MAX_ATTEMPTS is never retried, and used
+ *   to freeze its SKU's shelf forever (the CEO watched two SKUs read SOLD OUT
+ *   against a portal count of 20). Given up on = the portal's count wins, and
+ *   the stuck row is reported instead of hiding.
  *
  * PHOTOS AND NEW PRODUCTS (v1.5.0, CEO: "on portal I want an option for me to
  *   upload the photo and also to bridge directly to ELFIA … Shawl seem not yet
@@ -27,9 +31,13 @@
  *   The shawls were never a sync failure: the pull can only refresh a SKU the
  *   store already has, and ELFIA has no shawl products at all. So a feed item
  *   that matches nothing is no longer just reported — if it carries a `name`
- *   and a usable `price_cents`, the store CREATES it, hidden, and puts it in
- *   /admin -> Products -> From portal for a human to publish. Nothing the
- *   portal invents reaches a customer unseen.
+ *   and a usable `price_cents`, the store CREATES it.
+ *   v1.8.0: created LIVE. v1.5.0 parked new SKUs in /admin -> From portal for
+ *   a second approval; the feed carries only items the portal has ticked
+ *   Publish on, so that gate asked the CEO to approve her own approval and
+ *   silently swallowed twelve published shawls. A matched row still sitting
+ *   in the old queue is released on the next pull. What guards the shopfront
+ *   is upstream: no name or no positive price = reported, never invented.
  *   A photo arrives as `image_url` + `image_updated_at`. The file is copied
  *   into ELFIA's own R2 once and re-copied only when the marker changes, so
  *   the shop never hot-links the portal and a five-minute cron costs nothing.
@@ -75,6 +83,15 @@ const PRIVATE_HOST = /^(localhost|\[?::1\]?|0\.0\.0\.0|127\.|10\.|192\.168\.|169
 
 /** Trim and cap a string the portal sent. Anything empty comes back "". */
 const clean = (v: unknown, max: number): string => String(v ?? "").trim().slice(0, max);
+
+/* v1.8.0 — a slide's focus point, 0-100 per cent. Anything the portal could
+   not send properly becomes the middle: a wrong number here would frame a
+   customer-facing banner on nothing. */
+const framePct = (v: unknown): number => {
+  const n = Math.round(Number(v));
+  if (!Number.isFinite(n)) return 50;
+  return Math.min(100, Math.max(0, n));
+};
 
 const configured = (v: string | undefined): boolean => Boolean(v && !v.startsWith("REPLACE"));
 
@@ -335,8 +352,14 @@ export interface PullResult {
   /** SKUs left alone because the portal has not yet seen our sales for them. */
   deferred: string[];
   /** v1.5.0 — products the feed brought in that the store did not have.
-      Created HIDDEN; they wait in /admin -> Products -> From portal. */
+      v1.8.0: created LIVE — the portal's Publish tick is the decision. */
   created: { sku: string; name: string }[];
+  /** v1.8.0 — rows released from the old hidden review queue this pull. */
+  published: string[];
+  /** v1.8.0 — SKUs with a sale the portal never acknowledged and that is no
+      longer being retried. Reported so it is visible; it no longer freezes
+      the shelf. */
+  stuck_skus: string[];
   /** Photos copied into R2 this pull. */
   photos: number;
   /** Photos that could not be copied, already phrased for a human. */
@@ -346,7 +369,7 @@ export interface PullResult {
 
 const EMPTY_PULL: Omit<PullResult, "configured" | "error"> = {
   updated: [], price_updated: [], unchanged: 0, unmatched_portal: [], unmatched_store: [], deferred: [],
-  created: [], photos: 0, photo_errors: [],
+  created: [], published: [], stuck_skus: [], photos: 0, photo_errors: [],
 };
 
 /** Refresh piece counts from the portal, by SKU — case- and whitespace-
@@ -369,6 +392,10 @@ export async function pullStock(env: Env): Promise<PullResult> {
   let feedSlides: {
     id: number; image_url: string; image_updated_at: string;
     title?: string; subtitle?: string; sort?: number;
+    /* v1.8.0 — framing, decided in the portal. Optional: a portal older
+       than its 0088 sends neither, and the middle of the photo is then the
+       honest answer. */
+    focus_x?: number; focus_y?: number; fit?: string;
   }[] | undefined;
   try {
     const r = await fetch(env.BRIDGE_URL!, { headers: { "X-Bridge-Key": env.BRIDGE_KEY! } });
@@ -399,18 +426,33 @@ export async function pullStock(env: Env): Promise<PullResult> {
   }>();
   const bySku = new Map(mine.map((m) => [normSku(m.sku), m]));
 
-  /* Any SKU whose sales are still sitting in the outbox must not be
-     overwritten: the portal computed that number before it knew about them. */
+  /* A SKU whose sales are still sitting in the outbox must not be
+     overwritten: the portal computed that number before it knew about them.
+     v1.8.0 — but ONLY while the sale is still genuinely in flight.
+     `attempts < MAX_ATTEMPTS` is the whole fix: the push loop stops retrying
+     an event at MAX_ATTEMPTS, so a permanently-stuck row used to hold its
+     SKU's shelf hostage FOREVER — the pull refused to touch the count, the
+     push refused to send it, and the only way out was /admin/sync-retry.
+     The CEO hit exactly that on 25-08: the portal said 20, the shop said
+     SOLD OUT, and stayed there through two deploys. A given-up event is a
+     local guess nobody can deliver; the portal's count is the truth, so it
+     is allowed through and the stuck row is reported instead of hiding. */
   const { results: waiting } = await env.DB.prepare(
-    `SELECT DISTINCT sku FROM stock_events WHERE sent_at IS NULL`,
-  ).all<{ sku: string }>().catch(() => ({ results: [] as { sku: string }[] }));
+    `SELECT DISTINCT sku FROM stock_events WHERE sent_at IS NULL AND attempts < ?1`,
+  ).bind(MAX_ATTEMPTS).all<{ sku: string }>().catch(() => ({ results: [] as { sku: string }[] }));
   const held = new Set(waiting.map((w) => normSku(w.sku)));
+
+  const { results: givenUp } = await env.DB.prepare(
+    `SELECT DISTINCT sku FROM stock_events WHERE sent_at IS NULL AND attempts >= ?1`,
+  ).bind(MAX_ATTEMPTS).all<{ sku: string }>().catch(() => ({ results: [] as { sku: string }[] }));
+  const stuck_skus = givenUp.map((w) => w.sku);
 
   const updated: PullResult["updated"] = [];
   const price_updated: PullResult["price_updated"] = [];
   const unmatched_portal: string[] = [];
   const deferred: string[] = [];
   const created: PullResult["created"] = [];
+  const published: string[] = [];
   const photo_errors: string[] = [];
   let unchanged = 0;
   let photos = 0;
@@ -456,10 +498,20 @@ export async function pullStock(env: Env): Promise<PullResult> {
       const desc = clean(it.description, 2000) || null;
       const listC = Math.round(Number(it.list_price_cents));
       const cmpAtBirth = it.list_price_cents !== undefined && Number.isFinite(listC) && listC > newPrice ? listC : null;
+      /* v1.8.0 — CREATED LIVE, not hidden.
+         v1.5.0 parked every new SKU in /admin → From portal for a second
+         approval. That gate was mine, not hers, and on 25-08 it silently
+         swallowed twelve shawls she had already ticked Publish on: the feed
+         carries ONLY items with the portal's publish flag set, so arriving
+         here IS the human decision, made by the person whose shop it is.
+         Asking her to approve her own approval — in an /admin she cannot
+         even open — is not a safety net, it is a dead end.
+         What still protects the shopfront is upstream and unchanged: no
+         name or no positive price = reported, never invented. */
       const row = await env.DB.prepare(
         `INSERT INTO products (name, description, price_cents, stock, active, sort, sku, category,
                                featured, track_stock, portal_created, portal_pending)
-         VALUES (?1, ?2, ?3, ?4, 0, 100, ?5, ?6, 0, 1, 1, 1) RETURNING id`,
+         VALUES (?1, ?2, ?3, ?4, 1, 100, ?5, ?6, 0, 1, 1, 0) RETURNING id`,
       ).bind(name, desc, newPrice, stock, clean(it.sku, 40), category)
        .first<{ id: number }>()
        .catch(() => null);
@@ -475,6 +527,20 @@ export async function pullStock(env: Env): Promise<PullResult> {
 
     if (!Number.isFinite(stock)) { unmatched_portal.push(clean(it.sku, 40)); continue; }
     bySku.delete(sku);
+
+    /* v1.8.0 — a row still waiting in the old review queue is released the
+       moment the portal names it again. This is what clears the backlog the
+       hidden-by-default rule built up (twelve published shawls that never
+       reached the shop), and it keeps working afterwards: the feed only
+       carries portal-published items, so a matched pending row has the
+       portal's Publish tick on it right now. Un-ticking it there removes it
+       from the feed, and the store's own /admin can still retire it. */
+    if (m.portal_pending === 1) {
+      await env.DB.prepare(
+        `UPDATE products SET active = 1, portal_pending = 0 WHERE id = ?1`,
+      ).bind(m.id).run().catch(() => null);
+      published.push(m.sku);
+    }
 
     /* Price first, and independently of the stock decision below: a SKU whose
        COUNT is deferred (unsent sales) must still take the portal's PRICE —
@@ -554,6 +620,7 @@ export async function pullStock(env: Env): Promise<PullResult> {
      product photos: copied into our R2 once, re-copied only when the marker
      moves, failures reported per slide and never fatal to the pull. */
   let slides_synced = 0;
+  let framingCols = true; // v1.8.0 — flipped off once if 0015 has not run
   if (feedSlides !== undefined) {
     try {
       const { results: haveRows } = await env.DB.prepare(
@@ -593,14 +660,34 @@ export async function pullStock(env: Env): Promise<PullResult> {
           }
         }
         if (!key) continue;
+        const marker = clean(sl.image_updated_at, 200);
+        const title = clean(sl.title, 120) || null;
+        const subtitle = clean(sl.subtitle, 200) || null;
+        const sort = Number.isFinite(Number(sl.sort)) ? Math.round(Number(sl.sort)) : 100;
+        /* v1.8.0 — framing rides along. Tried wide first and narrow on
+           failure: if this worker is published before 0015 runs, a hard
+           failure here would take the WHOLE carousel down rather than just
+           the new controls, which is not a trade worth making. */
+        if (framingCols) {
+          try {
+            await env.DB.prepare(
+              `INSERT INTO portal_slides (portal_id, image_key, image_marker, title, subtitle, sort, focus_x, focus_y, fit, updated_at)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, datetime('now'))
+               ON CONFLICT (portal_id) DO UPDATE SET image_key = ?2, image_marker = ?3,
+                 title = ?4, subtitle = ?5, sort = ?6, focus_x = ?7, focus_y = ?8, fit = ?9,
+                 updated_at = datetime('now')`,
+            ).bind(sl.id, key, marker, title, subtitle, sort,
+                   framePct(sl.focus_x), framePct(sl.focus_y),
+                   sl.fit === "contain" ? "contain" : "cover").run();
+            continue;
+          } catch { framingCols = false; /* pre-0015 — fall through, once */ }
+        }
         await env.DB.prepare(
           `INSERT INTO portal_slides (portal_id, image_key, image_marker, title, subtitle, sort, updated_at)
            VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))
            ON CONFLICT (portal_id) DO UPDATE SET image_key = ?2, image_marker = ?3,
              title = ?4, subtitle = ?5, sort = ?6, updated_at = datetime('now')`,
-        ).bind(sl.id, key, clean(sl.image_updated_at, 200),
-               clean(sl.title, 120) || null, clean(sl.subtitle, 200) || null,
-               Number.isFinite(Number(sl.sort)) ? Math.round(Number(sl.sort)) : 100).run();
+        ).bind(sl.id, key, marker, title, subtitle, sort).run();
       }
       /* Removed in the portal = removed here. The R2 file is left behind
          (same rule as replaced product photos: a cached page may still
@@ -621,7 +708,9 @@ export async function pullStock(env: Env): Promise<PullResult> {
   await setState(env, "last_pull_result",
     `ok: ${updated.length} updated, ${unchanged} unchanged` +
     `${price_updated.length ? `, ${price_updated.length} price${price_updated.length === 1 ? "" : "s"} updated` : ""}` +
-    `${created.length ? `, ${created.length} new product${created.length === 1 ? "" : "s"} waiting to publish` : ""}` +
+    `${created.length ? `, ${created.length} new product${created.length === 1 ? "" : "s"} added to the shop` : ""}` +
+    `${published.length ? `, ${published.length} released from the old review queue` : ""}` +
+    `${stuck_skus.length ? `, ${stuck_skus.length} SKU${stuck_skus.length === 1 ? "" : "s"} with an undelivered sale (count taken from the portal anyway)` : ""}` +
     `${photos ? `, ${photos} photo${photos === 1 ? "" : "s"}` : ""}` +
     `${slides_synced ? `, ${slides_synced} slide${slides_synced === 1 ? "" : "s"}` : ""}` +
     `${deferred.length ? `, ${deferred.length} deferred` : ""}` +
@@ -633,7 +722,7 @@ export async function pullStock(env: Env): Promise<PullResult> {
   await setState(env, "last_photo_error", photo_errors.length ? photo_errors.slice(0, 5).join(" · ") : "");
   return {
     configured: true, updated, price_updated, unchanged,
-    unmatched_portal, unmatched_store, deferred, created, photos, photo_errors,
+    unmatched_portal, unmatched_store, deferred, created, published, stuck_skus, photos, photo_errors,
   };
 }
 

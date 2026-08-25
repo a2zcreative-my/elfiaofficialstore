@@ -56,7 +56,26 @@ export interface PortalSlide {
   title?: string | null;
   subtitle?: string | null;
   sort: number;
+  /* v1.8.0 — framing, chosen in the portal by clicking the photo. Optional
+     because a store worker older than 0015 sends neither. */
+  focus_x?: number | null;
+  focus_y?: number | null;
+  fit?: string | null;
 }
+
+/** v1.8.0 — the CSS a slide's framing turns into. Kept next to the type so
+    the hero and any future banner frame a photo the same way, and so the
+    "portal said nothing" answer lives in exactly one place: fill the banner
+    from its middle, which is what the shop did before framing existed. */
+export const slideFraming = (s: Pick<PortalSlide, "focus_x" | "focus_y" | "fit">): {
+  position: string; contain: boolean;
+} => {
+  const pct = (v: unknown): number => {
+    const n = Math.round(Number(v));
+    return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : 50;
+  };
+  return { position: `${pct(s.focus_x)}% ${pct(s.focus_y)}%`, contain: s.fit === "contain" };
+};
 
 /** The struck-through number, only when it is genuinely bigger than the
     price — a "sale" from RM 36 down to RM 36 is not a sale. */

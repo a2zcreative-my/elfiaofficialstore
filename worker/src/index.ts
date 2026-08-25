@@ -74,7 +74,7 @@ export interface Env {
   STORE_ORIGIN?: string;     // override for local testing
 }
 
-const VERSION = "1.7.0";
+const VERSION = "1.8.0";
 const STATUSES = ["pending_payment", "payment_review", "paid", "shipped", "completed", "cancelled"] as const;
 type Status = (typeof STATUSES)[number];
 
@@ -281,13 +281,14 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
       const probe = async (q: string): Promise<boolean> => {
         try { await env.DB.prepare(q).first(); return true; } catch { return false; }
       };
-      const [accounts, progress, syncReady, traffic, consent, portalProducts, saleSlides] = await Promise.all([
+      const [accounts, progress, syncReady, traffic, consent, portalProducts, saleSlides, framing] = await Promise.all([
         table("customers"), table("order_events"), table("stock_events"), table("traffic_hits"),
         probe("SELECT marketing_consent_at FROM customers LIMIT 1"),
         probe("SELECT portal_pending FROM products LIMIT 1"),
         probe("SELECT compare_price_cents FROM products LIMIT 1"),
+        probe("SELECT focus_x FROM portal_slides LIMIT 1"),
       ]);
-      const migrationsCurrent = accounts && progress && syncReady && traffic && consent && portalProducts && saleSlides;
+      const migrationsCurrent = accounts && progress && syncReady && traffic && consent && portalProducts && saleSlides && framing;
       const cfg = storeConfig(env);
       return json({
         ok: db && migrationsCurrent, version: VERSION, db, r2,
@@ -302,6 +303,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
             ...(consent ? [] : ["marketing_consent (0012 — PDPA consent will not record)"]),
             ...(portalProducts ? [] : ["portal_products (0013 — the portal cannot create products or send photos)"]),
             ...(saleSlides ? [] : ["sale_price_and_slides (0014 — discounts and the portal carousel will not show)"]),
+            ...(framing ? [] : ["slide_framing (0015 — the portal cannot aim or un-crop a carousel photo)"]),
           ],
         }),
         admin_key_configured: Boolean(env.ADMIN_KEY),
@@ -353,9 +355,19 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
          Empty/absent = the page falls back to its shipped campaign slides. */
       let slides: Record<string, unknown>[] = [];
       try {
-        slides = (await env.DB.prepare(
-          `SELECT portal_id, image_key, title, subtitle, sort FROM portal_slides ORDER BY sort, portal_id LIMIT 12`,
-        ).all()).results;
+        /* v1.8.0 — framing columns, with the pre-0015 fallback: a worker
+           published ahead of its migration must still draw the carousel,
+           just without the portal's aiming. */
+        try {
+          slides = (await env.DB.prepare(
+            `SELECT portal_id, image_key, title, subtitle, sort, focus_x, focus_y, fit
+               FROM portal_slides ORDER BY sort, portal_id LIMIT 12`,
+          ).all()).results;
+        } catch {
+          slides = (await env.DB.prepare(
+            `SELECT portal_id, image_key, title, subtitle, sort FROM portal_slides ORDER BY sort, portal_id LIMIT 12`,
+          ).all()).results;
+        }
       } catch { /* pre-0014 */ }
       return json({ products: results, ...(slides.length ? { slides } : {}) });
     }
