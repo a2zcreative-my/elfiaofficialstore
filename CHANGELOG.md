@@ -1,3 +1,23 @@
+# ELFIA OFFICIAL STORE — v1.5.2 (25-08-2026, evening)
+
+## The lock-up and the brand line
+
+Two corrections from the CEO after seeing the live site:
+
+- **"official store should be below of the ELFIA logo and centralized"** —
+  the header lock-up is now stacked: the wordmark with OFFICIAL STORE
+  letter-spaced beneath it, centred, on desktop AND in the phone app bar
+  (scaled down), on every width — no longer a side note that only appeared on
+  large screens.
+- **"ELFIA branding name is First Sight, Forever Yours"** — the brand line
+  replaces "Modest wear, made to last." everywhere it lived: the STORE
+  constant, the first hero slide's subtitle, the footer (its own italic line
+  in deep rose), and the page + Open Graph descriptions, so a shared link now
+  carries the brand line too.
+
+Pages-only — no Worker deploy, no migration. `next build` clean,
+brand-isolation PASS.
+
 # ELFIA OFFICIAL STORE — v1.5.1 (25-08-2026)
 
 ## The portal's words, and the proof

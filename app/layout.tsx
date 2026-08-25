@@ -7,7 +7,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "ELFIA OFFICIAL STORE — premium bawal, direct from ELFIA",
-  description: "Shop the ELFIA bawal collection directly. Lightweight, opaque, made to last — delivered across Malaysia.",
+  description: "First Sight, Forever Yours — shop the ELFIA bawal collection directly, delivered across Malaysia.",
   metadataBase: new URL(STORE.url),
   /* v1.4.0 — on a phone the store is meant to be kept on the home screen, so
      it declares itself app-capable. This is a bookmark that opens without the
@@ -15,7 +15,7 @@ export const metadata: Metadata = {
   appleWebApp: { capable: true, title: "ELFIA", statusBarStyle: "default" },
   openGraph: {
     title: "ELFIA OFFICIAL STORE",
-    description: "The ELFIA bawal collection — delivered across Malaysia.",
+    description: "First Sight, Forever Yours — the ELFIA bawal collection, delivered across Malaysia.",
     url: STORE.url,
     siteName: STORE.name,
     images: ["/collection/campaign-studio.jpg"],

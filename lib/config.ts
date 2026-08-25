@@ -9,7 +9,8 @@
 
 export const STORE = {
   name: "ELFIA OFFICIAL STORE",
-  tagline: "Modest wear, made to last.",
+  /* v1.5.2 — the CEO: "ELFIA branding name is First Sight, Forever Yours". */
+  tagline: "First Sight, Forever Yours",
   url: "https://elfiaofficialstore.my",
 } as const;
 
@@ -75,7 +76,7 @@ export const CATEGORIES = [
    ceiling, so they sit lower in frame. Product slides keep the default "top",
    which is where the hijab is. */
 export const BRAND_SLIDES = [
-  { image: "/collection/campaign-studio.jpg", title: "The Bawal Collection", subtitle: "Ten shades. One standard.", position: "50% 45%" },
+  { image: "/collection/campaign-studio.jpg", title: "The Bawal Collection", subtitle: "First Sight, Forever Yours", position: "50% 45%" },
   { image: "/collection/campaign-salon.jpg", title: "Made for every day", subtitle: "Office-ready, live-tested.", position: "50% 38%" },
 ] as const;
 

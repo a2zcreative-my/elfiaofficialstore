@@ -98,9 +98,12 @@ export function SiteHeader() {
       <div className="border-b border-elfia-line bg-elfia-cream/95 backdrop-blur">
         {/* ---- phone: wordmark · search · cart ---- */}
         <div className="flex h-14 items-center gap-2.5 px-4 sm:hidden">
-          <Link href="/" aria-label="ELFIA home" className="shrink-0">
+          <Link href="/" aria-label="ELFIA home" className="flex shrink-0 flex-col items-center gap-px">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/logo.png" alt="ELFIA" className="h-5 w-auto" />
+            <img src="/logo.png" alt="ELFIA" className="h-4.5 w-auto" />
+            <span className="text-[6px] leading-none font-semibold tracking-[0.3em] text-elfia-muted uppercase">
+              Official Store
+            </span>
           </Link>
           <SearchBox compact />
           <Link href="/cart" aria-label={`Cart, ${count} item${count === 1 ? "" : "s"}`}
@@ -112,10 +115,13 @@ export function SiteHeader() {
 
         {/* ---- desktop: the web shop ---- */}
         <div className="mx-auto hidden h-16 w-full max-w-6xl items-center gap-8 px-6 sm:flex">
-          <Link href="/" className="flex shrink-0 items-center gap-2.5">
+          {/* v1.5.2 (CEO): "official store should be below of the ELFIA logo
+              and centralized" — the lock-up is now stacked, on every desktop
+              width, not an afterthought that only appeared from lg up. */}
+          <Link href="/" className="flex shrink-0 flex-col items-center gap-0.5">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/logo.png" alt="ELFIA" className="h-7 w-auto" />
-            <span className="mt-0.5 hidden text-[9px] font-semibold tracking-[0.3em] text-elfia-muted uppercase lg:block">
+            <img src="/logo.png" alt="ELFIA" className="h-6 w-auto" />
+            <span className="text-[8px] leading-none font-semibold tracking-[0.34em] text-elfia-muted uppercase">
               Official Store
             </span>
           </Link>
@@ -275,8 +281,9 @@ export function SiteFooter() {
           <div>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src="/logo.png" alt="ELFIA" className="h-6 w-auto" />
-            <p className="mt-3 max-w-xs text-xs leading-relaxed text-elfia-muted">
-              {STORE.tagline} Premium bawal, ordered direct and delivered across Malaysia.
+            <p className="mt-2 text-xs font-medium tracking-wide text-elfia-deep italic">{STORE.tagline}</p>
+            <p className="mt-2 max-w-xs text-xs leading-relaxed text-elfia-muted">
+              Premium bawal, ordered direct and delivered across Malaysia.
             </p>
           </div>
           <div>
