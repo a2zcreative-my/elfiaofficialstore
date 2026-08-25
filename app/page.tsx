@@ -1,24 +1,30 @@
 "use client";
 
 /**
- * Home — hero carousel, a short trust row, and the catalogue with collection
- * tabs.
+ * Home — v1.4.0.
+ *
+ * The CEO's layout: a soft blush hero, a three-fact trust strip, horizontal
+ * rails of New Arrivals and studio picks, the collections strip, and then the
+ * catalogue. On a phone this is the app's Home tab; on a desktop it is the
+ * shop's front page — same markup, two shapes.
  *
  * Carousel (CEO: "make carousel slide automatically on the main"): the brand
  * campaign slides first, then every product an admin marks Featured.
- * Auto-advances every 5s, pauses while the pointer is over it (nobody likes a
- * slide escaping mid-read), arrows + dots for manual control, and a featured
- * slide clicks through to its product page.
+ * Auto-advances every 5s, pauses while the pointer is over it, arrows + dots
+ * for manual control, and a featured slide clicks through to its product.
  *
- * v0.6.0 — the cards were square crops of portrait photography with a
- * truncated one-line name ("Bawal Premium — …"). They are now 4:5 frames that
- * match how the range was shot, with the shade name large and the series
- * small, so the grid reads like a lookbook instead of a stock list.
+ * NOTHING on this page invents a fact. There is no "best seller" rail because
+ * the shop does not yet count sales — the second rail shows what the studio
+ * actually marked Featured, which is a real answer to the same question.
  */
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
-import { BRAND_SLIDES, CATEGORIES, fmtRM, imageUrl, isSoldOut, lowStock, splitName, type Product } from "@/lib/config";
+import {
+  BRAND_SLIDES, CATEGORIES, GROUPS, fmtRM, imageUrl, splitName, type Product,
+} from "@/lib/config";
+
+import { CardSkeleton, Icon, ProductCard, SectionHeader, type IconName } from "./ui";
 
 interface Slide { image: string; title: string; subtitle: string; href?: string; position?: string }
 
@@ -36,30 +42,32 @@ function Carousel({ slides }: { slides: Slide[] }) {
 
   if (slides.length === 0) return null;
   return (
-    <div className="group/car relative overflow-hidden rounded-3xl bg-stone-900 shadow-sm"
+    <div className="group/car relative overflow-hidden rounded-3xl bg-elfia-blush shadow-sm ring-1 ring-elfia-line"
       onMouseEnter={() => { paused.current = true; }}
       onMouseLeave={() => { paused.current = false; }}>
       <div className="flex transition-transform duration-700 ease-out" style={{ transform: `translateX(-${idx * 100}%)` }}>
         {slides.map((s, i) => {
           const inner = (
-            <div className="relative aspect-[4/3] w-full sm:aspect-[16/9]">
+            <div className="relative aspect-[4/3] w-full sm:aspect-[21/9]">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={s.image} alt={s.title} className="h-full w-full object-cover"
                 style={{ objectPosition: s.position ?? "50% 0%" }}
                 loading={i === 0 ? "eager" : "lazy"} />
-              <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/15 to-transparent" />
-              <div className="absolute right-5 bottom-6 left-5 sm:bottom-9 sm:left-9">
-                <p className="text-2xl font-bold text-white drop-shadow-sm sm:text-4xl">{s.title}</p>
+              {/* A rose wash rather than a black scrim — the blush palette
+                  stays intact and the type still passes contrast. */}
+              <div className="absolute inset-0 bg-gradient-to-r from-[#40292f]/75 via-[#40292f]/35 to-transparent" />
+              <div className="absolute right-5 bottom-6 left-5 max-w-md sm:bottom-10 sm:left-10">
+                <p className="text-2xl leading-tight font-bold text-white drop-shadow-sm sm:text-4xl">{s.title}</p>
                 <p className="mt-1.5 text-sm text-white/85 sm:text-base">{s.subtitle}</p>
-                <span className="mt-4 inline-flex h-9 items-center rounded-full bg-white/95 px-4 text-xs font-semibold text-stone-900">
-                  {s.href ? "View this shade" : "Shop the collection"}
+                <span className="mt-4 inline-flex h-10 items-center rounded-full bg-white px-5 text-xs font-semibold text-elfia-deep sm:text-sm">
+                  {s.href ? "View this shade" : "Shop now"}
                 </span>
               </div>
             </div>
           );
           return (
             <div key={i} className="w-full shrink-0">
-              {s.href ? <Link href={s.href}>{inner}</Link> : <a href="#shop">{inner}</a>}
+              {s.href ? <Link href={s.href}>{inner}</Link> : <Link href="/shop">{inner}</Link>}
             </div>
           );
         })}
@@ -67,11 +75,15 @@ function Carousel({ slides }: { slides: Slide[] }) {
       {slides.length > 1 && (
         <>
           <button type="button" aria-label="Previous slide"
-            className="absolute top-1/2 left-3 hidden h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full bg-white/85 text-lg font-bold text-stone-800 transition-opacity hover:bg-white sm:flex sm:opacity-0 sm:group-hover/car:opacity-100"
-            onClick={() => setIdx((i) => (i - 1 + slides.length) % slides.length)}>‹</button>
+            className="absolute top-1/2 left-3 hidden h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full bg-white/90 text-elfia-deep transition-opacity hover:bg-white sm:flex sm:opacity-0 sm:group-hover/car:opacity-100"
+            onClick={() => setIdx((i) => (i - 1 + slides.length) % slides.length)}>
+            <Icon name="chevron" size={16} strokeWidth={2} className="rotate-180" />
+          </button>
           <button type="button" aria-label="Next slide"
-            className="absolute top-1/2 right-3 hidden h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full bg-white/85 text-lg font-bold text-stone-800 transition-opacity hover:bg-white sm:flex sm:opacity-0 sm:group-hover/car:opacity-100"
-            onClick={() => setIdx((i) => (i + 1) % slides.length)}>›</button>
+            className="absolute top-1/2 right-3 hidden h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full bg-white/90 text-elfia-deep transition-opacity hover:bg-white sm:flex sm:opacity-0 sm:group-hover/car:opacity-100"
+            onClick={() => setIdx((i) => (i + 1) % slides.length)}>
+            <Icon name="chevron" size={16} strokeWidth={2} />
+          </button>
           <div className="absolute bottom-3 left-1/2 flex -translate-x-1/2 gap-1.5">
             {slides.map((_, i) => (
               <button key={i} type="button" aria-label={`Slide ${i + 1}`}
@@ -85,52 +97,25 @@ function Carousel({ slides }: { slides: Slide[] }) {
   );
 }
 
-/** One catalogue card. The whole tile is the link. */
-function ProductCard({ p }: { p: Product }) {
-  const { series, shade } = splitName(p.name);
-  const out = isSoldOut(p);
-  const low = lowStock(p);
+/** A rail of tiles that scrolls sideways on a phone and lays out as a grid on
+    a desktop — the app pattern the CEO's layout uses for New Arrivals. */
+function ProductRail({ items }: { items: Product[] }) {
+  if (items.length === 0) return null;
   return (
-    <Link href={`/p?id=${p.id}`} className="group block">
-      <div className="relative aspect-[4/5] overflow-hidden rounded-2xl bg-stone-100 ring-1 ring-stone-200/70">
-        {p.image_key ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={imageUrl(p.image_key)} alt={p.name}
-            className={`h-full w-full object-cover object-top transition-transform duration-500 group-hover:scale-[1.04] ${out ? "opacity-70" : ""}`}
-            loading="lazy" />
-        ) : (
-          <div className="flex h-full items-center justify-center text-2xl font-bold tracking-widest text-stone-300">ELFIA</div>
-        )}
-        {out ? (
-          <span className="absolute top-3 left-3 rounded-full bg-white/95 px-2.5 py-1 text-[10px] font-bold tracking-wider text-stone-700 uppercase">
-            Sold out
-          </span>
-        ) : low ? (
-          <span className="absolute top-3 left-3 rounded-full bg-amber-500/95 px-2.5 py-1 text-[10px] font-bold tracking-wider text-white uppercase">
-            {low} left
-          </span>
-        ) : null}
+    <>
+      <div className="rail -mx-4 px-4 sm:hidden">
+        {items.map((p) => (
+          <div key={p.id} className="rail-item w-[43vw] max-w-[190px]">
+            <ProductCard p={p} compact />
+          </div>
+        ))}
       </div>
-      <div className="mt-3">
-        {/* SKU alone — the series name repeats on every card and only ever
-            wrapped to a second line on a phone. */}
-        {(p.sku ?? series) && (
-          <p className="text-[10px] font-medium tracking-[0.18em] text-stone-400 uppercase">{p.sku ?? series}</p>
-        )}
-        <p className="mt-1 line-clamp-2 text-[15px] leading-snug font-medium text-stone-800 group-hover:text-[#7a2648]">
-          {shade}
-        </p>
-        <p className="mt-1 text-sm font-bold text-[#7a2648]">{fmtRM(p.price_cents)}</p>
+      <div className="hidden gap-5 sm:grid sm:grid-cols-3 lg:grid-cols-4">
+        {items.slice(0, 4).map((p) => <ProductCard key={p.id} p={p} />)}
       </div>
-    </Link>
+    </>
   );
 }
-
-const TRUST = [
-  { title: "Direct from ELFIA", note: "No middleman, no markup" },
-  { title: "Ships across Malaysia", note: "Tracked, straight to your door" },
-  { title: "Bank transfer or FPX", note: "Confirmed on WhatsApp" },
-];
 
 export default function Home() {
   const [products, setProducts] = useState<Product[] | null>(null);
@@ -143,68 +128,143 @@ export default function Home() {
       .catch(() => setProducts([]));
   }, []);
 
+  const all = products ?? [];
+
   const slides: Slide[] = [
     ...BRAND_SLIDES,
-    ...(products ?? [])
+    ...all
       .filter((p) => p.featured === 1 && p.image_key)
-      .map((p) => ({ image: imageUrl(p.image_key), title: splitName(p.name).shade, subtitle: `${fmtRM(p.price_cents)} — shop now`, href: `/p?id=${p.id}` })),
+      .map((p) => ({
+        image: imageUrl(p.image_key),
+        title: splitName(p.name).shade,
+        subtitle: `${fmtRM(p.price_cents)} — shop now`,
+        href: `/p?id=${p.id}`,
+      })),
   ];
 
-  const shown = (products ?? []).filter((p) => tab === "all" || (p.category ?? "bawal") === tab);
-  const counts = (key: string) => (products ?? []).filter((p) => key === "all" || (p.category ?? "bawal") === key).length;
+  /* "New" = most recently added, which is what the id order means here.
+     "Studio picks" = what an admin actually marked Featured. Both are facts
+     the shop already holds; neither is a made-up ranking. */
+  const newest = [...all].sort((a, b) => b.id - a.id).slice(0, 6);
+  const picks = all.filter((p) => p.featured === 1).slice(0, 6);
+
+  const TRUST: { icon: IconName; title: string; note: string }[] = [
+    { icon: "truck", title: "Nationwide delivery", note: "Tracked to your door" },
+    { icon: "shield", title: "Premium material", note: "Lightweight & opaque" },
+    { icon: "spark", title: "Direct from ELFIA", note: "No middleman, no markup" },
+  ];
+
+  const groups = GROUPS.map((g) => ({ g, items: all.filter(g.match) })).filter((x) => x.items.length > 0);
+
+  const shown = all.filter((p) => tab === "all" || (p.category ?? "bawal") === tab);
+  const counts = (key: string) => all.filter((p) => key === "all" || (p.category ?? "bawal") === key).length;
 
   return (
-    <main className="px-4 pt-5 pb-10 sm:px-6 sm:pt-8">
-      <div className="mx-auto w-full max-w-5xl">
+    <main className="px-4 pt-4 pb-10 sm:px-6 sm:pt-8">
+      <div className="mx-auto w-full max-w-6xl">
         <Carousel slides={slides} />
 
-        <div className="mt-6 grid grid-cols-3 gap-px overflow-hidden rounded-2xl bg-stone-200/70">
+        {/* trust strip */}
+        <div className="mt-5 grid grid-cols-3 gap-2.5 sm:gap-4">
           {TRUST.map((t) => (
-            <div key={t.title} className="bg-white px-2 py-3.5 text-center sm:px-4">
-              <p className="text-[11px] leading-tight font-semibold text-stone-800 sm:text-[13px]">{t.title}</p>
-              <p className="mt-1 text-[10px] leading-tight text-stone-500 sm:text-[11px]">{t.note}</p>
+            <div key={t.title} className="flex flex-col items-center gap-1.5 rounded-2xl bg-white px-2 py-3.5 text-center ring-1 ring-elfia-line sm:flex-row sm:gap-3 sm:px-4 sm:text-left">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-elfia-veil text-elfia-deep">
+                <Icon name={t.icon} size={18} />
+              </span>
+              <span>
+                <span className="block text-[11px] leading-tight font-semibold text-elfia-ink sm:text-[13px]">{t.title}</span>
+                <span className="mt-0.5 block text-[10px] leading-tight text-elfia-muted sm:text-[11px]">{t.note}</span>
+              </span>
             </div>
           ))}
         </div>
 
-        <div id="shop" className="mt-14 scroll-mt-28 text-center">
-          <p className="text-[11px] font-semibold tracking-[0.28em] text-[#7a2648]/70 uppercase">The collection</p>
-          <h1 className="mt-2 text-3xl font-bold text-stone-900 sm:text-4xl">Shop ELFIA</h1>
-          <p className="mx-auto mt-2 max-w-md text-sm text-stone-500">
-            Lightweight, opaque, and easy to style — order direct and we deliver nationwide.
-          </p>
-        </div>
+        {/* collections strip */}
+        {groups.length > 0 && (
+          <section className="mt-9">
+            <SectionHeader title="Shop by collection" href="/categories" />
+            <div className="rail -mx-4 px-4 sm:mx-0 sm:grid sm:grid-cols-4 sm:gap-4 sm:px-0">
+              {groups.map(({ g, items }) => (
+                <Link key={g.key} href={`/shop?c=${g.key}`}
+                  className="rail-item group flex w-48 items-center gap-3 rounded-2xl bg-white p-2.5 ring-1 ring-elfia-line transition-colors hover:ring-elfia-rose sm:w-auto">
+                  <span className="h-12 w-12 shrink-0 overflow-hidden rounded-xl bg-elfia-veil">
+                    {items[0]?.image_key && (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={imageUrl(items[0].image_key)} alt="" className="h-full w-full object-cover object-top" />
+                    )}
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block truncate text-[13px] font-semibold text-elfia-ink group-hover:text-elfia-deep">{g.label}</span>
+                    <span className="block text-[11px] text-elfia-muted">{items.length} item{items.length === 1 ? "" : "s"}</span>
+                  </span>
+                </Link>
+              ))}
+            </div>
+          </section>
+        )}
 
-        <div className="mt-7 flex flex-wrap justify-center gap-2" data-testid="category-tabs">
-          {[{ key: "all", label: "All" }, ...CATEGORIES].map((c) => (
-            <button key={c.key} type="button"
-              className={`rounded-full px-5 py-2 text-sm font-medium transition-colors ${
-                tab === c.key ? "bg-[#7a2648] text-white" : "bg-white text-stone-600 ring-1 ring-stone-200 hover:bg-stone-50"}`}
-              onClick={() => setTab(c.key)}>
-              {c.label}
-              {products && <span className="ml-1.5 text-[11px] opacity-60">{counts(c.key)}</span>}
-            </button>
-          ))}
-        </div>
+        {/* new arrivals */}
+        <section className="mt-10">
+          <SectionHeader title="New arrivals" href="/shop" hint="The latest shades into the shop" />
+          {products === null
+            ? <div className="grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-4"><CardSkeleton n={4} /></div>
+            : <ProductRail items={newest} />}
+        </section>
 
-        {products === null && (
-          <div className="mt-8 grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-3 lg:grid-cols-4">
-            {Array.from({ length: 4 }).map((_, i) => (
-              <div key={i} className="animate-pulse">
-                <div className="aspect-[4/5] rounded-2xl bg-stone-200/70" />
-                <div className="mt-3 h-3 w-1/3 rounded bg-stone-200/70" />
-                <div className="mt-2 h-3.5 w-2/3 rounded bg-stone-200/70" />
-              </div>
+        {/* studio picks */}
+        {picks.length > 0 && (
+          <section className="mt-10">
+            <SectionHeader title="Studio picks" href="/shop?c=featured" hint="Hand-picked from the range" />
+            <ProductRail items={picks} />
+          </section>
+        )}
+
+        {/* the catalogue */}
+        <section className="mt-14 scroll-mt-28" id="shop">
+          <div className="text-center">
+            <p className="text-[11px] font-semibold tracking-[0.28em] text-elfia-rose uppercase">The collection</p>
+            <h2 className="mt-2 text-3xl font-bold text-elfia-ink sm:text-4xl">Shop ELFIA</h2>
+            <p className="mx-auto mt-2 max-w-md text-sm text-elfia-muted">
+              Lightweight, opaque, and easy to style — order direct and we deliver nationwide.
+            </p>
+          </div>
+
+          {/* The collection tabs (v0.2.0) stay on the home page: they are the
+              coarse Bawal / Shawl split, while /shop does the finer filtering
+              and sorting. */}
+          <div className="mt-7 flex flex-wrap justify-center gap-2" data-testid="category-tabs">
+            {[{ key: "all", label: "All" }, ...CATEGORIES].map((c) => (
+              <button key={c.key} type="button"
+                className={`rounded-full px-5 py-2 text-sm font-medium transition-colors ${
+                  tab === c.key ? "bg-elfia-deep text-white" : "bg-white text-elfia-body ring-1 ring-elfia-line hover:ring-elfia-rose"}`}
+                onClick={() => setTab(c.key)}>
+                {c.label}
+                {products && <span className="ml-1.5 text-[11px] opacity-60">{counts(c.key)}</span>}
+              </button>
             ))}
           </div>
-        )}
-        {products !== null && shown.length === 0 && (
-          <p className="mt-12 text-center text-sm text-stone-500">Nothing in this collection yet — check back after the next live.</p>
-        )}
 
-        <div className="mt-8 grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-3 lg:grid-cols-4" data-testid="product-grid">
-          {shown.map((p) => <ProductCard key={p.id} p={p} />)}
-        </div>
+          <div className="mt-8 grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-3 lg:grid-cols-4" data-testid="product-grid">
+            {products === null
+              ? <CardSkeleton n={8} />
+              : shown.slice(0, 8).map((p) => <ProductCard key={p.id} p={p} />)}
+          </div>
+
+          {products !== null && shown.length === 0 && (
+            <p className="mt-12 text-center text-sm text-elfia-muted">
+              Nothing in this collection yet — check back after the next live.
+            </p>
+          )}
+
+          {shown.length > 8 && (
+            <div className="mt-8 text-center">
+              <Link href={tab === "all" ? "/shop" : `/shop?c=${tab}`}
+                className="inline-flex h-12 items-center justify-center rounded-full border border-elfia-line bg-white px-7 text-sm font-semibold text-elfia-deep transition-colors hover:border-elfia-rose">
+                See all {shown.length} products
+              </Link>
+            </div>
+          )}
+        </section>
       </div>
     </main>
   );

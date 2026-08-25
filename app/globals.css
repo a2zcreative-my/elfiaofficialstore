@@ -1,5 +1,94 @@
 @import "tailwindcss";
 
-/* ELFIA OFFICIAL STORE — deep rose + ivory. This is ELFIA's OWN system:
-   no other company's identity appears anywhere in this project
-   (tests/brand-isolation.mjs enforces it). */
+/* ELFIA OFFICIAL STORE — blush + deep rose.
+   This is ELFIA's OWN system: no other company's identity appears anywhere in
+   this project (tests/brand-isolation.mjs enforces it).
+
+   v1.4.0 — the CEO showed a blush-toned app layout and asked for the store to
+   look like it on a phone AND stay a proper web shop on a desktop. Every
+   colour the storefront uses is now a token here, so the palette is changed
+   in ONE place instead of hunting hex codes through fourteen files. */
+
+@theme {
+  /* Surfaces */
+  --color-elfia-cream: #fcf5f3; /* page background */
+  --color-elfia-blush: #f7e7e3; /* soft panels, chips, hero wash */
+  --color-elfia-veil: #fdeeea; /* lightest tint, avatars + icon pads */
+  --color-elfia-line: #efe0dc; /* hairlines and card borders */
+
+  /* Ink */
+  --color-elfia-ink: #40292f; /* headings */
+  --color-elfia-body: #6b545a; /* body copy */
+  --color-elfia-muted: #9b858a; /* captions, meta */
+
+  /* Brand */
+  --color-elfia-rose: #c08792; /* the soft accent of the range */
+  --color-elfia-deep: #7a2648; /* buttons, prices, active state */
+  --color-elfia-deeper: #8f2e55; /* hover */
+  --color-elfia-gold: #b98a4b; /* member / exclusive marks */
+
+  --radius-card: 1.25rem;
+}
+
+/* The app shell sits on cream; the desktop shop keeps the same ground so the
+   two views never look like two different shops. */
+body {
+  background-color: var(--color-elfia-cream);
+  color: var(--color-elfia-ink);
+}
+
+/* Horizontal rails (New arrivals, Best sellers) scroll like an app's do —
+   no visible scrollbar, snapping to each card. */
+@utility rail {
+  display: flex;
+  gap: 0.875rem;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.rail::-webkit-scrollbar {
+  display: none;
+}
+@utility rail-item {
+  scroll-snap-align: start;
+  flex: 0 0 auto;
+}
+
+/* The phone tab bar covers the last stripe of the page; every screen ends
+   above it. Also respects the iPhone home indicator. */
+@utility pb-tabbar {
+  padding-bottom: calc(5.25rem + env(safe-area-inset-bottom));
+}
+@utility bottom-tabbar {
+  bottom: calc(4.5rem + env(safe-area-inset-bottom));
+}
+
+@keyframes elfia-pop {
+  0% {
+    transform: scale(0.82);
+  }
+  60% {
+    transform: scale(1.12);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@utility animate-pop {
+  animation: elfia-pop 0.28s ease-out;
+}
+
+@keyframes elfia-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@utility animate-rise {
+  animation: elfia-rise 0.35s ease-out both;
+}

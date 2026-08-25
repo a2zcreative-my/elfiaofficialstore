@@ -8,16 +8,22 @@
     Now every keystroke is kept on the device (never sent anywhere until they
     press the button), a signed-in customer's saved details fill it in, and
     the finished order is remembered locally so it can be reopened from
-    /track without hunting for the link. */
+    /track without hunting for the link.
+
+    v1.4.0 — blush layout, a two-step indicator, and the order summary in
+    view while the form is filled, so nobody presses Place order without
+    seeing what they are about to owe. */
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import Link from "next/link";
 
 import {
-  btnClass, clearDraft, inputClass, labelClass, readCart, readDraft, rememberOrder,
-  writeCart, writeDraft, type Account,
+  btnClass, clearDraft, fmtRM, imageUrl, inputClass, labelClass, readCart, readDraft, rememberOrder,
+  splitName, writeCart, writeDraft, type Account, type CartLine, type Product, type StoreConfig,
 } from "@/lib/config";
+
+import { Icon } from "./../ui";
 
 export default function Checkout() {
   const router = useRouter();
@@ -30,8 +36,21 @@ export default function Checkout() {
   const [empty, setEmpty] = useState(false);
   const [me, setMe] = useState<Account | null>(null);
 
+  /* The summary. Prices come from the server here too — this panel must never
+     disagree with what the Worker charges. */
+  const [lines, setLines] = useState<CartLine[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [config, setConfig] = useState<StoreConfig | null>(null);
+
   useEffect(() => {
-    if (readCart().length === 0) { setEmpty(true); return; }
+    const cart = readCart();
+    if (cart.length === 0) { setEmpty(true); return; }
+    setLines(cart);
+    void fetch("/api/v1/products").then((r) => r.json())
+      .then((j: { products: Product[] }) => setProducts(j.products)).catch(() => null);
+    void fetch("/api/v1/store-config").then((r) => r.json())
+      .then((j: StoreConfig) => setConfig(j)).catch(() => null);
+
     // Whatever they had typed before the refresh.
     const draft = readDraft();
     if (Object.keys(draft).length) setForm((f) => ({ ...f, ...draft }));
@@ -51,6 +70,12 @@ export default function Checkout() {
       })
       .catch(() => null);
   }, []);
+
+  const rows = lines
+    .map((l) => ({ line: l, product: products.find((p) => p.id === l.id) }))
+    .filter((r): r is { line: CartLine; product: Product } => Boolean(r.product));
+  const subtotal = rows.reduce((n, r) => n + r.product.price_cents * r.line.qty, 0);
+  const shipping = config ? (subtotal >= config.free_above_cents ? 0 : config.shipping_cents) : null;
 
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
     setForm((f) => {
@@ -90,68 +115,120 @@ export default function Checkout() {
   if (empty) {
     return (
       <main className="px-6 py-16 text-center">
-        <p className="text-sm text-stone-500">Your cart is empty.</p>
+        <p className="text-sm text-elfia-muted">Your cart is empty.</p>
+        <Link href="/shop" className={`${btnClass} mt-4`}>Browse the shop</Link>
       </main>
     );
   }
 
   return (
-    <main className="px-4 py-8 sm:px-6 sm:py-10">
-      <div className="mx-auto w-full max-w-xl">
-        <p className="text-[11px] font-semibold tracking-[0.2em] text-stone-400 uppercase">Step 1 of 2</p>
-        <h1 className="mt-1.5 text-2xl font-bold text-stone-900">Delivery details</h1>
-        <p className="mt-1 text-sm text-stone-500">
-          Place the order first — payment instructions come on the next page.
+    <main className="px-4 py-5 sm:px-6 sm:py-10">
+      <div className="mx-auto w-full max-w-4xl">
+        {/* step indicator */}
+        <div className="flex items-center gap-2 text-[11px] font-semibold tracking-wide uppercase">
+          <span className="flex items-center gap-1.5 text-elfia-deep">
+            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-elfia-deep text-[10px] text-white">1</span>
+            Details
+          </span>
+          <span className="h-px w-6 bg-elfia-line" />
+          <span className="flex items-center gap-1.5 text-elfia-muted">
+            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-elfia-blush text-[10px] text-elfia-muted">2</span>
+            Payment
+          </span>
+        </div>
+
+        <h1 className="mt-3 text-2xl font-bold text-elfia-ink">Delivery details</h1>
+        <p className="mt-1 text-sm text-elfia-muted">
+          Place the order first — payment comes on the next page, by FPX or bank transfer.
         </p>
         {me ? (
-          <p className="mt-2 text-xs text-stone-500">
-            Ordering as <span className="font-semibold text-stone-700">{me.email}</span> — it will appear in your account.
+          <p className="mt-2 text-xs text-elfia-muted">
+            Ordering as <span className="font-semibold text-elfia-body">{me.email}</span> — it will appear in your account.
           </p>
         ) : (
-          <p className="mt-2 text-xs text-stone-500">
+          <p className="mt-2 text-xs text-elfia-muted">
             Ordering as a guest, which is fine.{" "}
-            <Link href="/account" className="underline hover:text-[#7a2648]">Sign in</Link> if you would rather keep it in an account.
+            <Link href="/account" className="underline hover:text-elfia-deep">Sign in</Link> if you would rather keep it in an account.
           </p>
         )}
-        <form onSubmit={submit} className="mt-6 space-y-4 rounded-2xl border border-stone-200 bg-white p-5">
-          <input type="text" value={form.website} onChange={set("website")} className="hidden" tabIndex={-1} autoComplete="off" aria-hidden="true" />
-          <label className="block">
-            <span className={labelClass}>Full name *</span>
-            <input className={inputClass} value={form.name} onChange={set("name")} required maxLength={120} />
-          </label>
-          <label className="block">
-            <span className={labelClass}>Phone / WhatsApp * (we confirm your order here)</span>
-            <input className={inputClass} value={form.phone} onChange={set("phone")} required maxLength={40} inputMode="tel" />
-          </label>
-          <label className="block">
-            <span className={labelClass}>Delivery address *</span>
-            <textarea className={`${inputClass} h-24 py-2.5`} value={form.address} onChange={set("address")} required maxLength={500} />
-          </label>
-          <label className="block">
-            <span className={labelClass}>Email (optional)</span>
-            <input className={inputClass} value={form.email} onChange={set("email")} type="email" maxLength={200} />
-          </label>
-          <label className="block">
-            <span className={labelClass}>Order notes (optional)</span>
-            <input className={inputClass} value={form.notes} onChange={set("notes")} maxLength={300} />
-          </label>
-          <label className="flex items-start gap-2.5 rounded-xl bg-stone-50 px-3 py-2.5">
-            <input type="checkbox" checked={marketing} onChange={(e) => setMarketing(e.target.checked)}
-              className="mt-0.5 h-4 w-4 rounded border-stone-300 accent-[#7a2648]" />
-            <span className="text-xs leading-relaxed text-stone-600">
-              I agree to receive news and promotions from ELFIA by WhatsApp or email.
-              Optional — you can withdraw anytime. <span className="text-stone-400">/ Saya bersetuju menerima berita dan promosi daripada ELFIA. Pilihan — boleh ditarik balik bila-bila masa.</span>
-            </span>
-          </label>
-          <button type="submit" className={`${btnClass} w-full`} disabled={state === "sending"}>
-            {state === "sending" ? "Placing order…" : "Place order"}
-          </button>
-          {error && <p className="text-sm font-medium text-red-700">{error}</p>}
-          <p className="text-center text-[11px] text-stone-400">
-            Your details are used to deliver this order — see our{" "}
-            <Link href="/policies" className="underline hover:text-[#7a2648]">privacy notice</Link>.
-          </p>
-        </form>
+
+        <div className="mt-6 grid gap-6 sm:grid-cols-[1fr_20rem] sm:items-start">
+          <form onSubmit={submit} className="space-y-4 rounded-2xl border border-elfia-line bg-white p-5">
+            <input type="text" value={form.website} onChange={set("website")} className="hidden" tabIndex={-1} autoComplete="off" aria-hidden="true" />
+            <label className="block">
+              <span className={labelClass}>Full name *</span>
+              <input className={inputClass} value={form.name} onChange={set("name")} required maxLength={120} autoComplete="name" />
+            </label>
+            <label className="block">
+              <span className={labelClass}>Phone / WhatsApp * (we confirm your order here)</span>
+              <input className={inputClass} value={form.phone} onChange={set("phone")} required maxLength={40} inputMode="tel" autoComplete="tel" />
+            </label>
+            <label className="block">
+              <span className={labelClass}>Delivery address *</span>
+              <textarea className={`${inputClass} h-24 py-2.5`} value={form.address} onChange={set("address")} required maxLength={500} autoComplete="street-address" />
+            </label>
+            <label className="block">
+              <span className={labelClass}>Email (optional)</span>
+              <input className={inputClass} value={form.email} onChange={set("email")} type="email" maxLength={200} autoComplete="email" />
+            </label>
+            <label className="block">
+              <span className={labelClass}>Order notes (optional)</span>
+              <input className={inputClass} value={form.notes} onChange={set("notes")} maxLength={300} />
+            </label>
+            <label className="flex items-start gap-2.5 rounded-xl bg-elfia-cream px-3 py-2.5">
+              <input type="checkbox" checked={marketing} onChange={(e) => setMarketing(e.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded border-elfia-line accent-[#7a2648]" />
+              <span className="text-xs leading-relaxed text-elfia-body">
+                I agree to receive news and promotions from ELFIA by WhatsApp or email.
+                Optional — you can withdraw anytime. <span className="text-elfia-muted">/ Saya bersetuju menerima berita dan promosi daripada ELFIA. Pilihan — boleh ditarik balik bila-bila masa.</span>
+              </span>
+            </label>
+            <button type="submit" className={`${btnClass} w-full`} disabled={state === "sending"}>
+              {state === "sending" ? "Placing order…" : "Place order"}
+            </button>
+            {error && <p className="text-sm font-medium text-red-700">{error}</p>}
+            <p className="text-center text-[11px] text-elfia-muted">
+              Your details are used to deliver this order — see our{" "}
+              <Link href="/policies" className="underline hover:text-elfia-deep">privacy notice</Link>.
+            </p>
+          </form>
+
+          {/* order summary */}
+          <aside className="rounded-2xl border border-elfia-line bg-white p-5 sm:sticky sm:top-24">
+            <p className="text-sm font-semibold text-elfia-ink">Order summary</p>
+            <div className="mt-3 space-y-2.5">
+              {rows.map(({ line, product }) => (
+                <div key={line.id} className="flex items-center gap-2.5">
+                  <span className="h-12 w-10 shrink-0 overflow-hidden rounded-lg bg-elfia-veil">
+                    {product.image_key && (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={imageUrl(product.image_key)} alt="" className="h-full w-full object-cover object-top" />
+                    )}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-xs font-medium text-elfia-ink">{splitName(product.name).shade}</span>
+                    <span className="block text-[11px] text-elfia-muted">Qty {line.qty}</span>
+                  </span>
+                  <span className="shrink-0 text-xs font-semibold tabular-nums">{fmtRM(product.price_cents * line.qty)}</span>
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 border-t border-elfia-line pt-3 text-sm">
+              <div className="flex justify-between"><span className="text-elfia-body">Subtotal</span><span className="font-semibold tabular-nums">{fmtRM(subtotal)}</span></div>
+              <div className="mt-1.5 flex justify-between">
+                <span className="text-elfia-body">Delivery</span>
+                <span className="font-semibold tabular-nums">{shipping === null ? "…" : shipping === 0 ? <span className="text-emerald-700">FREE</span> : fmtRM(shipping)}</span>
+              </div>
+              <div className="mt-3 flex justify-between border-t border-elfia-line pt-3 text-base font-bold">
+                <span>Total</span><span className="tabular-nums text-elfia-deep">{fmtRM(subtotal + (shipping ?? 0))}</span>
+              </div>
+            </div>
+            <p className="mt-3 flex items-start gap-1.5 text-[11px] leading-relaxed text-elfia-muted">
+              <Icon name="shield" size={14} className="mt-px shrink-0 text-elfia-rose" />
+              Every price is confirmed by our server when the order is placed — this panel can never charge you something different.
+            </p>
+          </aside>
+        </div>
       </div>
     </main>
   );

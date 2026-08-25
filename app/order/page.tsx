@@ -2,19 +2,28 @@
 
 /** Order page — /order?t=<token>. The token is the customer's key: shown
     once after checkout, safe to bookmark, and findable again at /track.
-    Bank details + WhatsApp + receipt upload while unpaid; a progress
-    timeline all the way.
 
-    v0.9.0 — the timeline used to show WHICH step the order was on. It now
-    shows WHEN each step happened, from the order's own history
-    (`order_events`), plus a courier tracking link once it ships. A step with
-    no recorded time is drawn as still to come, never given a made-up one. */
+    v0.9.0 — the timeline shows WHEN each step happened, from the order's own
+    history (`order_events`), plus a courier tracking link once it ships. A
+    step with no recorded time is drawn as still to come, never given a
+    made-up one.
+
+    v1.4.0 — the CEO's payment screen: an order summary, then the payment
+    methods as a chosen list rather than a wall of instructions. The list only
+    ever offers what the shop can actually take:
+      · FPX online banking — appears when the Worker reports gateway:true,
+        i.e. the Billplz secrets are set. One tap creates the bill.
+      · Bank transfer + receipt — always.
+    Nothing else is drawn. An e-wallet logo on a page that cannot take an
+    e-wallet is a promise the shop would have to break. */
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
 import Link from "next/link";
 
 import { btnClass, fmtRM, fmtWhen, rememberOrder, type OrderEvent, type OrderView } from "@/lib/config";
+
+import { Icon, StatusPill } from "./../ui";
 
 /** "3 hours 12 minutes" / "18 minutes" / "" once it has passed. */
 function timeLeft(iso: string | null | undefined): string {
@@ -38,7 +47,7 @@ const STEP_LABEL: Record<string, string> = {
 };
 /** What the customer should expect next, per step. */
 const STEP_HINT: Record<string, string> = {
-  pending_payment: "Pay and upload your receipt below.",
+  pending_payment: "Pay below and we start packing.",
   payment_review: "We check receipts by hand, usually within a few hours.",
   paid: "We are packing your order.",
   shipped: "On its way to you.",
@@ -46,7 +55,7 @@ const STEP_HINT: Record<string, string> = {
 };
 
 /** The progress display. Steps the order has actually reached carry the time
-    they happened; the rest are drawn grey and empty. */
+    they happened; the rest are drawn soft and empty. */
 function Progress({ order }: { order: OrderView }) {
   const events: OrderEvent[] = order.events ?? [];
   const firstAt = (status: string): OrderEvent | undefined => events.find((e) => e.status === status);
@@ -58,9 +67,9 @@ function Progress({ order }: { order: OrderView }) {
   const pct = shown.length > 1 ? ((doneCount - 1) / (shown.length - 1)) * 100 : 0;
 
   return (
-    <div className="rounded-2xl border border-stone-200 bg-white p-5">
-      <div className="mb-5 h-1.5 w-full overflow-hidden rounded-full bg-stone-100">
-        <div className="h-full rounded-full bg-[#7a2648] transition-all duration-700"
+    <div className="rounded-2xl border border-elfia-line bg-white p-5">
+      <div className="mb-5 h-1.5 w-full overflow-hidden rounded-full bg-elfia-blush">
+        <div className="h-full rounded-full bg-elfia-deep transition-all duration-700"
           style={{ width: `${Math.max(0, Math.min(100, pct))}%` }} />
       </div>
       <ol className="space-y-4">
@@ -75,31 +84,31 @@ function Progress({ order }: { order: OrderView }) {
                   full list — a paid order that skipped "receipt received"
                   must not count 1, 2, 4. */}
               <span className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-bold ${
-                reached ? "bg-[#7a2648] text-white" : "bg-stone-100 text-stone-400"}`}>
-                {idx < stepIndex ? "✓" : n + 1}
+                reached ? "bg-elfia-deep text-white" : "bg-elfia-blush text-elfia-muted"}`}>
+                {idx < stepIndex ? <Icon name="check" size={12} strokeWidth={3} /> : n + 1}
               </span>
               <div className="min-w-0">
-                <p className={`text-sm ${current ? "font-bold text-[#7a2648]" : reached ? "font-semibold text-stone-800" : "text-stone-400"}`}>
+                <p className={`text-sm ${current ? "font-bold text-elfia-deep" : reached ? "font-semibold text-elfia-ink" : "text-elfia-muted"}`}>
                   {STEP_LABEL[s]}
                 </p>
                 {ev && (
-                  <p className="text-xs text-stone-500">
+                  <p className="text-xs text-elfia-muted">
                     {fmtWhen(ev.created_at)}
                     {/* the note only earns its place when it says something the
                         label does not */}
                     {ev.note && ev.note !== STEP_LABEL[s] ? ` · ${ev.note}` : ""}
                   </p>
                 )}
-                {current && <p className="mt-0.5 text-xs text-stone-500">{STEP_HINT[s]}</p>}
+                {current && <p className="mt-0.5 text-xs text-elfia-muted">{STEP_HINT[s]}</p>}
                 {s === "shipped" && reached && order.tracking_no && (
                   <p className="mt-1 text-xs">
-                    <span className="font-mono font-semibold text-stone-700">{order.tracking_no}</span>
-                    {order.tracking_courier && <span className="text-stone-500"> · {order.tracking_courier}</span>}
+                    <span className="font-mono font-semibold text-elfia-body">{order.tracking_no}</span>
+                    {order.tracking_courier && <span className="text-elfia-muted"> · {order.tracking_courier}</span>}
                     {order.tracking_url && (
                       <>
                         {" "}
                         <a href={order.tracking_url} target="_blank" rel="noopener noreferrer"
-                          className="font-semibold text-[#7a2648] underline">track parcel</a>
+                          className="font-semibold text-elfia-deep underline">track parcel</a>
                       </>
                     )}
                   </p>
@@ -113,12 +122,41 @@ function Progress({ order }: { order: OrderView }) {
   );
 }
 
+/** One row in the payment-method list. */
+function MethodRow({ id, checked, onSelect, title, note, badge, children }: {
+  id: string; checked: boolean; onSelect: () => void; title: string; note: string;
+  badge?: string; children?: React.ReactNode;
+}) {
+  return (
+    <div className={`rounded-2xl border transition-colors ${checked ? "border-elfia-rose bg-elfia-veil/50" : "border-elfia-line bg-white"}`}>
+      <label className="flex cursor-pointer items-start gap-3 p-4">
+        <input type="radio" name="pay-method" value={id} checked={checked} onChange={onSelect}
+          className="mt-0.5 h-4 w-4 shrink-0 accent-[#7a2648]" />
+        <span className="min-w-0 flex-1">
+          <span className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-semibold text-elfia-ink">{title}</span>
+            {badge && (
+              <span className="rounded-full bg-elfia-deep/10 px-2 py-0.5 text-[10px] font-bold tracking-wide text-elfia-deep uppercase">
+                {badge}
+              </span>
+            )}
+          </span>
+          <span className="mt-0.5 block text-xs leading-relaxed text-elfia-muted">{note}</span>
+        </span>
+      </label>
+      {checked && children && <div className="border-t border-elfia-line/70 p-4 pt-3.5">{children}</div>}
+    </div>
+  );
+}
+
 function OrderInner() {
   const params = useSearchParams();
   const token = params.get("t") ?? "";
   const [order, setOrder] = useState<OrderView | null | "missing">(null);
   const [uploading, setUploading] = useState(false);
   const [uploadMsg, setUploadMsg] = useState("");
+  const [method, setMethod] = useState<"fpx" | "transfer" | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const load = useCallback(async () => {
     if (!token) { setOrder("missing"); return; }
@@ -134,6 +172,14 @@ function OrderInner() {
   useEffect(() => {
     if (order && order !== "missing") rememberOrder(order.order_number, token);
   }, [order, token]);
+
+  /* Pre-select the method the shop would rather have: FPX confirms itself in
+     seconds, a transfer needs a human to read a receipt. */
+  useEffect(() => {
+    if (order && order !== "missing" && method === null) {
+      setMethod(order.config.gateway ? "fpx" : "transfer");
+    }
+  }, [order, method]);
 
   /* Re-render once a minute so the payment countdown stays honest. */
   const [, tick] = useState(0);
@@ -207,33 +253,146 @@ function OrderInner() {
     else setUploadMsg("Upload failed — please try again or WhatsApp us the receipt.");
   };
 
-  if (order === null) return <main className="px-6 py-16 text-center text-sm text-stone-400">Loading…</main>;
+  if (order === null) return <main className="px-6 py-16 text-center text-sm text-elfia-muted">Loading…</main>;
   if (order === "missing") {
-    return <main className="px-6 py-16 text-center text-sm text-stone-500">Order not found — check the link from your checkout or WhatsApp us.</main>;
+    return (
+      <main className="px-6 py-16 text-center">
+        <p className="text-sm text-elfia-muted">Order not found — check the link from your checkout, or find it again on the track page.</p>
+        <Link href="/track" className={`${btnClass} mt-4`}>Find my order</Link>
+      </main>
+    );
   }
 
   const cancelled = order.status === "cancelled";
   const awaitingPayment = order.status === "pending_payment" || order.status === "payment_review";
   const waText = encodeURIComponent(`Hi ELFIA! My order ${order.order_number} — `);
+  const subtotal = order.subtotal_cents;
 
   return (
-    <main className="px-6 py-10">
+    <main className="px-4 py-5 sm:px-6 sm:py-10">
       <div className="mx-auto w-full max-w-xl">
-        <p className="text-xs font-semibold tracking-widest text-stone-400 uppercase">Order</p>
-        <h1 className="text-2xl font-bold text-[#7a2648]">{order.order_number}</h1>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-[11px] font-semibold tracking-widest text-elfia-muted uppercase">Order</p>
+            <h1 className="text-2xl font-bold text-elfia-deep">{order.order_number}</h1>
+            <p className="mt-0.5 text-xs text-elfia-muted">Placed {fmtWhen(order.created_at)}</p>
+          </div>
+          <div className="pt-6"><StatusPill status={order.status} /></div>
+        </div>
 
         {(order.status === "paid" || order.status === "shipped" || order.status === "completed") && (
-          <div className="mt-4 rounded-xl border border-green-200 bg-green-50 p-4">
-            <p className="text-sm font-semibold text-green-900">Payment confirmed — thank you!</p>
-            <p className="mt-1 text-xs text-green-800">
-              {order.status === "completed" ? "Delivered. We hope you love it."
-                : order.status === "shipped" ? `On its way${order.tracking_no ? ` — tracking ${order.tracking_no}` : ""}.`
-                : "We're packing your order now. You'll get a tracking number on WhatsApp."}
-            </p>
+          <div className="mt-4 flex items-start gap-2.5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+            <Icon name="check" size={18} className="mt-0.5 shrink-0 text-emerald-700" strokeWidth={2.4} />
+            <div>
+              <p className="text-sm font-semibold text-emerald-900">Payment confirmed — thank you!</p>
+              <p className="mt-1 text-xs text-emerald-800">
+                {order.status === "completed" ? "Delivered. We hope you love it."
+                  : order.status === "shipped" ? `On its way${order.tracking_no ? ` — tracking ${order.tracking_no}` : ""}.`
+                  : "We're packing your order now. You'll get a tracking number on WhatsApp."}
+              </p>
+            </div>
           </div>
         )}
 
-        {/* progress */}
+        {/* ---- payment ---- */}
+        {awaitingPayment && !cancelled && (
+          <section className="mt-5">
+            {checking && (
+              <p className="mb-3 rounded-xl bg-white px-3.5 py-2.5 text-xs font-medium text-elfia-body ring-1 ring-elfia-line">
+                Checking your payment with the bank… this page updates by itself.
+              </p>
+            )}
+
+            {/* order summary — the CEO's payment screen leads with the money */}
+            <div className="rounded-2xl border border-elfia-line bg-white p-5">
+              <p className="text-sm font-semibold text-elfia-ink">Order summary</p>
+              <div className="mt-3 space-y-1.5 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-elfia-body">Subtotal ({order.items.reduce((n, i) => n + i.qty, 0)} items)</span>
+                  <span className="font-medium tabular-nums">{fmtRM(subtotal)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-elfia-body">Shipping fee</span>
+                  <span className="font-medium tabular-nums">
+                    {order.shipping_cents === 0 ? <span className="text-emerald-700">FREE</span> : fmtRM(order.shipping_cents)}
+                  </span>
+                </div>
+              </div>
+              <div className="mt-3 flex items-center justify-between border-t border-elfia-line pt-3">
+                <span className="text-sm font-bold text-elfia-ink">Total amount</span>
+                <span className="text-xl font-bold text-elfia-deep tabular-nums">{fmtRM(order.total_cents)}</span>
+              </div>
+
+              {/* The hold is real: the cron cancels the order and puts the
+                  stock back. Saying so plainly is fairer than a silent
+                  cancellation, and it is what stops an order sitting unpaid
+                  for a week. */}
+              {order.expires_at && (
+                <p className="mt-3 flex items-start gap-2 rounded-xl bg-amber-50 px-3 py-2.5 text-xs leading-relaxed font-medium text-amber-900">
+                  <Icon name="clock" size={14} className="mt-px shrink-0" />
+                  {/* One span, not loose text: bare text nodes inside a flex
+                      container each become their own flex item and stack into
+                      columns. */}
+                  <span>
+                    {timeLeft(order.expires_at)
+                      ? <>Please pay within <span className="font-bold">{timeLeft(order.expires_at)}</span> (by {fmtWhen(order.expires_at)}). After that we release these pieces for someone else — you can always order again.</>
+                      : <>This order is past its payment window and may be released at any moment. Pay now, or WhatsApp us and we will hold it.</>}
+                  </span>
+                </p>
+              )}
+            </div>
+
+            <p className="mt-5 mb-2.5 text-sm font-semibold text-elfia-ink">Payment method</p>
+            <div className="space-y-2.5">
+              {order.config.gateway && (
+                <MethodRow id="fpx" checked={method === "fpx"} onSelect={() => setMethod("fpx")}
+                  title="Online banking (FPX)" badge="Instant"
+                  note="Maybank2u, CIMB Clicks, Bank Islam, RHB and the rest — secured by Billplz. Your order confirms itself the moment the bank replies.">
+                  <button type="button" onClick={() => void payOnline()} disabled={paying}
+                    className="inline-flex h-12 w-full items-center justify-center rounded-full bg-elfia-deep px-6 text-sm font-semibold text-white hover:bg-elfia-deeper disabled:opacity-50">
+                    {paying ? "Opening secure payment…" : `Pay ${fmtRM(order.total_cents)} now`}
+                  </button>
+                  <p className="mt-2 flex items-center justify-center gap-1.5 text-center text-[11px] text-elfia-muted">
+                    <Icon name="shield" size={13} className="text-elfia-rose" />
+                    You leave for Billplz&apos;s secure page and come straight back here.
+                  </p>
+                </MethodRow>
+              )}
+
+              <MethodRow id="transfer" checked={method === "transfer"} onSelect={() => setMethod("transfer")}
+                title="Bank transfer" note="Transfer manually, then upload the receipt. We confirm by hand — usually within a few hours.">
+                <p className="text-xs text-elfia-body">
+                  Transfer <span className="font-bold text-elfia-deep">{fmtRM(order.total_cents)}</span> to:
+                </p>
+                <div className="mt-1.5 flex items-center gap-2 rounded-xl bg-elfia-cream px-3 py-2.5">
+                  <span className="min-w-0 flex-1 font-mono text-sm font-semibold break-words text-elfia-ink">{order.config.bank_line}</span>
+                  <button type="button"
+                    onClick={() => { void navigator.clipboard?.writeText(order.config.bank_line).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); }); }}
+                    className="shrink-0 rounded-full bg-white px-3 py-1.5 text-[11px] font-semibold text-elfia-deep ring-1 ring-elfia-line">
+                    {copied ? "Copied" : "Copy"}
+                  </button>
+                </div>
+                <p className="mt-2 text-xs text-elfia-muted">
+                  Use <span className="font-semibold text-elfia-body">{order.order_number}</span> as the payment reference, then upload your receipt.
+                </p>
+                <div className="mt-3 flex flex-wrap items-center gap-2.5">
+                  <label className={`${btnClass} cursor-pointer`}>
+                    {uploading ? "Uploading…" : order.receipt_uploaded ? "Replace receipt" : "Upload receipt"}
+                    <input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" className="hidden"
+                      onChange={(e) => { const f = e.target.files?.[0]; if (f) void upload(f); }} />
+                  </label>
+                  <a className="inline-flex h-12 items-center rounded-full bg-[#25D366] px-5 text-sm font-semibold text-white hover:brightness-95" rel="noopener"
+                    href={`https://wa.me/${order.config.whatsapp_digits}?text=${waText}`}>
+                    Send on WhatsApp
+                  </a>
+                </div>
+              </MethodRow>
+            </div>
+            {uploadMsg && <p className="mt-2.5 text-xs font-medium text-elfia-deep">{uploadMsg}</p>}
+          </section>
+        )}
+
+        {/* ---- progress ---- */}
         <div className="mt-5">
           {cancelled ? (
             <div className="rounded-2xl border border-red-200 bg-red-50 p-5">
@@ -245,82 +404,34 @@ function OrderInner() {
           )}
         </div>
 
-        {/* payment instructions */}
-        {awaitingPayment && !cancelled && (
-          <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4">
-            {checking && (
-              <p className="mb-3 rounded-lg bg-white px-3 py-2 text-xs font-medium text-stone-600">
-                Checking your payment with the bank… this page updates by itself.
-              </p>
-            )}
-            <p className="text-sm font-semibold text-amber-900">How to pay</p>
-            {/* The hold is real: the cron cancels the order and puts the stock
-                back. Saying so plainly is fairer than a silent cancellation,
-                and it is what stops an order sitting unpaid for a week. */}
-            {order.expires_at && (
-              timeLeft(order.expires_at)
-                ? (
-                  <p className="mt-1.5 rounded-lg bg-white/70 px-3 py-2 text-xs font-medium text-amber-900">
-                    Please pay within <span className="font-bold">{timeLeft(order.expires_at)}</span> (by {fmtWhen(order.expires_at)}).
-                    After that we release these pieces for someone else — you can always order again.
-                  </p>
-                ) : (
-                  <p className="mt-1.5 rounded-lg bg-white/70 px-3 py-2 text-xs font-medium text-amber-900">
-                    This order is past its payment window and may be released at any moment. Pay now, or WhatsApp us and we will hold it.
-                  </p>
-                )
-            )}
-            {order.config.gateway && (
-              <div className="mt-3">
-                <button type="button" onClick={() => void payOnline()} disabled={paying}
-                  className="inline-flex h-12 w-full items-center justify-center rounded-lg bg-[#7a2648] px-6 text-sm font-semibold text-white hover:bg-[#8f2e55] disabled:opacity-50">
-                  {paying ? "Opening secure payment…" : `Pay online now — ${fmtRM(order.total_cents)} (FPX / online banking)`}
-                </button>
-                <p className="mt-2 text-center text-[11px] text-amber-800">Secure payment by Billplz · or transfer manually below</p>
-              </div>
-            )}
-            <p className="mt-2 text-sm text-amber-900">
-              Transfer <span className="font-bold">{fmtRM(order.total_cents)}</span> to:
-            </p>
-            <p className="mt-1 rounded-lg bg-white px-3 py-2 font-mono text-sm font-semibold">{order.config.bank_line}</p>
-            <p className="mt-2 text-xs text-amber-800">
-              Use <span className="font-semibold">{order.order_number}</span> as the payment reference, then upload your receipt below — or send it on WhatsApp.
-            </p>
-            <div className="mt-3 flex flex-wrap items-center gap-3">
-              <label className={`${btnClass} cursor-pointer`}>
-                {uploading ? "Uploading…" : order.receipt_uploaded ? "Replace receipt" : "Upload receipt"}
-                <input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" className="hidden"
-                  onChange={(e) => { const f = e.target.files?.[0]; if (f) void upload(f); }} />
-              </label>
-              <a className="inline-flex h-11 items-center rounded-lg bg-green-600 px-5 text-sm font-semibold text-white hover:bg-green-700" rel="noopener"
-                href={`https://wa.me/${order.config.whatsapp_digits}?text=${waText}`}>
-                WhatsApp us
-              </a>
-            </div>
-            {uploadMsg && <p className="mt-2 text-xs font-medium text-amber-900">{uploadMsg}</p>}
-          </div>
-        )}
-
-        {/* items */}
-        <div className="mt-4 rounded-xl border border-stone-200 bg-white p-4">
+        {/* ---- items ---- */}
+        <div className="mt-4 rounded-2xl border border-elfia-line bg-white p-5">
+          <p className="mb-2.5 text-sm font-semibold text-elfia-ink">Items</p>
           {order.items.map((it, i) => (
-            <div key={i} className="flex justify-between py-1 text-sm">
-              <span>{it.name} × {it.qty}</span>
-              <span className="tabular-nums">{fmtRM(it.price_cents * it.qty)}</span>
+            <div key={i} className="flex justify-between gap-3 py-1 text-sm">
+              <span className="min-w-0 text-elfia-body">{it.name} × {it.qty}</span>
+              <span className="shrink-0 tabular-nums">{fmtRM(it.price_cents * it.qty)}</span>
             </div>
           ))}
-          <div className="mt-2 flex justify-between border-t border-stone-100 pt-2 text-sm">
-            <span>Delivery</span><span className="tabular-nums">{order.shipping_cents === 0 ? "FREE" : fmtRM(order.shipping_cents)}</span>
+          <div className="mt-2 flex justify-between border-t border-elfia-line pt-2 text-sm">
+            <span className="text-elfia-body">Delivery</span>
+            <span className="tabular-nums">{order.shipping_cents === 0 ? "FREE" : fmtRM(order.shipping_cents)}</span>
           </div>
           <div className="mt-1 flex justify-between text-base font-bold">
-            <span>Total</span><span className="text-[#7a2648] tabular-nums">{fmtRM(order.total_cents)}</span>
+            <span>Total</span><span className="tabular-nums text-elfia-deep">{fmtRM(order.total_cents)}</span>
           </div>
         </div>
 
-        <p className="mt-4 text-xs text-stone-400">
-          Deliver to: {order.customer_name} · {order.phone} · {order.address}
-        </p>
-        <p className="mt-2 text-xs text-stone-400">
+        <div className="mt-4 rounded-2xl border border-elfia-line bg-white p-5">
+          <p className="flex items-center gap-1.5 text-sm font-semibold text-elfia-ink">
+            <Icon name="pin" size={15} className="text-elfia-rose" /> Delivering to
+          </p>
+          <p className="mt-1.5 text-xs leading-relaxed text-elfia-muted">
+            {order.customer_name} · {order.phone}<br />{order.address}
+          </p>
+        </div>
+
+        <p className="mt-4 text-center text-[11px] text-elfia-muted">
           Bookmark this page — it always shows your latest order status.
         </p>
       </div>
@@ -330,7 +441,7 @@ function OrderInner() {
 
 export default function OrderPage() {
   return (
-    <Suspense fallback={<main className="px-6 py-16 text-center text-sm text-stone-400">Loading…</main>}>
+    <Suspense fallback={<main className="px-6 py-16 text-center text-sm text-elfia-muted">Loading…</main>}>
       <OrderInner />
     </Suspense>
   );

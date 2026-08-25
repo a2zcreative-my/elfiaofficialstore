@@ -10,12 +10,16 @@
  * The Worker does the matching and the rate limiting; this page deliberately
  * shows the SAME message whether the order number was wrong or the phone was,
  * so it can never be used to learn which order numbers exist.
+ *
+ * v1.4.0 — blush layout, same logic.
  */
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { btnClass, fmtWhen, inputClass, labelClass, readRecent, waLink, type RecentOrder, type StoreConfig } from "@/lib/config";
+
+import { Icon } from "./../ui";
 
 export default function Track() {
   const router = useRouter();
@@ -52,35 +56,41 @@ export default function Track() {
   };
 
   const digits = config?.whatsapp_digits ?? "";
-  const showWa = digits && digits !== "60000000000" && digits.replace(/\D/g, "").length >= 9;
+  const showWa = Boolean(digits) && digits !== "60000000000" && digits.replace(/\D/g, "").length >= 9;
 
   return (
-    <main className="px-4 py-10 sm:px-6 sm:py-14">
+    <main className="px-4 py-6 sm:px-6 sm:py-14">
       <div className="mx-auto w-full max-w-md">
-        <p className="text-center text-[11px] font-semibold tracking-[0.28em] text-[#7a2648]/70 uppercase">Your order</p>
-        <h1 className="mt-2 text-center text-3xl font-bold text-stone-900">Track my order</h1>
-        <p className="mx-auto mt-2 text-center text-sm text-stone-500">
-          Enter the order number from your receipt and the phone number you used at checkout.
-        </p>
+        <div className="text-center">
+          <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-elfia-veil text-elfia-deep">
+            <Icon name="clock-history" size={22} />
+          </span>
+          <h1 className="mt-3 text-2xl font-bold text-elfia-ink sm:text-3xl">Track my order</h1>
+          <p className="mx-auto mt-1.5 text-sm text-elfia-muted">
+            Enter the order number from your receipt and the phone number you used at checkout.
+          </p>
+        </div>
 
         {/* Orders placed on THIS device — no sign-in, no lookup. The commonest
             case is a customer who simply refreshed and lost the tab. */}
         {recent.length > 0 && (
-          <div className="mt-7 rounded-2xl border border-stone-200 bg-white p-5">
-            <p className="text-sm font-semibold text-stone-800">Orders from this device</p>
+          <div className="mt-6 rounded-2xl border border-elfia-line bg-white p-5">
+            <p className="text-sm font-semibold text-elfia-ink">Orders from this device</p>
             <div className="mt-2 space-y-1">
               {recent.map((o) => (
                 <Link key={o.token} href={`/order?t=${o.token}`}
-                  className="flex items-center justify-between rounded-lg px-2 py-2 text-sm hover:bg-stone-50">
-                  <span className="font-semibold text-[#7a2648]">{o.order_number}</span>
-                  <span className="text-xs text-stone-500">{fmtWhen(o.at)}</span>
+                  className="flex items-center justify-between rounded-xl px-2 py-2.5 text-sm hover:bg-elfia-cream">
+                  <span className="font-semibold text-elfia-deep">{o.order_number}</span>
+                  <span className="flex items-center gap-1.5 text-xs text-elfia-muted">
+                    {fmtWhen(o.at)} <Icon name="chevron" size={13} />
+                  </span>
                 </Link>
               ))}
             </div>
           </div>
         )}
 
-        <form onSubmit={submit} className="mt-5 rounded-2xl border border-stone-200 bg-white p-5">
+        <form onSubmit={submit} className="mt-4 rounded-2xl border border-elfia-line bg-white p-5">
           <label className="block">
             <span className={labelClass}>Order number</span>
             <input className={`${inputClass} font-mono tracking-wide uppercase`} value={form.order_number}
@@ -99,21 +109,21 @@ export default function Track() {
           {error && <p className="mt-3 text-sm font-medium text-red-700">{error}</p>}
         </form>
 
-        <p className="mt-5 text-center text-xs text-stone-500">
+        <p className="mt-5 text-center text-xs text-elfia-muted">
           Still stuck?{" "}
           {showWa ? (
-            <a className="font-semibold text-[#7a2648] underline" rel="noopener noreferrer" target="_blank"
+            <a className="font-semibold text-elfia-deep underline" rel="noopener noreferrer" target="_blank"
               href={waLink(digits, "Hi ELFIA! I cannot find my order — ")}>
               WhatsApp us
             </a>
           ) : (
             <>Message us and we will find it for you.</>
           )}{" "}
-          or <Link href="/" className="underline hover:text-[#7a2648]">keep shopping</Link>.
+          or <Link href="/shop" className="underline hover:text-elfia-deep">keep shopping</Link>.
         </p>
-        <p className="mt-2 text-center text-xs text-stone-500">
+        <p className="mt-2 text-center text-xs text-elfia-muted">
           Ordering often?{" "}
-          <Link href="/account" className="underline hover:text-[#7a2648]">Create an account</Link>{" "}
+          <Link href="/account" className="underline hover:text-elfia-deep">Create an account</Link>{" "}
           and every order stays in one place.
         </p>
       </div>

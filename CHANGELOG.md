@@ -1,3 +1,102 @@
+# ELFIA OFFICIAL STORE — v1.4.0 (25-08-2026)
+
+## The app layout
+
+The CEO sent a five-screen blush layout — dashboard, homepage, product
+listing, categories, payment — and asked for "the interface to look like this,
+nice on the mobile apps view and also web view, same function, using Billplz".
+
+This release is that, as ONE storefront with two faces. It is not a second
+app and not an app-store app: on a phone elfiaofficialstore.my now behaves
+like the layout she sent (bottom tab bar, app bar, rails, sticky buy bar); on
+a desktop it is still a proper web shop (header nav, four-column grids,
+footer). Same routes, same data, same Worker, same Billplz.
+
+### New
+
+- **Design tokens** (`app/globals.css`). The whole palette is now
+  `--color-elfia-*` in one `@theme` block — cream, blush, veil, line, ink,
+  body, muted, rose, deep, gold. Changing the shop's colour is one file.
+- **`app/ui.tsx`** — the shared pieces: the icon set (one 24px stroke family,
+  nothing borrowed), `ProductCard` with the wishlist heart, `SectionHeader`,
+  `IconTile`, `EmptyState`, `CardSkeleton`, `StatusPill`. The phone and the
+  desktop cannot drift apart because they render the same components.
+- **Bottom tab bar** (phones only): Home · Shop · Collections · Wishlist ·
+  Profile, with live badges. Safe-area aware, so it clears the iPhone home
+  indicator.
+- **`/shop`** — the product listing: live count, collection chips, sort
+  (featured / price / name), a "hide sold out" filter, and search. Every view
+  is a link: `/shop?c=printed&sort=price_asc`, `/shop?q=rose`.
+- **`/categories`** — the collections screen. The groups are DERIVED from the
+  live catalogue (`GROUPS` in lib/config.ts), so an empty collection is never
+  advertised. Today that is Bawal Printed, Bawal Plain, Shawl and ELFIA
+  Exclusive (the Featured flag).
+- **`/wishlist`** — the heart on every card. Device-local, like the cart: no
+  sign-up, nothing sent anywhere, prices re-fetched on every visit. "Add all
+  available to cart" in one tap.
+- **Dashboard** (`/account`) — greeting card, the four order states as tiles
+  with live counts (To Pay / To Ship / To Receive / Completed) that filter the
+  list, quick access, and member benefits. The benefits are the ones the shop
+  really gives: the Worker's free-delivery threshold, the restock waitlist,
+  saved details. **No wallet and no points** — ELFIA keeps neither, and a
+  stored-value wallet is e-money, which needs a BNM licence.
+- **Payment screen** (`/order`) — order summary first, then the methods as a
+  chosen list: FPX online banking (Billplz, one tap, shown only when the
+  Worker reports `gateway:true`) and bank transfer with a copy button and
+  receipt upload. No other logos are drawn: the shop can only take what it can
+  take.
+- **Search** in both headers, landing on `/shop?q=`.
+- `scratch/preview-server.mjs` — serves `out/` with a stubbed catalogue so the
+  design can be reviewed without a Worker, a database or a Billplz key.
+  Never deployed.
+
+### Changed
+
+- Home is now hero → trust strip → collections → New arrivals → Studio picks →
+  catalogue. There is **no "best sellers" rail**: the shop does not count
+  sales yet, so the second rail shows what an admin actually marked Featured.
+- Product page: wishlist heart, "You may also like", and a phone buy bar that
+  appears only once the real Add-to-cart scrolls away (so the page never holds
+  two buttons with the same name — ambiguous for a screen reader and for
+  `scratch/store-e2e.mjs`).
+- Cart: "Save for later" moves a line straight to the wishlist. One Checkout
+  button, for the same reason.
+- Checkout: two-step indicator and a sticky order summary beside the form.
+- The footer is desktop-only; on a phone the tab bar is the navigation.
+- `layout.tsx` declares `apple-mobile-web-app-capable` and `viewport-fit`, so
+  "Add to Home Screen" opens the shop without a browser bar.
+
+### Unchanged on purpose
+
+Every Worker route, the Billplz flow (create bill → redirect → verified
+requery, `X-Signature` then authenticated read), stock reservation, the 12h
+unpaid hold, accounts/PBKDF2, PDPA consent, the portal bridge, the traffic
+beacon, `data-testid="product-grid"` and `data-testid="category-tabs"`.
+**No migration. No Worker deploy needed** — this is a Pages-only release.
+
+### Verified
+
+- `next build` — clean, 14 static routes.
+- `tests/brand-isolation.mjs` — PASS.
+- Rendered at 390×844 and 1440×900 in Chromium against the stub catalogue;
+  no console errors on home, shop, categories, product, cart, checkout,
+  order (payment) or dashboard.
+
+### Still open
+
+- The wishlist is per-device. Carrying it into the account needs a `wishlist`
+  table on the Worker.
+- **Voucher codes** are not built. The member panel shows the automatic
+  free-delivery perk, which is real; a redeemable code needs a `vouchers`
+  table, validation inside `POST /api/v1/orders` (so the discount is priced
+  server-side, never in the browser), a field at checkout and a tab in
+  /admin.
+- /admin is still on the old stone palette. It is staff-only, so it was left
+  alone.
+- Billplz has still never run against the live gateway (see the go-live
+  checklist): rotate the keys, set `BILLPLZ_SECRET`, `BILLPLZ_COLLECTION`,
+  `BILLPLZ_XSIGN` and `ADMIN_KEY`, then one real RM 1 order.
+
 # ELFIA OFFICIAL STORE — changelog
 
 ## [1.3.0] — 24-08-2026 — PDPA: consent, a privacy notice, and marketing done right

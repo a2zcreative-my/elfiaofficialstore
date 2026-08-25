@@ -186,13 +186,128 @@ export const addToCart = (id: number, qty: number): void => {
 
 export const cartCount = (): number => readCart().reduce((n, l) => n + l.qty, 0);
 
-/* ---- navigation ---- */
+/* ---- navigation ----
+   v1.4.0. Two shapes of the same shop: a phone gets an app with a bottom tab
+   bar (TABS), a desktop gets a web header (NAV_LINKS). Both point at the same
+   routes — there is one storefront, not two. */
 export const NAV_LINKS = [
-  { href: "/", label: "Shop" },
+  { href: "/shop", label: "Shop" },
+  { href: "/categories", label: "Collections" },
   { href: "/track", label: "Track order" },
-  { href: "/account", label: "Account" },
   { href: "/policies", label: "Delivery & returns" },
 ] as const;
+
+export type TabKey = "home" | "shop" | "categories" | "wishlist" | "account";
+
+export const TABS: { key: TabKey; href: string; label: string }[] = [
+  { key: "home", href: "/", label: "Home" },
+  { key: "shop", href: "/shop", label: "Shop" },
+  { key: "categories", href: "/categories", label: "Collections" },
+  { key: "wishlist", href: "/wishlist", label: "Wishlist" },
+  { key: "account", href: "/account", label: "Profile" },
+];
+
+/* ---- wishlist (v1.4.0) ----
+   The heart on every card. Kept on the device, like the cart: a customer can
+   save shades without an account, and nothing personal leaves the browser.
+   Signing in does not yet merge these into the account — that needs a table
+   on the Worker (CHANGELOG v1.4.0, "still open"). */
+
+const WISH_KEY = "elfia-wishlist";
+export const WISH_EVENT = "elfia-wishlist-changed";
+
+export const readWishlist = (): number[] => {
+  try {
+    const v = JSON.parse(localStorage.getItem(WISH_KEY) ?? "[]") as number[];
+    return Array.isArray(v) ? v.filter((n) => typeof n === "number" && n > 0).slice(0, 100) : [];
+  } catch { return []; }
+};
+
+const writeWishlist = (ids: number[]): void => {
+  try { localStorage.setItem(WISH_KEY, JSON.stringify(ids.slice(0, 100))); } catch { /* private mode */ }
+  try { window.dispatchEvent(new Event(WISH_EVENT)); } catch { /* SSR */ }
+};
+
+/** Returns the new state, so a card can animate the heart it just filled. */
+export const toggleWish = (id: number): boolean => {
+  const ids = readWishlist();
+  const has = ids.includes(id);
+  writeWishlist(has ? ids.filter((n) => n !== id) : [id, ...ids]);
+  return !has;
+};
+
+export const wishCount = (): number => readWishlist().length;
+
+/* ---- collections (v1.4.0) ----
+   The CEO's layout has a Collections screen. ELFIA's real catalogue is one
+   Bawal range plus a Shawl category, so the groups below are DERIVED from the
+   live data rather than typed in: nothing here invents a collection the shop
+   cannot fill, and an empty group is never shown. When the range grows, name
+   the products the way the rule expects — or add a group here. */
+
+export interface Group {
+  key: string;
+  label: string;
+  blurb: string;
+  match: (p: Product) => boolean;
+}
+
+const PRINTED = /(floral|print|gold|batik|motif)/i;
+
+export const GROUPS: Group[] = [
+  {
+    key: "printed",
+    label: "Bawal Printed",
+    blurb: "Florals and gold-line designs",
+    match: (p) => (p.category ?? "bawal") === "bawal" && PRINTED.test(p.name),
+  },
+  {
+    key: "plain",
+    label: "Bawal Plain",
+    blurb: "Solid and gradient shades",
+    match: (p) => (p.category ?? "bawal") === "bawal" && !PRINTED.test(p.name),
+  },
+  {
+    key: "shawl",
+    label: "Shawl",
+    blurb: "The long-cut collection",
+    match: (p) => (p.category ?? "bawal") === "shawl",
+  },
+  {
+    key: "featured",
+    label: "ELFIA Exclusive",
+    blurb: "Hand-picked by the studio",
+    match: (p) => p.featured === 1,
+  },
+];
+
+export const groupOf = (key: string): Group | undefined => GROUPS.find((g) => g.key === key);
+
+/** Everything in a group, or the whole catalogue when the key is unknown. */
+export const inGroup = (products: Product[], key: string | null): Product[] => {
+  const g = key ? groupOf(key) : undefined;
+  return g ? products.filter(g.match) : products;
+};
+
+/* ---- listing sorts (v1.4.0) ---- */
+export type SortKey = "featured" | "price_asc" | "price_desc" | "name";
+
+export const SORTS: { key: SortKey; label: string }[] = [
+  { key: "featured", label: "Featured" },
+  { key: "price_asc", label: "Price: low to high" },
+  { key: "price_desc", label: "Price: high to low" },
+  { key: "name", label: "Name A–Z" },
+];
+
+export const sortProducts = (list: Product[], key: SortKey): Product[] => {
+  const out = [...list];
+  switch (key) {
+    case "price_asc": return out.sort((a, b) => a.price_cents - b.price_cents);
+    case "price_desc": return out.sort((a, b) => b.price_cents - a.price_cents);
+    case "name": return out.sort((a, b) => splitName(a.name).shade.localeCompare(splitName(b.name).shade));
+    default: return out.sort((a, b) => (b.featured ?? 0) - (a.featured ?? 0) || a.sort - b.sort || a.id - b.id);
+  }
+};
 
 /* ---- what this device remembers (v1.0.0) ----
    The CEO watched a customer refresh mid-checkout and lose everything. An
@@ -247,9 +362,11 @@ export const waLink = (digits: string, text: string): string =>
 
 /* ---- shared styles ---- */
 export const inputClass =
-  "h-11 w-full rounded-lg border border-stone-300 bg-white px-3 text-sm text-stone-900 outline-none focus:border-[#7a2648] focus:ring-2 focus:ring-[#7a2648]/20";
-export const labelClass = "mb-1 block text-xs font-medium text-stone-500";
+  "h-12 w-full rounded-xl border border-elfia-line bg-white px-3.5 text-sm text-elfia-ink outline-none transition-colors placeholder:text-elfia-muted/70 focus:border-elfia-rose focus:ring-2 focus:ring-elfia-rose/25";
+export const labelClass = "mb-1.5 block text-xs font-medium text-elfia-muted";
 export const btnClass =
-  "inline-flex h-11 items-center justify-center rounded-full bg-[#7a2648] px-6 text-sm font-semibold text-white transition-colors hover:bg-[#8f2e55] disabled:opacity-50";
+  "inline-flex h-12 items-center justify-center rounded-full bg-elfia-deep px-6 text-sm font-semibold text-white shadow-sm shadow-elfia-deep/20 transition-colors hover:bg-elfia-deeper disabled:opacity-50";
 export const btnGhost =
-  "inline-flex h-11 items-center justify-center rounded-full border border-stone-300 px-6 text-sm font-semibold text-stone-700 transition-colors hover:border-stone-400 hover:bg-white";
+  "inline-flex h-12 items-center justify-center rounded-full border border-elfia-line bg-white px-6 text-sm font-semibold text-elfia-body transition-colors hover:border-elfia-rose hover:text-elfia-deep";
+/** The white panel every screen is built from. */
+export const cardClass = "rounded-2xl border border-elfia-line bg-white";
