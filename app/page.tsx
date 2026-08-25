@@ -31,8 +31,8 @@ interface Slide {
   image: string; title: string; subtitle: string; href?: string;
   /** CSS object-position — which part of the photo survives the crop. */
   position?: string;
-  /** v1.8.0 — true shows the WHOLE photo letterboxed instead of cropping. */
-  contain?: boolean;
+  /** v1.9.0 — how far the photo is zoomed in. 1 = every edge visible. */
+  scale?: number;
 }
 
 function Carousel({ slides }: { slides: Slide[] }) {
@@ -57,12 +57,17 @@ function Carousel({ slides }: { slides: Slide[] }) {
           const inner = (
             <div className="relative aspect-[4/3] w-full sm:aspect-[21/9]">
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              {/* v1.8.0 — a "whole photo" slide is letterboxed, and the
-                  blush behind it is the band the customer sees at the edges;
-                  a filling slide crops around the point the portal aimed at. */}
+              {/* v1.9.0 — the portal's zoom. The photo is laid in whole
+                  (object-contain) and then scaled up around its focus point,
+                  so 100% shows every edge against the blush and anything
+                  higher fills and crops. One dial, no switch. */}
               <img src={s.image} alt={s.title}
-                className={`h-full w-full ${s.contain ? "object-contain" : "object-cover"}`}
-                style={{ objectPosition: s.position ?? "50% 0%" }}
+                className="h-full w-full object-contain"
+                style={{
+                  objectPosition: s.position ?? "50% 50%",
+                  transform: s.scale && s.scale !== 1 ? `scale(${s.scale})` : undefined,
+                  transformOrigin: s.position ?? "50% 50%",
+                }}
                 loading={i === 0 ? "eager" : "lazy"} />
               {/* A rose wash rather than a black scrim — the blush palette
                   stays intact and the type still passes contrast. */}
@@ -159,7 +164,7 @@ export default function Home() {
           title: s.title ?? "",
           subtitle: s.subtitle ?? "",
           position: f.position,
-          contain: f.contain,
+          scale: f.scale,
         };
       })
     : [...BRAND_SLIDES];

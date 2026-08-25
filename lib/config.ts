@@ -61,20 +61,30 @@ export interface PortalSlide {
   focus_x?: number | null;
   focus_y?: number | null;
   fit?: string | null;
+  /** v1.9.0 — per cent. 100 = the whole photo fits in the hero. */
+  zoom?: number | null;
 }
 
 /** v1.8.0 — the CSS a slide's framing turns into. Kept next to the type so
     the hero and any future banner frame a photo the same way, and so the
     "portal said nothing" answer lives in exactly one place: fill the banner
     from its middle, which is what the shop did before framing existed. */
-export const slideFraming = (s: Pick<PortalSlide, "focus_x" | "focus_y" | "fit">): {
-  position: string; contain: boolean;
+export const slideFraming = (s: Pick<PortalSlide, "focus_x" | "focus_y" | "fit" | "zoom">): {
+  position: string; scale: number;
 } => {
   const pct = (v: unknown): number => {
     const n = Math.round(Number(v));
     return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : 50;
   };
-  return { position: `${pct(s.focus_x)}% ${pct(s.focus_y)}%`, contain: s.fit === "contain" };
+  /* v1.9.0 — one number replaces the crop/no-crop switch. The photo is laid
+     in with object-fit: contain (so 100% = every edge visible, the CEO's
+     "at least I can see the full") and then scaled up around the focus
+     point. A slide the portal has not zoomed yet has no number, and the old
+     switch still answers for it — 160% is what filled the banner before. */
+  const z = Math.round(Number(s.zoom));
+  const scale = Number.isFinite(z) && z >= 100 ? Math.min(300, z) / 100
+              : s.fit === "contain" ? 1 : 1.6;
+  return { position: `${pct(s.focus_x)}% ${pct(s.focus_y)}%`, scale };
 };
 
 /** The struck-through number, only when it is genuinely bigger than the

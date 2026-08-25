@@ -87,6 +87,17 @@ const clean = (v: unknown, max: number): string => String(v ?? "").trim().slice(
 /* v1.8.0 — a slide's focus point, 0-100 per cent. Anything the portal could
    not send properly becomes the middle: a wrong number here would frame a
    customer-facing banner on nothing. */
+/* v1.9.0 — the portal's zoom, in per cent. 100 = the whole photo inside the
+   hero. NULL when the portal has not sent one (a portal older than its
+   0089), which the storefront reads as "fall back to the old crop switch" —
+   so an existing slide does not visibly jump the day this ships. */
+const zoomPct = (v: unknown): number | null => {
+  if (v === undefined || v === null) return null;
+  const n = Math.round(Number(v));
+  if (!Number.isFinite(n)) return null;
+  return Math.min(300, Math.max(100, n));
+};
+
 const framePct = (v: unknown): number => {
   const n = Math.round(Number(v));
   if (!Number.isFinite(n)) return 50;
@@ -395,7 +406,7 @@ export async function pullStock(env: Env): Promise<PullResult> {
     /* v1.8.0 — framing, decided in the portal. Optional: a portal older
        than its 0088 sends neither, and the middle of the photo is then the
        honest answer. */
-    focus_x?: number; focus_y?: number; fit?: string;
+    focus_x?: number; focus_y?: number; fit?: string; zoom?: number;
   }[] | undefined;
   try {
     const r = await fetch(env.BRIDGE_URL!, { headers: { "X-Bridge-Key": env.BRIDGE_KEY! } });
@@ -671,14 +682,15 @@ export async function pullStock(env: Env): Promise<PullResult> {
         if (framingCols) {
           try {
             await env.DB.prepare(
-              `INSERT INTO portal_slides (portal_id, image_key, image_marker, title, subtitle, sort, focus_x, focus_y, fit, updated_at)
-               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, datetime('now'))
+              `INSERT INTO portal_slides (portal_id, image_key, image_marker, title, subtitle, sort, focus_x, focus_y, fit, zoom, updated_at)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, datetime('now'))
                ON CONFLICT (portal_id) DO UPDATE SET image_key = ?2, image_marker = ?3,
                  title = ?4, subtitle = ?5, sort = ?6, focus_x = ?7, focus_y = ?8, fit = ?9,
-                 updated_at = datetime('now')`,
+                 zoom = ?10, updated_at = datetime('now')`,
             ).bind(sl.id, key, marker, title, subtitle, sort,
                    framePct(sl.focus_x), framePct(sl.focus_y),
-                   sl.fit === "contain" ? "contain" : "cover").run();
+                   sl.fit === "contain" ? "contain" : "cover",
+                   zoomPct(sl.zoom)).run();
             continue;
           } catch { framingCols = false; /* pre-0015 — fall through, once */ }
         }

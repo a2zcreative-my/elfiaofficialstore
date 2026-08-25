@@ -192,6 +192,8 @@ http.createServer(async (req, res) => {
           focus_x: sl.focus_x ?? 50,
           focus_y: sl.focus_y ?? 50,
           fit: sl.fit ?? "cover",
+          /* v1.48.0 — zoom. `noZoom` models a portal older than its 0089. */
+          ...(sl.noZoom ? {} : { zoom: sl.zoom ?? 100 }),
         }),
       })),
     });

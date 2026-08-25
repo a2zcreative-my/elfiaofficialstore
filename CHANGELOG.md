@@ -1,3 +1,72 @@
+# ELFIA OFFICIAL STORE — v1.9.0 (25-08-2026, late night)
+
+## "Still the discount is not live update!!!!"
+
+It was updating — it just took up to five minutes, and there was no way to
+say *now*. The CEO changes a price in her portal and looks straight at the
+shop; a wait she cannot shorten reads as broken however correct it is.
+
+- **The sync now runs EVERY MINUTE** (`crons = ["* * * * *"]`, Cloudflare's
+  floor). 1,440 invocations a day, which is nothing.
+- **`POST /bridge/sync-now`** — the portal can now say "pull everything,
+  right now" using the shared bridge key. No ADMIN_KEY, no store screen: the
+  button lives in her ELFIA Store tab, where she already is. Wrong key or no
+  key is refused like every other bridge route.
+
+## "I want to zoom out at least I can see the full"
+
+v1.8.0 gave the portal an aim point and a crop/no-crop switch. A switch has
+no middle. Migration **0016** adds `zoom` to `portal_slides`: per cent, where
+**100 = every edge of the photo visible** inside the hero and higher grows it
+until it fills and crops, around the focus point. The hero now lays the photo
+in whole (`object-contain`) and scales it — one dial, no switch, no
+re-encoding, so re-framing stays free and endlessly repeatable. A slide the
+portal has not zoomed yet has no number and the old switch still answers for
+it, so nothing on the shop jumps the day this ships.
+
+## "Thumbnail also should take the actual photo … to share on WhatsApp"
+
+WhatsApp, Messenger, Telegram and the rest read `og:` tags out of the HTML at
+the URL itself. The shopfront is a static export where every product lives at
+`/p?id=N` — one file, one set of tags — so **every shared product showed the
+same campaign photo**.
+
+`GET /api/v1/share/:id` now answers with a small page whose tags are THAT
+product's: its own photo (served from our R2, per-segment encoded so the
+crawler's fetch cannot 404), its name, and its price in the description. A
+real visitor is forwarded straight to the product page. The product page
+gained a **Share** row — the phone's own share sheet where there is one, a
+WhatsApp hand-off, and Copy link everywhere else. An unknown or retired id
+still answers 200 with the shop's own preview, so a link already sent to a
+customer never dies.
+
+## Also
+
+- **`/admin` → "From portal" is gone** (CEO: "this should not be appear in
+  ELFIA system! all inside the portal … dont make this system conflict and
+  become unstable!!!"). No second publishing screen, no review queue, no
+  counter. The old route answers **410** with a sentence pointing at the
+  portal rather than a 404 that looks like a broken shop. A SKU'd product's
+  edit form now says plainly that the portal owns its name, collection,
+  description, photo, price and stock.
+
+### Verified
+
+- `scratch/store-sync-test.mjs` — **137 assertions**, twice: zoom crosses,
+  re-zooming costs no download, a mad number is clamped, a portal with no
+  zoom leaves the old switch in charge; sync-now works with the bridge key
+  and is refused without it; a shared link previews that product's own photo
+  and price, and an unknown id still answers.
+- `scratch/portal-live-e2e.mjs` — **42 assertions against the real portal
+  worker**, twice, including the whole path she will use: set a price in the
+  portal, press Update the shop now, and the shop already has it.
+- The rig gained a movements-only outage and GET-retry (a dropped keep-alive
+  socket is not a finding about the store).
+- Worker `tsc` clean; `next build` clean; brand-isolation, no-secrets PASS.
+
+**Deploy**: migration 0016. Use PUSH.bat — it publishes the ENGINE and the
+WEBSITE, which is the half that was missing on 25-08.
+
 # ELFIA OFFICIAL STORE — v1.8.0 (25-08-2026, late night)
 
 ## Two dead ends removed, and the photo you can aim

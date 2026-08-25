@@ -29,12 +29,19 @@ FREE_ABOVE_CENTS = "15000"     # free delivery from RM 150
 #   npx wrangler secret put BRIDGE_KEY       <- same value as the portal's ELFIA_BRIDGE_KEY
 # See PORTAL-BRIDGE-SPEC.md for what the portal must serve at those URLs.
 
-# v0.8.0 — the inventory sync runs by itself every 5 minutes: it delivers any
-# sales the portal has not seen yet, then refreshes counts from the portal.
-# Sales are ALSO pushed the instant an order is placed; this schedule is the
-# safety net for when the portal was unreachable at that moment.
+# v0.8.0 — the inventory sync runs by itself: it delivers any sales the portal
+# has not seen yet, then refreshes counts, prices, photos and the carousel
+# from the portal. Sales are ALSO pushed the instant an order is placed; this
+# schedule is the safety net for when the portal was unreachable then.
+#
+# v1.9.0 — EVERY MINUTE, not every five. The CEO changes a price in the
+# portal and looks straight at the shop ("still the discount is not live
+# update!!!!"); a five-minute wait with no way to hurry it up reads as
+# broken, however correct it is. One minute is Cloudflare's floor and costs
+# 1,440 invocations a day, which is nothing. The portal's "Update the shop
+# now" button covers the rest by calling /bridge/sync-now directly.
 [triggers]
-crons = ["*/5 * * * *"]
+crons = ["* * * * *"]
 
 [[d1_databases]]
 binding = "DB"

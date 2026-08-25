@@ -12,10 +12,42 @@ import { useSearchParams } from "next/navigation";
 
 import {
   addToCart, btnClass, btnGhost, comparePrice, countedStock, fmtRM, imageUrl, inputClass, isSoldOut, labelClass, lowStock,
-  maxQty, splitName, type Product,
+  maxQty, splitName, STORE, type Product,
 } from "@/lib/config";
 
 import { Icon, ProductCard, SectionHeader, WishHeart } from "./../ui";
+
+/** The share row: the phone's own share sheet where there is one, a
+    WhatsApp hand-off and a copy button everywhere else. */
+function ShareProduct({ product }: { product: Product }) {
+  const [copied, setCopied] = useState(false);
+  const url = `${STORE.url}/api/v1/share/${product.id}`;
+  const text = `${splitName(product.name).shade} — ${fmtRM(product.price_cents)}`;
+
+  return (
+    <div className="mt-6 flex flex-wrap items-center gap-2 border-t border-elfia-line pt-5">
+      <span className="text-xs font-medium text-elfia-muted">Share this shade</span>
+      <button type="button" className={btnGhost}
+        onClick={() => {
+          /* navigator.share only exists on a phone and only over https; the
+             copy button below is always there, so this never traps anyone. */
+          const nav = navigator as Navigator & { share?: (d: ShareData) => Promise<void> };
+          if (nav.share) { void nav.share({ title: product.name, text, url }).catch(() => {}); return; }
+          void navigator.clipboard?.writeText(url).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
+        }}>
+        Share
+      </button>
+      <a className={btnGhost} target="_blank" rel="noopener noreferrer"
+        href={`https://wa.me/?text=${encodeURIComponent(`${text}\n${url}`)}`}>
+        WhatsApp
+      </a>
+      <button type="button" className="text-xs text-elfia-muted underline hover:text-elfia-deep"
+        onClick={() => void navigator.clipboard?.writeText(url).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); })}>
+        {copied ? "Link copied" : "Copy link"}
+      </button>
+    </div>
+  );
+}
 
 function NotifyMe({ product }: { product: Product }) {
   const [form, setForm] = useState({ name: "", phone: "", website: "" });
@@ -221,6 +253,15 @@ function ProductInner() {
                 <Link href="/shop" className={btnGhost}>Keep shopping</Link>
               </div>
             )}
+
+            {/* v1.9.0 — the CEO: "thumbnail also should take the actual photo
+                of based on the product that customer want to share on the
+                WhatsApp or any social platform". The link shared is
+                /api/v1/share/<id>, which serves THIS product's photo, name
+                and price as the preview tags and then forwards the person to
+                this page. Sharing /p?id= directly would show the campaign
+                shot for every product — one static page, one set of tags. */}
+            <ShareProduct product={p} />
 
             {out && <NotifyMe product={p} />}
 

@@ -46,6 +46,10 @@ step("start clean: reset the portal's shawl to the seeded baseline");
   const inv = await (await portalStaff(`/inventory`)).json();
   const pShawl = inv.items.find((x) => x.sku === "SHWL 001");
   await portalStaff(`/inventory/${pShawl.id}`, { method: "PATCH", body: JSON.stringify({ stock: 8 }) });
+  /* v1.9.0 — clear any explicit web price a previous run left behind (the
+     "Update the shop now" step sets one), so the seeded RM 55 is the
+     baseline every run measures against. */
+  await portalStaff(`/inventory/${pShawl.id}/bridge`, { method: "PATCH", body: JSON.stringify({ elfia_price: "" }) });
   await portalStaff(`/inventory/${pShawl.id}/elfia`, {
     method: "PATCH", body: JSON.stringify({ description: "Long-cut, lightweight and opaque. Finished by hand.", discount: "" }),
   });
@@ -231,12 +235,48 @@ step("v1.46.0 — a slide uploaded in the portal becomes the shop's carousel");
     .find((x) => x.portal_id === slide.id);
   ok("and 'show the whole photo' reached it too", whole?.fit === "contain", String(whole?.fit));
 
+  /* v1.48.0/v1.9.0 — the zoom dial: 100 shows every edge of the photo. */
+  await portalStaff(`/elfia/slides/${slide.id}`, { method: "PATCH", body: JSON.stringify({ zoom: 100 }) });
+  await syncNow();
+  const wide = ((await (await fetch(`${STORE}/products`)).json()).slides ?? [])
+    .find((x) => x.portal_id === slide.id);
+  ok("zoomed out to the whole photo", wide?.zoom === 100, String(wide?.zoom));
+  ok("and the old crop switch was kept in step", wide?.fit === "contain", String(wide?.fit));
+  await portalStaff(`/elfia/slides/${slide.id}`, { method: "PATCH", body: JSON.stringify({ zoom: 190 }) });
+  await syncNow();
+  const tight = ((await (await fetch(`${STORE}/products`)).json()).slides ?? [])
+    .find((x) => x.portal_id === slide.id);
+  ok("and zoomed back in", tight?.zoom === 190 && tight?.fit === "cover",
+     JSON.stringify({ z: tight?.zoom, f: tight?.fit }));
+
   /* Remove in the portal — the ONE feed section where absence means delete. */
   await portalStaff(`/elfia/slides/${slide.id}`, { method: "PATCH", body: JSON.stringify({ remove: true }) });
   await syncNow();
   const after = await (await fetch(`${STORE}/products`)).json();
   ok("removing it in the portal removes it from the shop", !(after.slides ?? []).some((x) => x.portal_id === slide.id),
      JSON.stringify(after.slides ?? null));
+}
+
+step("v1.48.0 — the portal's own 'Update the shop now' button");
+{
+  /* The CEO: "still the discount is not live update!!!!". This proves the
+     whole path she will actually use: set a price in the portal, press the
+     button, and the shop has it — no waiting for a scheduled sync, no admin
+     key, no store screen. */
+  const inv = await (await portalStaff(`/inventory`)).json();
+  const pShawl = inv.items.find((x) => x.sku === "SHWL 001");
+  const target = 4321;
+  await portalStaff(`/inventory/${pShawl.id}/bridge`, {
+    method: "PATCH", body: JSON.stringify({ elfia_price: (target / 100).toFixed(2) }),
+  });
+  const res = await portalStaff(`/elfia/sync-now`, { method: "POST", body: "{}" });
+  ok("the portal reached the shop", res.status === 200, `${res.status}`);
+  const shawlNow = await bySku("SHWL001");
+  ok("and the new price is already live", shawlNow.price_cents === target,
+     `${shawlNow.price_cents} (wanted ${target})`);
+  // put the seeded price back so the next run starts where this one did
+  await portalStaff(`/inventory/${pShawl.id}/bridge`, { method: "PATCH", body: JSON.stringify({ elfia_price: "" }) });
+  await portalStaff(`/elfia/sync-now`, { method: "POST", body: "{}" });
 }
 
 console.log(`\n${fail === 0 ? "ALL PASS" : "FAILURES"} — ${pass} passed, ${fail} failed`);

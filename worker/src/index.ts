@@ -74,7 +74,7 @@ export interface Env {
   STORE_ORIGIN?: string;     // override for local testing
 }
 
-const VERSION = "1.8.0";
+const VERSION = "1.9.0";
 const STATUSES = ["pending_payment", "payment_review", "paid", "shipped", "completed", "cancelled"] as const;
 type Status = (typeof STATUSES)[number];
 
@@ -281,14 +281,15 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
       const probe = async (q: string): Promise<boolean> => {
         try { await env.DB.prepare(q).first(); return true; } catch { return false; }
       };
-      const [accounts, progress, syncReady, traffic, consent, portalProducts, saleSlides, framing] = await Promise.all([
+      const [accounts, progress, syncReady, traffic, consent, portalProducts, saleSlides, framing, slideZoom] = await Promise.all([
         table("customers"), table("order_events"), table("stock_events"), table("traffic_hits"),
         probe("SELECT marketing_consent_at FROM customers LIMIT 1"),
         probe("SELECT portal_pending FROM products LIMIT 1"),
         probe("SELECT compare_price_cents FROM products LIMIT 1"),
         probe("SELECT focus_x FROM portal_slides LIMIT 1"),
+        probe("SELECT zoom FROM portal_slides LIMIT 1"),
       ]);
-      const migrationsCurrent = accounts && progress && syncReady && traffic && consent && portalProducts && saleSlides && framing;
+      const migrationsCurrent = accounts && progress && syncReady && traffic && consent && portalProducts && saleSlides && framing && slideZoom;
       const cfg = storeConfig(env);
       return json({
         ok: db && migrationsCurrent, version: VERSION, db, r2,
@@ -304,6 +305,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
             ...(portalProducts ? [] : ["portal_products (0013 — the portal cannot create products or send photos)"]),
             ...(saleSlides ? [] : ["sale_price_and_slides (0014 — discounts and the portal carousel will not show)"]),
             ...(framing ? [] : ["slide_framing (0015 — the portal cannot aim or un-crop a carousel photo)"]),
+            ...(slideZoom ? [] : ["slide_zoom (0016 — the portal cannot zoom a carousel photo out)"]),
           ],
         }),
         admin_key_configured: Boolean(env.ADMIN_KEY),
@@ -360,7 +362,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
            just without the portal's aiming. */
         try {
           slides = (await env.DB.prepare(
-            `SELECT portal_id, image_key, title, subtitle, sort, focus_x, focus_y, fit
+            `SELECT portal_id, image_key, title, subtitle, sort, focus_x, focus_y, fit, zoom
                FROM portal_slides ORDER BY sort, portal_id LIMIT 12`,
           ).all()).results;
         } catch {
@@ -625,6 +627,98 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
        start. Rows come back oldest-change-first, at most 200 per call; keep
        calling with the new cursor until `orders` comes back empty. The same
        order reappears whenever its status moves — upsert by order_number. */
+    /* v1.9.0 — "still the discount is not live update!!!!"
+       The bridge refreshes on a schedule, so a price the CEO changes in the
+       portal reaches the shop on the next tick, not the instant she types
+       it. That is correct behaviour and it still felt broken, because there
+       was no way to say "now" from the portal — the only sync button lived
+       behind ADMIN_KEY in a store screen she does not use.
+       This is that button's engine: same shared bridge key as every other
+       bridge route, no admin key, and it does exactly what the cron does. */
+    /* v1.9.0 — a link a customer can SHARE, whose preview is the product.
+       The CEO: "thumbnail also should take the actual photo of based on the
+       product that customer want to share on the WhatsApp or any social
+       platform."
+       WhatsApp, Messenger, Telegram and the rest read og: tags out of the
+       HTML at the URL itself. The shopfront is a static export where every
+       product lives at /p?id=N — one file, one set of tags — so every shared
+       product showed the same campaign photo. This route answers with a tiny
+       page whose tags are THAT product's, then sends a real visitor straight
+       on to the product page. Public on purpose: a share link people cannot
+       open is not a share link. */
+    const shareMatch = path.match(/^\/share\/(\d+)$/);
+    if (shareMatch && (method === "GET" || method === "HEAD")) {
+      const row = await env.DB.prepare(
+        `SELECT id, name, description, price_cents, image_key FROM products WHERE id = ?1 AND active = 1`,
+      ).bind(shareMatch[1]!).first<{
+        id: number; name: string; description: string | null; price_cents: number; image_key: string | null;
+      }>().catch(() => null);
+
+      const origin = storeUrl(env) || "";
+      const esc = (v: string) => v.replace(/&/g, "&amp;").replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+      const target = row ? `${origin}/p?id=${row.id}` : `${origin}/shop`;
+      const title = row ? `${row.name} — ELFIA` : "ELFIA OFFICIAL STORE";
+      const price = row ? `RM ${(row.price_cents / 100).toFixed(2)}` : "";
+      const desc = row
+        ? `${price} · ${(row.description ?? "First Sight, Forever Yours").replace(/\s+/g, " ").slice(0, 160)}`
+        : "First Sight, Forever Yours";
+      /* Per-segment encoding, the same rule the storefront uses — a raw
+         slash inside the key would 404 the crawler's fetch and the preview
+         would silently fall back to nothing. */
+      const img = row?.image_key
+        ? `${origin}/api/v1/media/${row.image_key.split("/").map(encodeURIComponent).join("/")}`
+        : `${origin}/collection/campaign-studio.jpg`;
+
+      const html = `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<title>${esc(title)}</title>
+<meta name="description" content="${esc(desc)}">
+<meta property="og:type" content="product">
+<meta property="og:site_name" content="ELFIA OFFICIAL STORE">
+<meta property="og:title" content="${esc(title)}">
+<meta property="og:description" content="${esc(desc)}">
+<meta property="og:image" content="${esc(img)}">
+<meta property="og:image:width" content="900">
+<meta property="og:image:height" content="1125">
+<meta property="og:url" content="${esc(target)}">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="${esc(title)}">
+<meta name="twitter:description" content="${esc(desc)}">
+<meta name="twitter:image" content="${esc(img)}">
+<meta http-equiv="refresh" content="0; url=${esc(target)}">
+<link rel="canonical" href="${esc(target)}">
+</head><body style="font-family:system-ui;padding:2rem;text-align:center">
+<p>Opening ${esc(row ? row.name : "the shop")}…</p>
+<p><a href="${esc(target)}">Continue to ELFIA</a></p>
+<script>location.replace(${JSON.stringify(target)});</script>
+</body></html>`;
+      return new Response(method === "HEAD" ? null : html, {
+        status: 200,
+        headers: {
+          "Content-Type": "text/html; charset=utf-8",
+          /* Crawlers cache previews hard; five minutes is long enough to
+             survive a burst of shares and short enough that a photo changed
+             in the portal shows up the same day. */
+          "Cache-Control": "public, max-age=300",
+        },
+      });
+    }
+
+    if (path === "/bridge/sync-now" && method === "POST") {
+      if (!env.BRIDGE_KEY) return err("not_configured", "Set the BRIDGE_KEY secret first", 501);
+      const given = request.headers.get("X-Bridge-Key") ?? "";
+      if (!timingSafeEqual(given, env.BRIDGE_KEY)) return err("unauthorized", "Bad key", 401);
+      const r = await syncNow(env);
+      return json({
+        ok: !r.pull.error,
+        updated: r.pull.updated.length,
+        prices: r.pull.price_updated.length,
+        created: r.pull.created.length,
+        photos: r.pull.photos,
+        error: r.pull.error ?? null,
+      });
+    }
+
     if (path === "/bridge/orders" && method === "GET") {
       if (!env.BRIDGE_KEY) return err("not_configured", "Set the BRIDGE_KEY secret first", 501);
       const given = request.headers.get("X-Bridge-Key") ?? "";

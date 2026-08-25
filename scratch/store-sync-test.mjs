@@ -42,10 +42,21 @@ const portalDown = (down) => fetch(`${PORTAL}/_down`, { method: "POST", body: JS
 const portalAdd = (body) => fetch(`${PORTAL}/_add`, { method: "POST", body: JSON.stringify(body) });
 const portalPhoto = (body) => fetch(`${PORTAL}/_photo`, { method: "POST", body: JSON.stringify(body) }).then((r) => r.json());
 const portalRemove = (sku) => fetch(`${PORTAL}/_remove`, { method: "POST", body: JSON.stringify({ sku }) });
-const adminProducts = () => admin("/admin/products").then((r) => r.json()).then((j) => j.products);
+/* GET-only retry. `wrangler dev` occasionally drops a keep-alive socket —
+   especially right after an external `wrangler d1 execute` has touched the
+   same local database — and a dropped socket on a READ is not a finding
+   about the store. Writes are never retried: a repeated POST would invent a
+   second order. */
+const getRetry = async (path, tries = 3) => {
+  for (let i = 1; ; i++) {
+    try { return await admin(path).then((r) => r.json()); }
+    catch (e) { if (i >= tries) throw e; await new Promise((r) => setTimeout(r, 300 * i)); }
+  }
+};
+const adminProducts = () => getRetry("/admin/products").then((j) => j.products);
 const bySku = async (sku) => (await adminProducts()).find((p) => p.sku && p.sku.replace(/\s+/g, "").toUpperCase() === sku);
 const syncNow = () => admin("/admin/sync-stock", { method: "POST" }).then((r) => r.json());
-const status = () => admin("/admin/sync-status").then((r) => r.json());
+const status = () => getRetry("/admin/sync-status");
 /* v1.0.0 — the store now caps unpaid orders per phone and orders per IP, so
    this harness gives every order its own caller and its own number. They are
    different customers, which is the truth of what is being tested. */
@@ -493,6 +504,7 @@ step("a row left in the OLD review queue is released by the next pull (v1.8.0)")
      no /admin visit, which is the whole point, since ADMIN_KEY is not even
      configured on the live store. */
   legacyPending(shawlId);
+  await sleep(400);   // let the worker notice the file changed under it
   const before = await bySku(SHAWL);
   ok("the fixture is hidden and pending again", before.active === 0 && before.portal_pending === 1,
      JSON.stringify({ a: before.active, p: before.portal_pending }));
@@ -656,6 +668,7 @@ step("a sale nobody could deliver stops freezing the shelf (v1.8.0)");
   /* Age the event out by hand — 25 real failed attempts would be the same
      state, several minutes slower. Fixture setup, not an assertion. */
   exhaustAttempts("LUMI003");
+  await sleep(400);
 
   await portalSet("LUMI003", 77);
   const r = await syncNow();
@@ -726,6 +739,102 @@ step("the portal frames the carousel photo (v1.8.0)");
      JSON.stringify({ x: a3?.focus_x, y: a3?.focus_y, fit: a3?.fit }));
   await fetch(`${PORTAL}/_slides`, { method: "POST", body: JSON.stringify({ slides: [] }) });
   await syncNow();
+}
+
+step("the portal can zoom a carousel photo out (v1.9.0)");
+{
+  /* The CEO: "Instead of clickable, I want to zoom out at least I can see
+     the full instead of like this!!!" — one number, 100 = every edge of the
+     photo visible inside the hero. */
+  await fetch(`${PORTAL}/_slides`, { method: "POST", body: JSON.stringify({ slides: [
+    { id: 51, photo: "hero1", marker: "z1", title: "Zoomed", zoom: 100 },
+    { id: 52, photo: "hero2", marker: "z2", zoom: 175, focus_x: 40, focus_y: 60 },
+  ] }) });
+  await syncNow();
+  const j = await jget(`${API}/products`);
+  const a = (j.slides ?? []).find((x) => x.portal_id === 51);
+  const b = (j.slides ?? []).find((x) => x.portal_id === 52);
+  ok("the whole photo setting crossed over", a?.zoom === 100, String(a?.zoom));
+  ok("and a part-way zoom crossed over with its aim", b?.zoom === 175 && b?.focus_x === 40 && b?.focus_y === 60,
+     JSON.stringify({ z: b?.zoom, x: b?.focus_x, y: b?.focus_y }));
+
+  // re-zooming is a caption-style edit: no new photo download
+  const key = a.image_key;
+  await fetch(`${PORTAL}/_slides`, { method: "POST", body: JSON.stringify({ slides: [
+    { id: 51, photo: "hero1", marker: "z1", title: "Zoomed", zoom: 230 },
+  ] }) });
+  const r = await syncNow();
+  const a2 = ((await jget(`${API}/products`)).slides ?? []).find((x) => x.portal_id === 51);
+  ok("re-zooming lands without re-downloading", a2?.zoom === 230 && a2?.image_key === key,
+     JSON.stringify({ z: a2?.zoom, same: a2?.image_key === key }));
+  ok("the pull did not report a photo copy", r.pull.photos === 0, String(r.pull.photos));
+
+  // an out-of-range number is clamped rather than trusted
+  await fetch(`${PORTAL}/_slides`, { method: "POST", body: JSON.stringify({ slides: [
+    { id: 51, photo: "hero1", marker: "z1", zoom: 9000 },
+  ] }) });
+  await syncNow();
+  const a3 = ((await jget(`${API}/products`)).slides ?? []).find((x) => x.portal_id === 51);
+  ok("a mad zoom is clamped, never trusted", a3?.zoom === 300, String(a3?.zoom));
+
+  // a portal older than 0089 sends nothing, and the old crop switch answers
+  await fetch(`${PORTAL}/_slides`, { method: "POST", body: JSON.stringify({ slides: [
+    { id: 51, photo: "hero1", marker: "z1", noZoom: true, fit: "contain" },
+  ] }) });
+  await syncNow();
+  const a4 = ((await jget(`${API}/products`)).slides ?? []).find((x) => x.portal_id === 51);
+  ok("no zoom from the portal leaves the old switch in charge", (a4?.zoom ?? null) === null && a4?.fit === "contain",
+     JSON.stringify({ z: a4?.zoom, f: a4?.fit }));
+  await fetch(`${PORTAL}/_slides`, { method: "POST", body: JSON.stringify({ slides: [] }) });
+  await syncNow();
+}
+
+step("the portal can say SYNC NOW without an admin key (v1.9.0)");
+{
+  /* The CEO: "still the discount is not live update!!!!" — the shop refreshes
+     on a schedule, and there was no way to hurry it from the portal because
+     the only sync button lived behind ADMIN_KEY in a store screen she does
+     not use. This route takes the shared bridge key instead. */
+  const p2 = await bySku("LUMI002");
+  await fetch(`${PORTAL}/_price`, { method: "POST", body: JSON.stringify({ sku: "LUMI002", price_cents: 4321 }) });
+  const res = await fetch(`${API}/bridge/sync-now`, {
+    method: "POST", headers: { "X-Bridge-Key": "shared-bridge-secret" },
+  });
+  ok("the portal's request was accepted", res.status === 200, `${res.status}`);
+  const body = await res.json();
+  ok("and it reports what moved", typeof body.prices === "number", JSON.stringify(body));
+  ok("the new price is live immediately", (await bySku("LUMI002")).price_cents === 4321,
+     `${(await bySku("LUMI002")).price_cents} (was ${p2.price_cents})`);
+
+  const bad = await fetch(`${API}/bridge/sync-now`, { method: "POST", headers: { "X-Bridge-Key": "wrong" } });
+  ok("a wrong key is refused", bad.status === 401, `${bad.status}`);
+  const none = await fetch(`${API}/bridge/sync-now`, { method: "POST" });
+  ok("no key at all is refused", none.status === 401, `${none.status}`);
+}
+
+step("a shared product link previews THAT product (v1.9.0)");
+{
+  /* The CEO: "thumbnail also should take the actual photo of based on the
+     product that customer want to share on the WhatsApp or any social
+     platform". WhatsApp reads og: tags from the URL itself, and the shop is
+     one static page for every product — so the share link is served here. */
+  const withPhoto = (await jget(`${API}/products`)).products.find((x) => x.image_key);
+  const html = await (await fetch(`${API}/share/${withPhoto.id}`)).text();
+  const og = (prop) => (html.match(new RegExp(`property="og:${prop}" content="([^"]*)"`)) ?? [])[1];
+  ok("the preview title is the product", (og("title") ?? "").includes(withPhoto.name), String(og("title")));
+  ok("the preview photo is the product's own", (og("image") ?? "").includes(withPhoto.image_key.split("/").pop()),
+     String(og("image")));
+  ok("the preview price is in the description", /RM\s?\d/.test(og("description") ?? ""), String(og("description")));
+  ok("and the link points a real visitor at the product page", (og("url") ?? "").includes(`/p?id=${withPhoto.id}`),
+     String(og("url")));
+  ok("a crawler is not redirected away before reading the tags", /http-equiv="refresh"/.test(html));
+
+  /* An unknown or retired product must not 404 a link somebody has already
+     sent — it lands on the shop with the house preview. */
+  const missing = await fetch(`${API}/share/99999`);
+  ok("an unknown id still answers", missing.status === 200, `${missing.status}`);
+  const mh = await missing.text();
+  ok("with the shop's own preview", /og:url" content="[^"]*\/shop"/.test(mh));
 }
 
 step("tidy up after this run");
