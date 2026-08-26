@@ -1,303 +1,251 @@
 /**
- * The ELFIA catalog, generated as a real PDF with LIVE prices (v1.18.0).
+ * HER catalog PDF, with the prices swapped for live ones (v1.19.0).
  *
- * The CEO: "I want my own PDF without create any new catalog, I want PDF to
- * be embedded with this website! I also want to make sure this PDF able to
- * fetch the actual prices of my Product!!!"
+ * v1.18.0 answered "I want my PDF with live prices" by DRAWING new pages in
+ * her style. She corrected it within the hour: "I want to use this Catalog
+ * without create any new. I want to make the price live fetch instead of
+ * static! do implementation as require without introduce any new!"
  *
- * Those three things cannot all be true of a FILE. A PDF sitting in a folder
- * is a photograph of a moment: it cannot fetch anything, ever. What can be
- * true is a PDF that is BUILT AT THE MOMENT SOMEBODY ASKS FOR IT — so every
- * copy anyone downloads or views was made from the prices in the database a
- * second earlier.
+ * So nothing is drawn any more. This loads the designer's own file —
+ * public/lookbook/elfia-catalog.pdf, byte for byte the PDF she supplied —
+ * and PATCHES it: at each place her designer printed a price, the printed
+ * number is covered with a swatch of the surrounding colour and the live
+ * price is set in the same spot. Every other ink on every page is hers,
+ * untouched. Her photos, her layout, her typography, her cover.
  *
- * That is this file. GET /api/v1/catalog.pdf runs it, and what comes back is
- * a genuine PDF — printable, downloadable, embeddable, shareable on WhatsApp
- * — that nobody ever has to regenerate by hand.
+ * HOW THE PATCH SITES ARE KNOWN
+ * Her PDF's text is real text (WinAnsi-encoded subsets — pdffonts), so every
+ * price has exact coordinates. PRICE_SITES below was extracted from her file
+ * with `pdftotext -bbox`, and the cover colours were sampled from a 144dpi
+ * render of the same file: cream rgb(251,246,240) on the grid pages, the
+ * dusty-rose pill rgb(201,170,185)/(208,178,190) on the two Product Detail
+ * pages. The patch is invisible because the colours are hers, measured, not
+ * chosen.
  *
- * WHAT IS HERS AND WHAT IS DRAWN
- *   page 1      her cover artwork, unchanged, exactly as her designer made
- *               it. It carries no prices, so it never goes out of date.
- *   pages 2..n  drawn here in the same style as her printed lookbook — the
- *               cream ground, the grey circles, the shade name, the price —
- *               because these are the pages with prices on them, and prices
- *               are the whole point.
+ * If she ships a NEW catalog file, PRICE_SITES must be re-extracted — the
+ * recipe is in scratch/catalog-pdf-check.mjs. A guard there fails if the
+ * stored PDF's text no longer matches this map, so a swapped file cannot
+ * silently put prices in the wrong places.
  *
- * The colours and the page size are HER catalog's, sampled from the PDF she
- * supplied rather than guessed:
- *   ground      rgb(251, 246, 240)
- *   circles     rgb(112, 112, 110)
- *   A4 portrait (her cover is 1100x1556, which is A4 to within a pixel)
+ * HOW A PRICE FINDS ITS PRODUCT
+ * By the label her designer printed next to it ("Bawal lumi Aurora", "Shawl
+ * Chiffon Dark Brown"), matched against live product names: a product whose
+ * distinctive words all appear in the label takes the site. Ambiguity or no
+ * match = the printed price stands — a wrong price in her catalog is worse
+ * than an old one, so the matcher never guesses.
  *
- * A new shade published in the portal appears in the next PDF anyone opens.
- * Nobody re-exports anything.
+ * KNOWN LIMIT, stated rather than hidden: covering ink does not delete the
+ * text object underneath, so select-all-and-copy in a PDF viewer can still
+ * surface the printed number. What every reader SEES is the live price; the
+ * date stamp on each patched page says when it was true.
  */
-import {
-  PDFDocument, PDFFont, PDFImage, PDFPage, StandardFonts,
-  appendBezierCurve, clip, closePath, endPath, moveTo,
-  popGraphicsState, pushGraphicsState, rgb,
-} from "pdf-lib";
+import { PDFDocument, PDFFont, StandardFonts, rgb } from "pdf-lib";
 
 export interface CatalogProduct {
   id: number;
   name: string;
   price_cents: number;
   compare_price_cents?: number | null;
-  image_key: string | null;
   sku?: string | null;
-  category?: string;
-  stock: number;
-  track_stock?: number;
 }
 
-/* ---- her catalog's own measurements ---- */
-const A4 = { w: 595.28, h: 841.89 };
-const GROUND = rgb(251 / 255, 246 / 255, 240 / 255);
-const CIRCLE = rgb(112 / 255, 112 / 255, 110 / 255);
-const DEEP = rgb(0x7a / 255, 0x26 / 255, 0x48 / 255); // the shop's deep rose
-const INK = rgb(0x40 / 255, 0x29 / 255, 0x2f / 255);
-const MUTED = rgb(0x9b / 255, 0x85 / 255, 0x8a / 255);
+/* ---- where her designer printed each price ----
+   Coordinates are pdftotext's: origin top-left, units = PDF points, page
+   size 595.276 x 841.890 (A4). `page` is zero-based. `style` decides the
+   cover colour and ink: grid = dark maroon on cream, pill = white on rose. */
+interface PriceSite {
+  page: number;
+  label: string;
+  x0: number; y0: number; x1: number; y1: number;
+  style: "grid" | "pill";
+}
 
-const MARGIN = 42;
-const COLS = 3;
-const ROWS = 4;
-const PER_PAGE = COLS * ROWS;
+export const PRICE_SITES: PriceSite[] = [
+  /* page 2 — Product Detail: Bawal lumi Mahogany, the rose pill */
+  { page: 1, label: "Bawal lumi Mahogany", x0: 29.5, y0: 621.4, x1: 130.8, y1: 652.5, style: "pill" },
+  /* page 3 — the bawal grid */
+  { page: 2, label: "Bawal lumi Mahogany", x0: 286.9, y0: 238.4, x1: 323.2, y1: 246.5, style: "grid" },
+  { page: 2, label: "Bawal lumi Sky", x0: 94.0, y0: 430.2, x1: 130.3, y1: 438.3, style: "grid" },
+  { page: 2, label: "Bawal lumi Lilac", x0: 284.1, y0: 430.4, x1: 320.4, y1: 438.4, style: "grid" },
+  { page: 2, label: "Bawal lumi Celando", x0: 483.8, y0: 430.5, x1: 520.1, y1: 438.6, style: "grid" },
+  { page: 2, label: "Bawal lumi Blush", x0: 89.1, y0: 624.1, x1: 125.4, y1: 632.2, style: "grid" },
+  { page: 2, label: "Bawal lumi Dusty Olive", x0: 287.6, y0: 624.2, x1: 323.9, y1: 632.3, style: "grid" },
+  { page: 2, label: "Bawal lumi Champainge Sand", x0: 484.2, y0: 624.1, x1: 520.5, y1: 632.2, style: "grid" },
+  { page: 2, label: "Bawal lumi Luxe", x0: 87.6, y0: 824.5, x1: 123.9, y1: 832.6, style: "grid" },
+  { page: 2, label: "Bawal lumi Aurora", x0: 288.0, y0: 824.6, x1: 324.3, y1: 832.7, style: "grid" },
+  { page: 2, label: "Bawal lumi Midnight", x0: 485.7, y0: 824.5, x1: 522.0, y1: 832.6, style: "grid" },
+  /* page 4 — Product Detail: Shawl Chiffon Soft Pink, the rose pill */
+  { page: 3, label: "Shawl Chiffon Soft Pink", x0: 41.0, y0: 628.7, x1: 142.2, y1: 659.8, style: "pill" },
+  /* page 5 — the shawl grid */
+  { page: 4, label: "Shawl Chiffon Soft Pink", x0: 83.1, y0: 242.1, x1: 118.3, y1: 250.2, style: "grid" },
+  { page: 4, label: "Shawl Chiffon Emerald Green", x0: 291.6, y0: 242.1, x1: 326.8, y1: 250.2, style: "grid" },
+  { page: 4, label: "Shawl Chiffon Dark Brown", x0: 483.4, y0: 242.1, x1: 518.6, y1: 250.2, style: "grid" },
+  { page: 4, label: "Shawl Chiffon Maroon", x0: 85.7, y0: 432.3, x1: 120.9, y1: 440.4, style: "grid" },
+  { page: 4, label: "Shawl Chiffon Khaki", x0: 286.6, y0: 432.3, x1: 321.8, y1: 440.4, style: "grid" },
+  { page: 4, label: "Shawl Chiffon Ash Blue", x0: 488.0, y0: 432.4, x1: 523.2, y1: 440.5, style: "grid" },
+  { page: 4, label: "Shawl Chiffon Lime Solero", x0: 86.1, y0: 626.2, x1: 121.3, y1: 634.3, style: "grid" },
+  { page: 4, label: "Shawl Chiffon Silver", x0: 295.6, y0: 626.3, x1: 330.8, y1: 634.4, style: "grid" },
+  { page: 4, label: "Shawl Chiffon Mocha", x0: 483.6, y0: 626.2, x1: 518.8, y1: 634.3, style: "grid" },
+  { page: 4, label: "Shawl Chiffon Champange", x0: 85.8, y0: 823.4, x1: 121.0, y1: 831.5, style: "grid" },
+  { page: 4, label: "Shawl Chiffon Black", x0: 297.6, y0: 823.5, x1: 332.8, y1: 831.6, style: "grid" },
+  { page: 4, label: "Shawl Chiffon Dark Purple", x0: 484.0, y0: 823.6, x1: 519.2, y1: 831.7, style: "grid" },
+];
+
+/* ---- her colours, sampled from her file ---- */
+const CREAM = rgb(251 / 255, 246 / 255, 240 / 255);
+const PILL_P2 = rgb(201 / 255, 170 / 255, 185 / 255);
+const PILL_P4 = rgb(208 / 255, 178 / 255, 190 / 255);
+const GRID_INK = rgb(78 / 255, 30 / 255, 43 / 255);
+const WHITE = rgb(1, 1, 1);
+const MUTED = rgb(150 / 255, 128 / 255, 134 / 255);
 
 const rm = (cents: number) => `RM ${(cents / 100).toFixed(2)}`;
 
-/** Letter-spaced, the way the wordmark is set in her artwork. */
-function drawTracked(
-  page: PDFPage, text: string, x: number, y: number,
-  { font, size, color, tracking }: { font: PDFFont; size: number; color: ReturnType<typeof rgb>; tracking: number },
-): number {
-  let cx = x;
-  for (const ch of text) {
-    page.drawText(ch, { x: cx, y, size, font, color });
-    cx += font.widthOfTextAtSize(ch, size) + tracking;
+/* ---- matching a printed label to a live product ----
+   Words that appear in nearly every label or product name carry no signal;
+   what identifies a product is its shade. A product matches a label when
+   every one of its distinctive words appears in the label. */
+const GENERIC = new Set(["bawal", "shawl", "chiffon", "lumi", "premium", "by", "elfia"]);
+const tokens = (s: string): string[] =>
+  s.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).filter(Boolean);
+
+export function matchProduct(label: string, products: CatalogProduct[]): CatalogProduct | null {
+  const labelSet = new Set(tokens(label));
+  let best: CatalogProduct | null = null;
+  let bestScore = 0;
+  let tied = false;
+  for (const p of products) {
+    const distinctive = tokens(p.name).filter((t) => !GENERIC.has(t));
+    if (distinctive.length === 0) continue;
+    if (!distinctive.every((t) => labelSet.has(t))) continue;
+    if (distinctive.length > bestScore) { best = p; bestScore = distinctive.length; tied = false; }
+    else if (distinctive.length === bestScore) tied = best !== null && best.id !== p.id;
   }
-  return cx - x - tracking;
+  /* Two different products both claiming the site = nobody gets it. A wrong
+     price in her catalog is worse than an old one. */
+  return tied ? null : best;
 }
 
-const trackedWidth = (text: string, font: PDFFont, size: number, tracking: number) =>
-  [...text].reduce((w, ch) => w + font.widthOfTextAtSize(ch, size) + tracking, 0) - tracking;
-
-/** Centre a plain string on `cx`, truncating with an ellipsis if it will not
-    fit the cell. A name running into its neighbour looks like a bug. */
-function drawCentred(
-  page: PDFPage, text: string, cx: number, y: number,
-  font: PDFFont, size: number, color: ReturnType<typeof rgb>, maxW: number,
-): void {
-  let t = text;
-  while (t.length > 1 && font.widthOfTextAtSize(t, size) > maxW) t = t.slice(0, -1);
-  if (t !== text) t = `${t.slice(0, -1)}…`;
-  page.drawText(t, { x: cx - font.widthOfTextAtSize(t, size) / 2, y, size, font, color });
-}
-
-/** A circular window, since PDF has no "border-radius": four beziers, then
-    clip. Everything drawn until popGraphicsState is confined to the circle. */
-function clipCircle(page: PDFPage, cx: number, cy: number, r: number): void {
-  const k = r * 0.5523; // the usual circle-from-beziers constant
-  page.pushOperators(
-    pushGraphicsState(),
-    moveTo(cx, cy + r),
-    appendBezierCurve(cx + k, cy + r, cx + r, cy + k, cx + r, cy),
-    appendBezierCurve(cx + r, cy - k, cx + k, cy - r, cx, cy - r),
-    appendBezierCurve(cx - k, cy - r, cx - r, cy - k, cx - r, cy),
-    appendBezierCurve(cx - r, cy + k, cx - k, cy + r, cx, cy + r),
-    closePath(), clip(), endPath(),
-  );
-}
-
-/** The shade, without the series prefix — "Bawal Premium — Dusty Rose" is
-    "Dusty Rose" under a photo that is obviously a bawal. */
-const shadeOf = (name: string) => {
-  const i = name.indexOf(" — ");
-  return i > 0 ? name.slice(i + 3) : name;
-};
-
-const soldOut = (p: CatalogProduct) => (p.track_stock ?? 1) === 1 && p.stock <= 0;
-
-/** Portal spelling, tidied — mirrors collectionsOf() on the storefront so the
-    PDF groups exactly the way the shop does. */
-const collectionOf = (p: CatalogProduct) => ((p.category ?? "").trim() || "Bawal");
-const pretty = (raw: string) => (raw === raw.toLowerCase()
-  ? raw.replace(/\b[a-z]/g, (c) => c.toUpperCase()) : raw);
-
-async function loadImage(
-  doc: PDFDocument, key: string, origin: string, media: R2Bucket | undefined,
-): Promise<PDFImage | null> {
-  try {
-    let bytes: ArrayBuffer | null = null;
-    if (key.startsWith("/")) {
-      /* Shipped with the website (the /collection photos). */
-      const r = await fetch(`${origin}${key}`);
-      if (r.ok) bytes = await r.arrayBuffer();
-    } else if (media) {
-      const obj = await media.get(key);
-      if (obj) bytes = await obj.arrayBuffer();
-    }
-    if (!bytes || bytes.byteLength === 0) return null;
-    const head = new Uint8Array(bytes.slice(0, 4));
-    /* PNG magic 89 50 4E 47, else assume JPEG — those are the only two the
-       upload routes accept, and embedding the wrong one throws. */
-    return head[0] === 0x89 && head[1] === 0x50
-      ? await doc.embedPng(bytes)
-      : await doc.embedJpg(bytes);
-  } catch {
-    return null; // one unreadable photo must not lose the whole catalog
-  }
-}
-
-export interface CatalogOptions {
-  /** Where the website lives, for the cover and any shipped photos. */
+export interface PatchOptions {
+  /** Where the website lives — her PDF is fetched from /lookbook there. */
   origin: string;
-  media?: R2Bucket;
-  /** Shown in the footer so nobody mistakes an old download for today. */
   generatedAt?: Date;
-  /** Bounded so one request cannot try to embed a thousand photographs. */
-  max?: number;
 }
 
-export async function buildCatalogPdf(
-  products: CatalogProduct[], opts: CatalogOptions,
-): Promise<Uint8Array> {
-  const doc = await PDFDocument.create();
+export interface PatchResult {
+  bytes: Uint8Array;
+  patched: string[];
+  /** Labels left at their printed price, with why — surfaced, never silent. */
+  unmatched: { label: string; why: string }[];
+}
+
+export async function patchCatalogPdf(
+  products: CatalogProduct[], opts: PatchOptions,
+): Promise<PatchResult> {
+  const src = await fetch(`${opts.origin}/lookbook/elfia-catalog.pdf`);
+  if (!src.ok) throw new Error(`her catalog file answered ${src.status}`);
+  const doc = await PDFDocument.load(await src.arrayBuffer());
+  /* Two faces, because her designer used two: the grid prices are a serif
+     (they sit under serif names), the pill prices a clean sans. Times and
+     Helvetica are the closest standard faces — the cover hides her ink, so
+     what is judged is proportion, and these were checked against a render
+     of her own page side by side. */
+  const sans = await doc.embedFont(StandardFonts.Helvetica);
+  const serif = await doc.embedFont(StandardFonts.TimesRoman);
+  const pages = doc.getPages();
+
+  const patched: string[] = [];
+  const unmatched: { label: string; why: string }[] = [];
+  const touchedPages = new Set<number>();
+
+  for (const site of PRICE_SITES) {
+    const page = pages[site.page];
+    if (!page) { unmatched.push({ label: site.label, why: "page missing" }); continue; }
+    const product = matchProduct(site.label, products);
+    if (!product) { unmatched.push({ label: site.label, why: "no live product matches" }); continue; }
+
+    const H = page.getHeight();
+    const origW = site.x1 - site.x0;
+    const cx = (site.x0 + site.x1) / 2;
+    const face = site.style === "grid" ? serif : sans;
+
+    /* Size from the printed price's own width — the strongest visual anchor,
+       since the cover swatch hides the old ink entirely and only the new
+       text's proportions are judged against the rest of her page. */
+    let size = (origW / face.widthOfTextAtSize("RM 36.00", 1)) * 1.06;
+
+    const price = rm(product.price_cents);
+    const was = typeof product.compare_price_cents === "number"
+      && product.compare_price_cents > product.price_cents
+      ? rm(product.compare_price_cents) : null;
+
+    /* A sale shows both numbers on the grid; the pill has room for one. */
+    const showWas = was !== null && site.style === "grid";
+    const wasSize = size * 0.82;
+    const gap = size * 0.45;
+    let totalW = face.widthOfTextAtSize(price, size)
+      + (showWas ? gap + face.widthOfTextAtSize(was!, wasSize) : 0);
+    /* Longer live text shrinks to stay inside the tile it was printed in. */
+    const maxW = origW * (site.style === "pill" ? 1.28 : 1.9);
+    if (totalW > maxW) {
+      const f = maxW / totalW;
+      size *= f;
+      totalW = maxW;
+    }
+
+    /* Cover the printed price with the surrounding colour, padded past the
+       ink and wide enough for the new text. */
+    const coverW = Math.max(origW, totalW) + 8;
+    const coverH = (site.y1 - site.y0) + 6;
+    page.drawRectangle({
+      x: cx - coverW / 2,
+      y: H - site.y1 - 3,
+      width: coverW,
+      height: coverH,
+      color: site.style === "grid" ? CREAM : site.page === 1 ? PILL_P2 : PILL_P4,
+    });
+
+    /* pdftotext's line box bottom sits a whisker under the baseline; the
+       offset was tuned against a render of her own page until the new
+       digits sat on her baseline. */
+    const baseline = H - site.y1 + size * 0.16;
+    const startX = cx - totalW / 2;
+    page.drawText(price, {
+      x: startX, y: baseline, size, font: face,
+      color: site.style === "grid" ? GRID_INK : WHITE,
+    });
+    if (showWas) {
+      const wasX = startX + face.widthOfTextAtSize(price, size) + gap;
+      const wasW = face.widthOfTextAtSize(was!, wasSize);
+      page.drawText(was!, { x: wasX, y: baseline, size: wasSize, font: face, color: MUTED });
+      page.drawLine({
+        start: { x: wasX - 0.5, y: baseline + wasSize * 0.28 },
+        end: { x: wasX + wasW + 0.5, y: baseline + wasSize * 0.28 },
+        thickness: Math.max(0.5, wasSize * 0.06), color: MUTED,
+      });
+    }
+
+    patched.push(site.label);
+    touchedPages.add(site.page);
+  }
+
+  /* The date these prices were true, on every page that was patched — a PDF
+     outlives the tab it came from, and somebody will still be holding this
+     file next month. Tiny, muted, in the margin below her artwork. */
+  const stamp = `Prices as at ${(opts.generatedAt ?? new Date()).toISOString().slice(0, 10)} · elfiaofficialstore.my`;
+  for (const idx of touchedPages) {
+    const page = pages[idx];
+    if (!page) continue;
+    const w = sans.widthOfTextAtSize(stamp, 5.5);
+    page.drawText(stamp, {
+      x: page.getWidth() / 2 - w / 2, y: 3.5, size: 5.5, font: sans, color: MUTED, opacity: 0.8,
+    });
+  }
+
   doc.setTitle("ELFIA Catalog");
   doc.setAuthor("ELFIA OFFICIAL STORE");
   doc.setSubject("First Sight, Forever Yours");
   doc.setProducer("elfiaofficialstore.my");
 
-  const serif = await doc.embedFont(StandardFonts.TimesRoman);
-  const serifBold = await doc.embedFont(StandardFonts.TimesRomanBold);
-  const sans = await doc.embedFont(StandardFonts.Helvetica);
-
-  const when = opts.generatedAt ?? new Date();
-  const stamp = when.toISOString().slice(0, 10);
-
-  /* ---- page 1: her cover, untouched ---- */
-  const cover = await loadImage(doc, "/lookbook/page-1.jpg", opts.origin, undefined);
-  if (cover) {
-    const page = doc.addPage([A4.w, A4.h]);
-    /* Cover the page completely, cropping the overflow rather than letting
-       her artwork letterbox against a white band. */
-    const scale = Math.max(A4.w / cover.width, A4.h / cover.height);
-    const w = cover.width * scale, h = cover.height * scale;
-    page.drawImage(cover, { x: (A4.w - w) / 2, y: (A4.h - h) / 2, width: w, height: h });
-  }
-
-  /* ---- the shades, grouped the way the portal names them ---- */
-  const live = products
-    .filter((p) => p.price_cents > 0)
-    .slice(0, opts.max ?? 120);
-
-  const groups = new Map<string, { label: string; items: CatalogProduct[] }>();
-  for (const p of live) {
-    const raw = collectionOf(p);
-    const key = raw.toLowerCase().replace(/\s+/g, "-");
-    if (!groups.has(key)) groups.set(key, { label: pretty(raw), items: [] });
-    groups.get(key)!.items.push(p);
-  }
-
-  const cellW = (A4.w - MARGIN * 2) / COLS;
-  const cellH = 172;
-  const radius = 55;
-
-  let pageNo = 1;
-  for (const { label, items } of groups.values()) {
-    for (let start = 0; start < items.length; start += PER_PAGE) {
-      const slice = items.slice(start, start + PER_PAGE);
-      const page = doc.addPage([A4.w, A4.h]);
-      pageNo += 1;
-      page.drawRectangle({ x: 0, y: 0, width: A4.w, height: A4.h, color: GROUND });
-
-      /* header: the wordmark, a dashed rule, and the collection */
-      const wordW = drawTracked(page, "ELFIA", MARGIN, A4.h - 62,
-        { font: serif, size: 22, color: INK, tracking: 5 });
-      const partLabel = start === 0 ? label : `${label} (cont.)`;
-      const labelW = trackedWidth(partLabel, serifBold, 12, 1.6);
-      const ruleFrom = MARGIN + wordW + 14;
-      const ruleTo = A4.w - MARGIN - labelW - 14;
-      for (let x = ruleFrom; x < ruleTo; x += 9) {
-        page.drawLine({
-          start: { x, y: A4.h - 55 }, end: { x: Math.min(x + 5, ruleTo), y: A4.h - 55 },
-          thickness: 0.9, color: DEEP, opacity: 0.55,
-        });
-      }
-      drawTracked(page, partLabel, A4.w - MARGIN - labelW, A4.h - 60,
-        { font: serifBold, size: 12, color: DEEP, tracking: 1.6 });
-
-      /* the tiles */
-      for (const [i, p] of slice.entries()) {
-        const col = i % COLS, row = Math.floor(i / COLS);
-        const cx = MARGIN + cellW * col + cellW / 2;
-        const top = A4.h - 100 - row * cellH;
-        const cy = top - radius;
-
-        page.drawCircle({ x: cx, y: cy, size: radius, color: CIRCLE });
-
-        const img = p.image_key ? await loadImage(doc, p.image_key, opts.origin, opts.media) : null;
-        if (img) {
-          clipCircle(page, cx, cy, radius);
-          /* Cover the circle, anchored to the TOP of the photograph: these
-             are portraits, and centring them crops the face. */
-          const s = Math.max((radius * 2) / img.width, (radius * 2) / img.height);
-          const w = img.width * s, h = img.height * s;
-          page.drawImage(img, { x: cx - w / 2, y: cy + radius - h, width: w, height: h });
-          page.pushOperators(popGraphicsState());
-        }
-
-        const nameY = cy - radius - 16;
-        drawCentred(page, shadeOf(p.name), cx, nameY, serifBold, 9.5, DEEP, cellW - 12);
-
-        /* THE PRICE — the reason this file exists. */
-        const was = typeof p.compare_price_cents === "number" && p.compare_price_cents > p.price_cents
-          ? p.compare_price_cents : null;
-        const priceText = rm(p.price_cents);
-        if (was) {
-          const wasText = rm(was);
-          const pw = sans.widthOfTextAtSize(priceText, 8.5);
-          const ww = sans.widthOfTextAtSize(wasText, 7.5);
-          const total = pw + 5 + ww;
-          const x0 = cx - total / 2;
-          page.drawText(priceText, { x: x0, y: nameY - 12, size: 8.5, font: sans, color: DEEP });
-          page.drawText(wasText, { x: x0 + pw + 5, y: nameY - 12, size: 7.5, font: sans, color: MUTED });
-          page.drawLine({
-            start: { x: x0 + pw + 5, y: nameY - 12 + 2.6 },
-            end: { x: x0 + pw + 5 + ww, y: nameY - 12 + 2.6 },
-            thickness: 0.6, color: MUTED,
-          });
-        } else {
-          drawCentred(page, priceText, cx, nameY - 12, sans, 8.5, INK, cellW - 12);
-        }
-
-        if (soldOut(p)) {
-          drawCentred(page, "SOLD OUT", cx, nameY - 23, sans, 6.5, MUTED, cellW - 12);
-        } else if (p.sku) {
-          drawCentred(page, p.sku, cx, nameY - 23, sans, 6.5, MUTED, cellW - 12);
-        }
-      }
-
-      /* footer: the promise, and the date these prices were true */
-      page.drawText("First Sight, Forever Yours", {
-        x: MARGIN, y: 34, size: 8, font: serif, color: DEEP,
-      });
-      const foot = `Prices as at ${stamp} · elfiaofficialstore.my`;
-      page.drawText(foot, {
-        x: A4.w - MARGIN - sans.widthOfTextAtSize(foot, 7), y: 34, size: 7, font: sans, color: MUTED,
-      });
-      page.drawText(String(pageNo), {
-        x: A4.w / 2 - sans.widthOfTextAtSize(String(pageNo), 7) / 2, y: 20, size: 7, font: sans, color: MUTED,
-      });
-    }
-  }
-
-  /* A catalog with no products still has to be a valid PDF. */
-  if (doc.getPageCount() === 0) {
-    const page = doc.addPage([A4.w, A4.h]);
-    page.drawRectangle({ x: 0, y: 0, width: A4.w, height: A4.h, color: GROUND });
-    drawCentred(page, "ELFIA", A4.w / 2, A4.h / 2, serifBold, 24, INK, A4.w);
-    drawCentred(page, "The collection is being updated.", A4.w / 2, A4.h / 2 - 26, sans, 10, MUTED, A4.w);
-  }
-
-  return doc.save();
+  return { bytes: await doc.save(), patched, unmatched };
 }

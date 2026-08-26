@@ -1,3 +1,81 @@
+# ELFIA OFFICIAL STORE — v1.19.0 (26-08-2026)
+
+## Her catalog. Her pages. Live prices.
+
+The CEO, on v1.18.0's drawn pages: *"I want to use this Catalog without
+create any new. I want to make the price live fetch instead of static! do
+implementation as require without introduce any new!"*
+
+So nothing is drawn any more. `/api/v1/catalog.pdf` now loads the designer's
+own file — the exact PDF she supplied, byte for byte the one already in
+`public/lookbook/` — and **patches it in place**: at each spot where her
+designer printed a price, the printed number is covered with a swatch of the
+surrounding colour and the live price is set in the same position. All five
+pages are hers. Her cover, her photography, her typography, her Malay product
+details — untouched. Only the numbers change.
+
+### How it knows where the prices are
+
+Her PDF's prices are real text (WinAnsi subsets — `pdffonts`), so every one
+has exact coordinates. `PRICE_SITES` in `catalog-pdf.ts` is the map: 24
+sites across the two grids and the two Product Detail pills, extracted with
+`pdftotext -bbox`, with the cover colours **sampled from a 144dpi render of
+her own file** — cream `rgb(251,246,240)`, the two pill roses — and verified
+pixel-against-pixel: original and patched renders differ by single digits of
+RGB at the seams. The grid prices are re-set in a serif to sit beside her
+serif labels; the pills in a sans, matching what her designer used in each
+place.
+
+**If she ships a new catalog file, the map must be re-extracted.** The rig
+guards this: it checks every mapped label still exists in the stored PDF and
+fails loudly, so a swapped file cannot silently print prices in the wrong
+places.
+
+### How a price finds its product
+
+By the label her designer printed beside it. A live product matches when
+every one of its distinctive words appears in the label — "LUMI AURORA"
+takes "Bawal lumi Aurora"; "DARK BROWN" takes "Shawl Chiffon Dark Brown" and
+is refused "Shawl Chiffon Dark Purple". Two products claiming one site means
+**nobody gets it**: a wrong price in her catalog is worse than an old one,
+so the matcher never guesses. Whatever could not be matched keeps its
+printed price and is named in an `X-Catalog-Unmatched` response header —
+visible in one curl, never silent.
+
+A discount prints as a real sale — live price with the old one struck
+through beside it — and each patched page carries a small
+"Prices as at YYYY-MM-DD" in the margin, because a PDF outlives the tab it
+came from.
+
+### Two limits, stated rather than hidden
+
+- Covering ink does not delete the text object underneath, so
+  select-all-and-copy in a PDF viewer can still surface a printed number.
+  Every reader SEES the live price.
+- That same overlap is why the rig extracts text with `pdftotext -raw`:
+  poppler's layout mode discards overlapping text as shadow duplicates, and
+  the patch rendered perfectly while plain extraction swore it was absent.
+
+### The rig
+
+`scratch/catalog-pdf-check.mjs` — 23 checks in four claims (HERS / LIVE /
+HONEST / MAP GUARD), driven through the real portal → bridge → store chain:
+its fixture product enters via the portal feed, gets repriced and discounted
+there, and the assertions read the words back out of each downloaded PDF.
+The matcher is imported from the shipped worker code, bundled on the fly, so
+the tests cannot drift from what runs. Patch cost measured locally: ~280ms
+for the full load-patch-save of the 5MB file.
+
+## Deploy
+
+**No migration.** Engine + website. `/catalog` and its embed are unchanged —
+the same route now serves her file instead of a drawn one.
+
+**Note for her real catalogue:** every printed label whose shade matches a
+live product name updates by itself. `curl -sI
+https://elfiaofficialstore.my/api/v1/catalog.pdf | grep -i unmatched` lists
+any that did not — a product rename in the portal is usually the fix.
+
 # ELFIA OFFICIAL STORE — v1.18.0 (26-08-2026)
 
 ## Her own PDF, embedded, pricing itself

@@ -35,7 +35,7 @@ import {
 import {
   flushStockEvents, getState, pullConfigured, pushConfigured, recordStockEvents, setState, syncNow,
 } from "./portal";
-import { buildCatalogPdf, type CatalogProduct } from "./catalog-pdf";
+import { patchCatalogPdf, type CatalogProduct } from "./catalog-pdf";
 import { recordHit, rollupTraffic, trafficFeed } from "./traffic";
 
 export interface Env {
@@ -75,7 +75,7 @@ export interface Env {
   STORE_ORIGIN?: string;     // override for local testing
 }
 
-const VERSION = "1.18.0";
+const VERSION = "1.19.0";
 const STATUSES = ["pending_payment", "payment_review", "paid", "shipped", "completed", "cancelled"] as const;
 type Status = (typeof STATUSES)[number];
 
@@ -462,39 +462,37 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
         });
       }
       const { results: rows } = await env.DB.prepare(
-        `SELECT id, name, price_cents, compare_price_cents, image_key, sku, category, stock, track_stock
+        `SELECT id, name, price_cents, compare_price_cents, sku
            FROM products
           WHERE active = 1 AND price_cents > 0
-          ORDER BY category, sort, id
-          LIMIT 120`,
+          ORDER BY id
+          LIMIT 500`,
       ).all<CatalogProduct>().catch(() => ({ results: [] as CatalogProduct[] }));
 
       try {
-        const bytes = await buildCatalogPdf(rows, {
-          /* THIS request's origin, not the configured STORE_URL. The cover
-             and the shipped /collection photos are served by the website
-             half of the SAME domain, so the request already says where to
-             find them — right on the live shop and on a preview deployment
-             alike, with nothing to configure and nothing to get wrong.
-             STORE_ORIGIN is the local rig's exception, where the API is on
-             :8787 and the website on :8100; it is unset in production. */
+        /* v1.19.0 — HER file, patched, not a drawn document. The designer's
+           PDF is loaded from the website half of this same deployment and
+           only the printed prices are covered and re-set from the database.
+           See catalog-pdf.ts for the whole doctrine. */
+        const r = await patchCatalogPdf(rows, {
           origin: env.STORE_ORIGIN || url.origin,
-          media: env.MEDIA,
           generatedAt: new Date(),
         });
-        return new Response(bytes, {
+        return new Response(r.bytes, {
           headers: {
             "Content-Type": "application/pdf",
-            /* `inline` so a browser SHOWS it where the page embeds it, and a
-               real filename so "Save as" offers something recognisable. */
             "Content-Disposition": 'inline; filename="ELFIA-Catalog.pdf"',
             "Cache-Control": "public, max-age=60",
             "X-Content-Type-Options": "nosniff",
+            /* Which printed prices could not be matched to a live product,
+               so a rename that silently un-links a tile is visible in one
+               curl rather than discovered in print. Headers, not the body:
+               the body is her document. */
+            "X-Catalog-Patched": String(r.patched.length),
+            "X-Catalog-Unmatched": r.unmatched.map((u) => u.label).join("; ").slice(0, 900) || "none",
           },
         });
       } catch (e) {
-        /* Never a broken download. Say what happened in words a person can
-           read; the storefront's own catalog page still stands. */
         return err("catalog_failed",
           `The catalog could not be built just now (${e instanceof Error ? e.message : "unknown"}).`, 500);
       }
