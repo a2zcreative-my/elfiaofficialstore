@@ -1,3 +1,111 @@
+# ELFIA OFFICIAL STORE — v1.21.0 (26-08-2026)
+
+## A catalog uploaded in the portal prices itself
+
+The CEO: "the portal can upload the PDF for this catalog without the prices
+tag and it will automatically live price embedded to the PDF uploaded."
+
+This release is the store's half of that promise. The portal's half (the
+upload screen itself) ships separately in the portal repo.
+
+- **The bridge feed may now carry a `catalog` key** — URLs for a PDF, its
+  label map, and a cover image, plus an `updated_at` marker. Same rules as
+  photos and slides: an absent key means the store keeps what it has; a new
+  marker makes the pull download all three into the store's own R2
+  (`catalog/source.pdf`, `catalog/map.json`, `catalog/cover.jpg`).
+  PDF magic, map shape, and a 15 MB cap are checked before anything is
+  stored; the three travel together or not at all, so a new file can never
+  be priced with an old file's map. Failures land in the photo-errors line;
+  the sync response and pull summary say "catalog updated" when it worked.
+- **`/api/v1/catalog.pdf` serves the uploaded file first.** When
+  `catalog/source.pdf` + `map.json` exist in R2, the engine prices THAT
+  file: since an uploaded catalog carries no printed prices, the price is
+  *inserted* under each label in the house ink — no colour-matched covering
+  needed, no coordinates shipped in code. Labels are matched to products by
+  the same strict matcher as before (all distinctive words present, most
+  specific wins, ambiguous means no price rather than a guess — unmatched
+  labels are named in `X-Catalog-Unmatched`). Tap links come along: a
+  matched label opens its product page, an unmatched one its shelf, the
+  cover and top bands go home, and every page carries "Prices as at …".
+  `X-Catalog-Source: portal` names which file served. With nothing in R2
+  the shipped designer catalog serves exactly as in v1.19/v1.20.
+- **`/api/v1/catalog-cover` prefers the uploaded cover**, so the /catalog
+  share preview follows a new upload with no site rebuild.
+- **`DELETE /api/v1/bridge/catalog`** (bridge key) removes the upload and
+  returns the shop to the shipped file — the portal's "remove" button, and
+  the rigs' way home.
+
+New rig `scratch/catalog-upload-check.mjs` — 18 checks against the real
+worker and the stand-in portal: a PDF built fresh by the rig (labels, no
+prices) travels the bridge, takes over, prices itself, links correctly,
+follows a price change, serves its cover, survives an absent feed key, and
+is fully removable. The v1.19/v1.20 rigs still pass against the shipped
+file after reset (32 + 14 checks), and the sync rig stays green (163).
+
+## Deploy
+
+**No migration.** Engine only (the website already points at the stable
+routes). Nothing changes for customers until a catalog is uploaded from the
+portal — which needs the portal release that follows.
+
+# ELFIA OFFICIAL STORE — v1.20.0 (26-08-2026)
+
+## The catalog is a door into the shop now
+
+Per the CEO's approval of the v1.20 plan (point 1): every tile in the
+generated catalog PDF is a real tap target.
+
+- **A matched tile opens its own product page** (`/p?id=…`) — the exact
+  shade, Add to cart in front of the customer. Safe only because the PDF is
+  rebuilt per request, so the id is always current.
+- **An unmatched tile lands on its shelf** (`/shop?c=bawal` / `?c=shawl`,
+  read from the printed label). Never a dead link, never a guessed product.
+- **The two Product Detail pages** are one product each, so everything under
+  the header band is the tap area.
+- **The ELFIA wordmark on every page goes home; the whole cover goes home.**
+  A forwarded catalog is one tap from the shop, from anywhere in it.
+
+Links always carry the PUBLIC shop address, never a test one — a PDF saved
+to a phone travels, and its links must work wherever the copy ends up. The
+tap areas are annotations layered over her artwork; her ink is untouched.
+Tap widths are sized so no tile can claim its neighbour (±86pt in 200pt
+columns).
+
+**Two mistakes this release caught by reading the file back rather than
+trusting the code:**
+
+1. The first build wrote each URI as a PDF *Name* (`/https:#2f#2f…`), which
+   no viewer follows. Everything compiled; the links were dead.
+2. The rig's own first parser read qpdf's alphabetised dictionaries with a
+   forward window from `/Subtype /Link` — which reads the NEXT object's
+   rectangle, shifting every link by one. The rig now parses object by
+   object, and never dedupes (the four wordmark links are legitimately
+   identical).
+
+The rig gained a CLICKABLE claim — 9 checks: 29 annotations (24 tiles + 5
+home), the matched fixture's tile links to its exact product id, shelf links
+for the rest, every rectangle inside its page, no tile wide enough to cross
+a column. 32 checks total, three runs in a row.
+
+**Where links work:** desktop browsers including the /catalog embed, phone
+PDF viewers after download, WhatsApp's document viewer. iOS Safari's quick
+inline preview is historically inconsistent with PDF links — the customer
+may need "Open in…" first. The phone-first path remains the /catalog page's
+own tiles, which have always been links.
+
+## Sharing /catalog previews the cover
+
+The CEO: "thumbnail must correctly fetch the page cover photo of the PDF."
+`app/catalog/layout.tsx` bakes og:/twitter: tags into the static export —
+WhatsApp's crawler runs no JavaScript, so the tags must be in the HTML — and
+the preview image is the catalog cover, not the site's generic campaign
+shot.
+
+## Deploy
+
+**No migration.** Engine + website (links live in the engine, share tags in
+the website).
+
 # ELFIA OFFICIAL STORE — v1.19.0 (26-08-2026)
 
 ## Her catalog. Her pages. Live prices.

@@ -16,6 +16,12 @@
  *   HONEST    — a label with no matching live product keeps its printed
  *               price and is NAMED in a response header; ambiguity refuses
  *               rather than guesses.
+ *   CLICKABLE — every tile is a link: a matched tile to its product page,
+ *               an unmatched one to its shelf, the wordmark and cover to
+ *               home. Read back out of the file with qpdf, because a link
+ *               annotation that LOOKS right in code can be written as a PDF
+ *               Name no viewer follows — which is exactly what the first
+ *               build did.
  *   MAP GUARD — the stored PDF still matches the coordinate map extracted
  *               from it. If she ships a new catalog file without the map
  *               being re-extracted (pdftotext -bbox), this fails loudly
@@ -31,7 +37,7 @@
  *   node scratch/catalog-pdf-check.mjs
  */
 import { execFileSync, execSync } from "node:child_process";
-import { writeFileSync, unlinkSync } from "node:fs";
+import { readFileSync, writeFileSync, unlinkSync } from "node:fs";
 
 const API = process.env.ELFIA_API ?? "http://127.0.0.1:8787/api/v1";
 const PORTAL = process.env.PORTAL ?? "http://127.0.0.1:8200";
@@ -76,6 +82,32 @@ const textOf = (buf) => {
   writeFileSync(f, buf);
   try { return execFileSync("pdftotext", ["-raw", f, "-"], { encoding: "utf8", maxBuffer: 20e6 }); }
   finally { try { unlinkSync(f); } catch { /* gone */ } }
+};
+/* Every link annotation, as {rect:[x0,y0,x1,y1], uri}, via qpdf's readable
+   form. This is the reader's-eye view: what a PDF viewer will actually do. */
+const linksOf = (buf) => {
+  const f = `/tmp/catlinks-${Date.now()}.pdf`;
+  writeFileSync(f, buf);
+  try {
+    execFileSync("qpdf", ["--qdf", "--object-streams=disable", f, `${f}.qdf`], { stdio: "pipe" });
+    const q = readFileSync(`${f}.qdf`, "latin1");
+    /* Object by object, because QDF writes dictionary keys alphabetically:
+       /Rect and /URI come BEFORE /Subtype, so a forward window from
+       "/Subtype /Link" reads the NEXT object's values — every link shifted
+       by one, which is precisely the wrong-tile bug this claim exists to
+       catch. And never deduped: the four wordmark links are identical
+       rect+uri on different pages, and collapsing them reports 26 links for
+       a file that has 29. */
+    const out = [];
+    for (const m of q.matchAll(/\b\d+ 0 obj\b([\s\S]*?)endobj/g)) {
+      const body = m[1];
+      if (!body.includes("/Subtype /Link")) continue;
+      const rect = body.match(/\/Rect \[\s*([\d.\s-]+?)\s*\]/);
+      const uri = body.match(/\/URI \(([^)]*)\)/);
+      if (rect && uri) out.push({ rect: rect[1].trim().split(/\s+/).map(Number), uri: uri[1] });
+    }
+    return out;
+  } finally { try { unlinkSync(f); unlinkSync(`${f}.qdf`); } catch { /* gone */ } }
 };
 
 /* The map and the matcher from the SHIPPED code, bundled on the fly, so this
@@ -138,6 +170,37 @@ step("HONEST — unmatched labels keep the printed price, and are named");
   ok("and the printed price still stands for them", textOf(first.bytes).includes("RM 36.00"));
 }
 
+step("CLICKABLE — every tile is a real link");
+{
+  const links = linksOf(first.bytes);
+  ok("every tile and every page carries a link (24 tiles + cover + 4 wordmarks)",
+     links.length === 29, `${links.length} links`);
+  ok("unmatched bawal tiles land on the bawal shelf",
+     links.filter((l) => l.uri.endsWith("/shop?c=bawal")).length >= 10,
+     links.map((l) => l.uri).join(" ").slice(0, 120));
+  ok("unmatched shawl tiles land on the shawl shelf",
+     links.filter((l) => l.uri.endsWith("/shop?c=shawl")).length >= 12);
+  ok("home is reachable from the cover and every wordmark",
+     links.filter((l) => /elfiaofficialstore\.my\/?$/.test(l.uri)).length === 5);
+  ok("links carry the PUBLIC shop, never a test address",
+     links.every((l) => l.uri.startsWith("https://elfiaofficialstore.my")),
+     links.find((l) => !l.uri.startsWith("https://elfiaofficialstore.my"))?.uri ?? "");
+  ok("every tap area sits inside an A4 page",
+     links.every((l) => l.rect.every((n) => Number.isFinite(n)) &&
+       l.rect[0] >= 0 && l.rect[2] <= 596 && l.rect[1] >= 0 && l.rect[3] <= 842),
+     JSON.stringify(links.find((l) => !(l.rect[0] >= 0 && l.rect[2] <= 596))?.rect ?? []));
+  /* Grid tiles only — the two Product Detail pages are one product each,
+     so their tap area is deliberately most of the page. Height tells them
+     apart: a tile is ~140pt, a detail tap ~740pt. */
+  /* Height picks tiles out from the page-sized detail taps; destination
+     picks them out from the wordmark links, which are short too. */
+  const tiles = links.filter((l) => (l.rect[3] - l.rect[1]) <= 160 && /\/shop\?c=|\/p\?id=/.test(l.uri));
+  ok("all 22 grid tiles are tappable", tiles.length === 22, `${tiles.length} tiles`);
+  ok("no tile tap can cross into a neighbouring column",
+     tiles.every((l) => (l.rect[2] - l.rect[0]) <= 180),
+     "a grid tap wider than the 200pt column gap would double-claim a tile");
+}
+
 step("LIVE — the whole chain, portal to PDF");
 {
   /* This rig's product enters through the PORTAL, the same door as her real
@@ -150,6 +213,15 @@ step("LIVE — the whole chain, portal to PDF");
   ok("the patch is counted in the header", Number(one.patched) >= 1, String(one.patched));
   ok("and its label is no longer reported unmatched",
      !one.unmatched.includes("Bawal lumi Sky"), one.unmatched.slice(0, 140));
+
+  /* The matched tile must link to ITS OWN product page — the id the shop
+     holds right now, which is only safe because this PDF is built fresh. */
+  const skuId = (await (await fetch(`${API}/products`)).json()).products
+    .find((p) => (p.sku ?? "").replace(/\s+/g, "").toUpperCase() === SKU)?.id;
+  const liveLinks = linksOf(one.bytes);
+  ok("its tile links to its own product page",
+     liveLinks.some((l) => l.uri === `https://elfiaofficialstore.my/p?id=${skuId}`),
+     `wanted /p?id=${skuId} in ${liveLinks.filter((l) => l.uri.includes("/p?id=")).map((l) => l.uri).join(", ") || "(no product links)"}`);
 
   await portalPost("/_price", { sku: SKU, price_cents: 5150 });
   await syncNow();

@@ -387,12 +387,16 @@ export interface PullResult {
   /** v1.13.0 — delivery numbers the feed CHANGED this pull, phrased for a
       human. Empty when the portal sent none, or sent the same ones again. */
   settings_changed: string[];
+  /** v1.21.0 — true when this pull downloaded a newly uploaded catalog
+      (PDF + map, cover included) into R2. Read from the sync response by the
+      admin surface and the rigs, not from stored state. */
+  catalog_synced: boolean;
   error?: string;
 }
 
 const EMPTY_PULL: Omit<PullResult, "configured" | "error"> = {
   updated: [], price_updated: [], unchanged: 0, unmatched_portal: [], unmatched_store: [], deferred: [],
-  created: [], published: [], stuck_skus: [], photos: 0, photo_errors: [], settings_changed: [],
+  created: [], published: [], stuck_skus: [], photos: 0, photo_errors: [], settings_changed: [], catalog_synced: false,
 };
 
 /** Refresh piece counts from the portal, by SKU — case- and whitespace-
@@ -428,6 +432,7 @@ export async function pullStock(env: Env): Promise<PullResult> {
      the portal did not send it = the store keeps what it has, which is the
      rule every optional field on this feed already follows. */
   let feedSettings: { shipping_cents?: unknown; free_above_cents?: unknown } | undefined;
+  let feedCatalog: { url?: string; map_url?: string; cover_url?: string; updated_at?: string } | undefined;
   try {
     const r = await fetch(env.BRIDGE_URL!, { headers: { "X-Bridge-Key": env.BRIDGE_KEY! } });
     if (!r.ok) throw new Error(`portal answered ${r.status} — check the key matches on both sides`);
@@ -436,10 +441,15 @@ export async function pullStock(env: Env): Promise<PullResult> {
       /* v1.13.0 — the delivery numbers, when the portal is new enough to
          send them. Optional like everything else on this feed. */
       settings?: { shipping_cents?: unknown; free_above_cents?: unknown };
+      /* v1.21.0 — a catalog the CEO uploaded in the portal: the PDF, the
+         label map her browser extracted from it, and a cover image. Absent
+         means the store keeps what it has — the shipped catalog included. */
+      catalog?: { url?: string; map_url?: string; cover_url?: string; updated_at?: string };
     };
     items = payload.items ?? [];
     feedSlides = Array.isArray(payload.slides) ? payload.slides : undefined;
     feedSettings = payload.settings && typeof payload.settings === "object" ? payload.settings : undefined;
+    feedCatalog = payload.catalog && typeof payload.catalog === "object" ? payload.catalog : undefined;
   } catch (e) {
     const msg = e instanceof Error ? e.message : "could not reach the portal bridge";
     await setState(env, "last_pull_result", `failed: ${msg}`);
@@ -830,6 +840,53 @@ export async function pullStock(env: Env): Promise<PullResult> {
     await apply("free_above_cents", "free delivery above");
   }
 
+  /* ---- the CEO's uploaded catalog (v1.21.0) ----
+     Downloaded like a photo: only when the marker changes, into this
+     store's own R2, so the shop never leans on the portal at request time.
+     The PDF and its map land TOGETHER or not at all — a new file patched
+     with an old map prints prices in the wrong places, which is the one
+     failure this feature must never have. */
+  let catalog_synced = false;
+  if (feedCatalog?.url && feedCatalog.map_url && feedCatalog.updated_at) {
+    const current = await getState(env);
+    if (current.catalog_marker !== feedCatalog.updated_at) {
+      try {
+        const [pdfR, mapR, covR] = await Promise.all([
+          fetch(feedCatalog.url),
+          fetch(feedCatalog.map_url),
+          feedCatalog.cover_url ? fetch(feedCatalog.cover_url) : Promise.resolve(null),
+        ]);
+        if (pdfR.ok && mapR.ok) {
+          const pdfBytes = await pdfR.arrayBuffer();
+          const mapText = await mapR.text();
+          const head = new Uint8Array(pdfBytes.slice(0, 5));
+          const isPdf = head[0] === 0x25 && head[1] === 0x50 && head[2] === 0x44 && head[3] === 0x46;
+          const mapOk = (() => {
+            try {
+              const m = JSON.parse(mapText) as { version?: number; sites?: unknown[] };
+              return m.version === 1 && Array.isArray(m.sites) && m.sites.length > 0;
+            } catch { return false; }
+          })();
+          if (isPdf && mapOk && pdfBytes.byteLength <= 15_000_000) {
+            await env.MEDIA.put("catalog/source.pdf", pdfBytes, { httpMetadata: { contentType: "application/pdf" } });
+            await env.MEDIA.put("catalog/map.json", mapText, { httpMetadata: { contentType: "application/json" } });
+            if (covR && covR.ok) {
+              await env.MEDIA.put("catalog/cover.jpg", await covR.arrayBuffer(), { httpMetadata: { contentType: "image/jpeg" } });
+            }
+            await setState(env, "catalog_marker", feedCatalog.updated_at);
+            catalog_synced = true;
+          } else {
+            photo_errors.push(`catalog: refused (${isPdf ? "" : "not a PDF"}${!mapOk ? " bad map" : ""})`);
+          }
+        } else {
+          photo_errors.push(`catalog: portal answered ${pdfR.status}/${mapR.status}`);
+        }
+      } catch (e) {
+        photo_errors.push(`catalog: ${e instanceof Error ? e.message : "download failed"}`);
+      }
+    }
+  }
+
   /* A row still waiting in the review list came FROM the portal, so calling
      it "unknown there" the moment the feed drops it would be noise. Only
      published products are reconciled against the portal. */
@@ -844,6 +901,7 @@ export async function pullStock(env: Env): Promise<PullResult> {
     `${photos ? `, ${photos} photo${photos === 1 ? "" : "s"}` : ""}` +
     `${slides_synced ? `, ${slides_synced} slide${slides_synced === 1 ? "" : "s"}` : ""}` +
     `${settings_changed.length ? `, ${settings_changed.join(", ")}` : ""}` +
+    `${catalog_synced ? ", catalog updated" : ""}` +
     `${deferred.length ? `, ${deferred.length} deferred` : ""}` +
     `${unmatched_portal.length ? `, ${unmatched_portal.length} unknown here` : ""}` +
     `${unmatched_store.length ? `, ${unmatched_store.length} unknown there` : ""}`);
@@ -854,7 +912,7 @@ export async function pullStock(env: Env): Promise<PullResult> {
   return {
     configured: true, updated, price_updated, unchanged,
     unmatched_portal, unmatched_store, deferred, created, published, stuck_skus, photos, photo_errors,
-    settings_changed,
+    settings_changed, catalog_synced,
   };
 }
 

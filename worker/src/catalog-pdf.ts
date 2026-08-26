@@ -39,7 +39,7 @@
  * surface the printed number. What every reader SEES is the live price; the
  * date stamp on each patched page says when it was true.
  */
-import { PDFDocument, PDFFont, StandardFonts, rgb } from "pdf-lib";
+import { PDFArray, PDFDocument, PDFFont, PDFName, PDFPage, PDFString, StandardFonts, rgb } from "pdf-lib";
 
 export interface CatalogProduct {
   id: number;
@@ -129,6 +129,10 @@ export function matchProduct(label: string, products: CatalogProduct[]): Catalog
 export interface PatchOptions {
   /** Where the website lives — her PDF is fetched from /lookbook there. */
   origin: string;
+  /** Where LINKS point. Separate from `origin` on purpose: the local rig
+      fetches assets from a test address, but a PDF saved to a phone travels
+      — its links must carry the real shop, wherever the copy ends up. */
+  linkBase: string;
   generatedAt?: Date;
 }
 
@@ -137,7 +141,36 @@ export interface PatchResult {
   patched: string[];
   /** Labels left at their printed price, with why — surfaced, never silent. */
   unmatched: { label: string; why: string }[];
+  /** Link annotations written, for the header and the rig. */
+  links: number;
 }
+
+/* ---- making her pages tappable (v1.20.0) ----
+   A PDF link is an annotation: a rectangle on the page plus a URI action,
+   layered OVER the content — her artwork is not touched. Rect coordinates
+   are PDF-native (origin bottom-left). Existing annotations are preserved,
+   though her file ships with none. */
+function addLink(doc: PDFDocument, page: PDFPage, x: number, y: number, w: number, h: number, url: string): void {
+  const annot = doc.context.obj({
+    Type: "Annot",
+    Subtype: "Link",
+    Rect: [x, y, x + w, y + h],
+    Border: [0, 0, 0], // no visible border — the tile itself is the affordance
+    /* PDFString, NOT context.obj(url): pdf-lib turns a bare JS string into
+       a PDF Name (/https:#2f#2f…), which no viewer follows. Caught by
+       reading the annotations back out of the first generated file. */
+    A: { Type: "Action", S: "URI", URI: PDFString.of(url) },
+  });
+  const ref = doc.context.register(annot);
+  const existing = page.node.lookup(PDFName.of("Annots"));
+  if (existing instanceof PDFArray) existing.push(ref);
+  else page.node.set(PDFName.of("Annots"), doc.context.obj([ref]));
+}
+
+/** Which shop shelf a printed label belongs to, for tiles whose product
+    could not be matched — a shelf is always a safe landing. */
+export const collectionOfLabel = (label: string): string =>
+  /^\s*shawl/i.test(label) ? "shawl" : "bawal";
 
 export async function patchCatalogPdf(
   products: CatalogProduct[], opts: PatchOptions,
@@ -157,14 +190,39 @@ export async function patchCatalogPdf(
   const patched: string[] = [];
   const unmatched: { label: string; why: string }[] = [];
   const touchedPages = new Set<number>();
+  let links = 0;
 
   for (const site of PRICE_SITES) {
     const page = pages[site.page];
     if (!page) { unmatched.push({ label: site.label, why: "page missing" }); continue; }
     const product = matchProduct(site.label, products);
-    if (!product) { unmatched.push({ label: site.label, why: "no live product matches" }); continue; }
-
     const H = page.getHeight();
+
+    /* ---- the tap area, matched or not (v1.20.0) ----
+       The whole TILE is tappable — photo circle, name, price — because that
+       is what a thumb aims at. A matched tile opens its product page, built
+       from the id the patcher holds RIGHT NOW (safe only because this PDF
+       is rebuilt per request). An unmatched tile lands on its shelf — never
+       a dead link, never a guessed product.
+
+       Grid geometry, from the same extraction as the price boxes: columns
+       ~200pt apart (tap width ±86 cannot cross into a neighbour), the photo
+       circle ~150pt tall above the label (tap top = price top - 128). The
+       two Product Detail pages ARE one product each, so everything under
+       the header band is the tap area. */
+    const cxTap = (site.x0 + site.x1) / 2;
+    const href = product
+      ? `${opts.linkBase}/p?id=${product.id}`
+      : `${opts.linkBase}/shop?c=${collectionOfLabel(site.label)}`;
+    if (site.style === "grid") {
+      const topY = site.y0 - 128;
+      addLink(doc, page, cxTap - 86, H - (site.y1 + 4), 172, (site.y1 + 4) - topY, href);
+    } else {
+      addLink(doc, page, 20, 20, page.getWidth() - 40, H - 100, href);
+    }
+    links += 1;
+
+    if (!product) { unmatched.push({ label: site.label, why: "no live product matches" }); continue; }
     const origW = site.x1 - site.x0;
     const cx = (site.x0 + site.x1) / 2;
     const face = site.style === "grid" ? serif : sans;
@@ -242,10 +300,164 @@ export async function patchCatalogPdf(
     });
   }
 
+  /* The wordmark on every content page goes home; the whole cover goes
+     home. The wordmark is outlined art (no text object to measure), so its
+     rect is the top-left band it visibly occupies — generous, and clear of
+     the first row of tiles by over 100pt. */
+  for (const [idx, page] of pages.entries()) {
+    if (idx === 0) {
+      addLink(doc, page, 0, 0, page.getWidth(), page.getHeight(), opts.linkBase);
+    } else {
+      addLink(doc, page, 25, page.getHeight() - 60, 200, 50, opts.linkBase);
+    }
+    links += 1;
+  }
+
   doc.setTitle("ELFIA Catalog");
   doc.setAuthor("ELFIA OFFICIAL STORE");
   doc.setSubject("First Sight, Forever Yours");
   doc.setProducer("elfiaofficialstore.my");
 
-  return { bytes: await doc.save(), patched, unmatched };
+  return { bytes: await doc.save(), patched, unmatched, links };
+}
+
+/* ===========================================================================
+   v1.21.0 — a catalog the CEO uploaded herself, priced on the way out.
+
+   The CEO: "the portal can upload the PDF for this catalog without the
+   prices tag and it will automatically live price embedded to the PDF
+   uploaded."
+
+   The portal's ELFIA tab extracts, IN HER BROWSER at upload time, where
+   every product label sits in the new file (page sizes, label rects — the
+   browser has a full PDF engine, this worker does not). That map and the
+   file travel the bridge like photos do, marker-gated, and land in this
+   store's R2. This function then does at request time exactly what
+   patchCatalogPdf does for the shipped file — except there is nothing to
+   cover: her new catalogs carry NO printed prices, so the live price is
+   simply set beneath each label. Nothing is hidden, so no colour sampling
+   is needed; the price is set in the shop's deep rose, which is ELFIA's ink
+   everywhere else.
+
+   Map coordinates are top-left-origin points, the same convention as
+   PRICE_SITES, converted once here.
+   =========================================================================== */
+
+export interface UploadedSite {
+  page: number; // zero-based
+  label: string;
+  x0: number; y0: number; x1: number; y1: number; // the label's own rect
+}
+
+export interface UploadedMap {
+  version: number;
+  pages: { w: number; h: number }[];
+  sites: UploadedSite[];
+}
+
+/** Shape-check a map that travelled the bridge. A malformed map must fall
+    back to the shipped catalog, never crash the route. */
+export function parseUploadedMap(raw: string): UploadedMap | null {
+  try {
+    const m = JSON.parse(raw) as UploadedMap;
+    if (m.version !== 1 || !Array.isArray(m.pages) || !Array.isArray(m.sites)) return null;
+    if (m.sites.length === 0 || m.sites.length > 300) return null;
+    const okSite = (s: UploadedSite) =>
+      Number.isInteger(s.page) && s.page >= 0 && s.page < m.pages.length &&
+      typeof s.label === "string" && s.label.length > 0 && s.label.length <= 120 &&
+      [s.x0, s.y0, s.x1, s.y1].every(Number.isFinite) && s.x1 > s.x0 && s.y1 > s.y0;
+    return m.sites.every(okSite) ? m : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function patchUploadedCatalog(
+  source: ArrayBuffer, map: UploadedMap, products: CatalogProduct[],
+  opts: { linkBase: string; generatedAt?: Date },
+): Promise<PatchResult> {
+  const doc = await PDFDocument.load(source);
+  const serif = await doc.embedFont(StandardFonts.TimesRoman);
+  const pages = doc.getPages();
+
+  const patched: string[] = [];
+  const unmatched: { label: string; why: string }[] = [];
+  const sitePages = new Set(map.sites.map((s) => s.page));
+  let links = 0;
+
+  for (const site of map.sites) {
+    const page = pages[site.page];
+    if (!page) { unmatched.push({ label: site.label, why: "page missing" }); continue; }
+    const H = page.getHeight();
+    const cx = (site.x0 + site.x1) / 2;
+    const labelH = site.y1 - site.y0;
+    /* The price sits just under the label, sized to read as the label's
+       companion. Clamped: a display-sized heading must not produce a
+       display-sized price. */
+    const size = Math.min(14, Math.max(7.5, labelH * 0.85));
+
+    const product = matchProduct(site.label, products);
+
+    /* Tap area first, matched or not: the label block plus the price line
+       below it. Modest on purpose — in a layout this worker has never seen,
+       a generous rectangle could claim a neighbouring product. */
+    const tapTop = site.y0 - 6;
+    const tapBottom = site.y1 + size * 2.2;
+    const href = product
+      ? `${opts.linkBase}/p?id=${product.id}`
+      : `${opts.linkBase}/shop?c=${collectionOfLabel(site.label)}`;
+    addLink(doc, page, site.x0 - 25, H - tapBottom, (site.x1 - site.x0) + 50, tapBottom - tapTop, href);
+    links += 1;
+
+    if (!product) { unmatched.push({ label: site.label, why: "no live product matches" }); continue; }
+
+    const price = rm(product.price_cents);
+    const was = typeof product.compare_price_cents === "number"
+      && product.compare_price_cents > product.price_cents
+      ? rm(product.compare_price_cents) : null;
+    const wasSize = size * 0.82;
+    const gap = size * 0.45;
+    const totalW = serif.widthOfTextAtSize(price, size)
+      + (was ? gap + serif.widthOfTextAtSize(was, wasSize) : 0);
+
+    const baseline = H - site.y1 - size * 1.1;
+    const startX = cx - totalW / 2;
+    page.drawText(price, { x: startX, y: baseline, size, font: serif, color: GRID_INK });
+    if (was) {
+      const wasX = startX + serif.widthOfTextAtSize(price, size) + gap;
+      const wasW = serif.widthOfTextAtSize(was, wasSize);
+      page.drawText(was, { x: wasX, y: baseline, size: wasSize, font: serif, color: MUTED });
+      page.drawLine({
+        start: { x: wasX - 0.5, y: baseline + wasSize * 0.28 },
+        end: { x: wasX + wasW + 0.5, y: baseline + wasSize * 0.28 },
+        thickness: Math.max(0.5, wasSize * 0.06), color: MUTED,
+      });
+    }
+    patched.push(site.label);
+  }
+
+  /* Home links: a page with no product sites (the cover, a mood page) is
+     wholly tappable; a page with sites keeps a top band, clear of content
+     this worker has never measured. */
+  const stamp = `Prices as at ${(opts.generatedAt ?? new Date()).toISOString().slice(0, 10)} · elfiaofficialstore.my`;
+  const sans = await doc.embedFont(StandardFonts.Helvetica);
+  for (const [idx, page] of pages.entries()) {
+    if (sitePages.has(idx)) {
+      addLink(doc, page, 25, page.getHeight() - 55, 200, 45, opts.linkBase);
+      const w = sans.widthOfTextAtSize(stamp, 5.5);
+      page.drawText(stamp, {
+        x: page.getWidth() / 2 - w / 2, y: 3.5, size: 5.5, font: sans, color: MUTED, opacity: 0.8,
+      });
+    } else {
+      addLink(doc, page, 0, 0, page.getWidth(), page.getHeight(), opts.linkBase);
+    }
+    links += 1;
+  }
+
+  doc.setTitle("ELFIA Catalog");
+  doc.setAuthor("ELFIA OFFICIAL STORE");
+  doc.setSubject("First Sight, Forever Yours");
+  doc.setProducer("elfiaofficialstore.my");
+
+  return { bytes: await doc.save(), patched, unmatched, links };
 }

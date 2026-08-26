@@ -35,7 +35,7 @@ import {
 import {
   flushStockEvents, getState, pullConfigured, pushConfigured, recordStockEvents, setState, syncNow,
 } from "./portal";
-import { patchCatalogPdf, type CatalogProduct } from "./catalog-pdf";
+import { parseUploadedMap, patchCatalogPdf, patchUploadedCatalog, type CatalogProduct } from "./catalog-pdf";
 import { recordHit, rollupTraffic, trafficFeed } from "./traffic";
 
 export interface Env {
@@ -75,7 +75,7 @@ export interface Env {
   STORE_ORIGIN?: string;     // override for local testing
 }
 
-const VERSION = "1.19.0";
+const VERSION = "1.21.0";
 const STATUSES = ["pending_payment", "payment_review", "paid", "shipped", "completed", "cancelled"] as const;
 type Status = (typeof STATUSES)[number];
 
@@ -470,14 +470,32 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
       ).all<CatalogProduct>().catch(() => ({ results: [] as CatalogProduct[] }));
 
       try {
-        /* v1.19.0 — HER file, patched, not a drawn document. The designer's
-           PDF is loaded from the website half of this same deployment and
-           only the printed prices are covered and re-set from the database.
-           See catalog-pdf.ts for the whole doctrine. */
-        const r = await patchCatalogPdf(rows, {
-          origin: env.STORE_ORIGIN || url.origin,
-          generatedAt: new Date(),
-        });
+        /* v1.21.0 — the CEO's own upload wins when one has arrived over the
+           bridge (PDF + map together in R2, marker-gated by the pull); the
+           shipped designer file with its extracted PRICE_SITES is the
+           standing fallback. Either way the document is patched fresh from
+           the database on every request. */
+        let r;
+        let sourceName = "shipped";
+        const upSrc = await env.MEDIA.get("catalog/source.pdf");
+        const upMapRaw = upSrc ? await env.MEDIA.get("catalog/map.json") : null;
+        const upMap = upMapRaw ? parseUploadedMap(await upMapRaw.text()) : null;
+        if (upSrc && upMap) {
+          r = await patchUploadedCatalog(await upSrc.arrayBuffer(), upMap, rows, {
+            linkBase: storeUrl(env),
+            generatedAt: new Date(),
+          });
+          sourceName = "portal";
+        } else {
+          r = await patchCatalogPdf(rows, {
+            origin: env.STORE_ORIGIN || url.origin,
+            /* Links always carry the PUBLIC shop. A saved PDF travels; its
+               links must work wherever the copy ends up, which a local or
+               preview address never would. */
+            linkBase: storeUrl(env),
+            generatedAt: new Date(),
+          });
+        }
         return new Response(r.bytes, {
           headers: {
             "Content-Type": "application/pdf",
@@ -489,6 +507,8 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
                curl rather than discovered in print. Headers, not the body:
                the body is her document. */
             "X-Catalog-Patched": String(r.patched.length),
+            "X-Catalog-Links": String(r.links),
+            "X-Catalog-Source": sourceName,
             "X-Catalog-Unmatched": r.unmatched.map((u) => u.label).join("; ").slice(0, 900) || "none",
           },
         });
@@ -496,6 +516,40 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
         return err("catalog_failed",
           `The catalog could not be built just now (${e instanceof Error ? e.message : "unknown"}).`, 500);
       }
+    }
+
+    /* v1.21.0 — the catalog's cover, for the share preview and the /catalog
+       page. The CEO's uploaded cover when one exists; the shipped cover
+       otherwise. One stable URL, so a new catalog changes the WhatsApp
+       preview with no site rebuild. */
+    if (path === "/catalog-cover" && method === "GET") {
+      const up = await env.MEDIA.get("catalog/cover.jpg");
+      if (up) {
+        return new Response(up.body, {
+          headers: { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=300" },
+        });
+      }
+      const shipped = await fetch(`${env.STORE_ORIGIN || url.origin}/lookbook/page-1.jpg`);
+      if (shipped.ok) {
+        return new Response(shipped.body, {
+          headers: { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=300" },
+        });
+      }
+      return err("not_found", "No cover available", 404);
+    }
+
+    /* v1.21.0 — remove an uploaded catalog and return to the shipped one.
+       Bridge-key gated: the portal (and the test rig) may do this; the
+       public may not. */
+    if (path === "/bridge/catalog" && method === "DELETE") {
+      if (!env.BRIDGE_KEY) return err("not_configured", "Set the BRIDGE_KEY secret first", 501);
+      const givenCat = request.headers.get("X-Bridge-Key") ?? "";
+      if (!timingSafeEqual(givenCat, env.BRIDGE_KEY)) return err("unauthorized", "Bad key", 401);
+      await env.MEDIA.delete("catalog/source.pdf");
+      await env.MEDIA.delete("catalog/map.json");
+      await env.MEDIA.delete("catalog/cover.jpg");
+      await setState(env, "catalog_marker", "");
+      return json({ ok: true, source: "shipped" });
     }
 
     /* v1.2.0 — the visit beacon. Anonymous by construction (see traffic.ts:

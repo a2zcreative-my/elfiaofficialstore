@@ -52,6 +52,9 @@ let slidesList = [];         // [{ id, photo, marker, title?, subtitle?, sort? }
    portal older than its 0052 that sends no `settings` key at all, which the
    store must read as "keep your own numbers". */
 let settings;                // undefined | { shipping_cents?, free_above_cents? }
+/* v1.21.0 — the CEO's uploaded catalog: pdf + map + cover travel the feed.
+   undefined = never uploaded = the store keeps what it has. */
+let catalog;                 // undefined | { pdf:Buffer, map:object, cover:Buffer, updated_at }
 
 /* A genuine 1x1 PNG — the store checks the Content-Type and the byte length,
    so the bytes have to be real. */
@@ -116,6 +119,26 @@ http.createServer(async (req, res) => {
     else { m.photo = b.photo; m.marker = b.marker ?? `m-${Date.now()}`; }
     meta.set(sku, m);
     return send(res, 200, { ok: true, marker: m.marker ?? null });
+  }
+  if (url.pathname === "/_catalog") {
+    const b = await body(req);
+    if (b.clear) { catalog = undefined; return send(res, 200, { ok: true }); }
+    catalog = {
+      pdf: Buffer.from(b.pdf_b64, "base64"),
+      map: b.map,
+      cover: b.cover_b64 ? Buffer.from(b.cover_b64, "base64") : Buffer.alloc(0),
+      updated_at: b.updated_at ?? `cat-${Date.now()}`,
+    };
+    return send(res, 200, { ok: true, updated_at: catalog.updated_at });
+  }
+  if (url.pathname === "/media/catalog.pdf" && catalog) {
+    res.writeHead(200, { "content-type": "application/pdf" }); return res.end(catalog.pdf);
+  }
+  if (url.pathname === "/media/catalog-map.json" && catalog) {
+    res.writeHead(200, { "content-type": "application/json" }); return res.end(JSON.stringify(catalog.map));
+  }
+  if (url.pathname === "/media/catalog-cover.jpg" && catalog) {
+    res.writeHead(200, { "content-type": "image/jpeg" }); return res.end(catalog.cover);
   }
   if (url.pathname === "/_settings") {
     const b = await body(req);
@@ -216,6 +239,12 @@ http.createServer(async (req, res) => {
       /* v1.13.0 — omitted entirely unless a test sets it, which is how a
          portal that does not own delivery pricing yet is expressed. */
       ...(settings ? { settings } : {}),
+      ...(catalog ? { catalog: {
+        url: "http://127.0.0.1:8200/media/catalog.pdf",
+        map_url: "http://127.0.0.1:8200/media/catalog-map.json",
+        cover_url: "http://127.0.0.1:8200/media/catalog-cover.jpg",
+        updated_at: catalog.updated_at,
+      } } : {}),
     });
   }
 
