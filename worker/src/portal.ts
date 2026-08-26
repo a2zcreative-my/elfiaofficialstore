@@ -384,12 +384,15 @@ export interface PullResult {
   photos: number;
   /** Photos that could not be copied, already phrased for a human. */
   photo_errors: string[];
+  /** v1.13.0 — delivery numbers the feed CHANGED this pull, phrased for a
+      human. Empty when the portal sent none, or sent the same ones again. */
+  settings_changed: string[];
   error?: string;
 }
 
 const EMPTY_PULL: Omit<PullResult, "configured" | "error"> = {
   updated: [], price_updated: [], unchanged: 0, unmatched_portal: [], unmatched_store: [], deferred: [],
-  created: [], published: [], stuck_skus: [], photos: 0, photo_errors: [],
+  created: [], published: [], stuck_skus: [], photos: 0, photo_errors: [], settings_changed: [],
 };
 
 /** Refresh piece counts from the portal, by SKU — case- and whitespace-
@@ -420,12 +423,23 @@ export async function pullStock(env: Env): Promise<PullResult> {
     cutout_url?: string; cutout_updated_at?: string;
     cutout_side?: string; cutout_scale?: number;
   }[] | undefined;
+  /* v1.13.0 — what delivery costs, decided in the portal (CEO, 26-08: "I
+     want to have the authority to update the shipping fees"). Undefined =
+     the portal did not send it = the store keeps what it has, which is the
+     rule every optional field on this feed already follows. */
+  let feedSettings: { shipping_cents?: unknown; free_above_cents?: unknown } | undefined;
   try {
     const r = await fetch(env.BRIDGE_URL!, { headers: { "X-Bridge-Key": env.BRIDGE_KEY! } });
     if (!r.ok) throw new Error(`portal answered ${r.status} — check the key matches on both sides`);
-    const payload = (await r.json()) as { items?: typeof items; slides?: typeof feedSlides };
+    const payload = (await r.json()) as {
+      items?: typeof items; slides?: typeof feedSlides;
+      /* v1.13.0 — the delivery numbers, when the portal is new enough to
+         send them. Optional like everything else on this feed. */
+      settings?: { shipping_cents?: unknown; free_above_cents?: unknown };
+    };
     items = payload.items ?? [];
     feedSlides = Array.isArray(payload.slides) ? payload.slides : undefined;
+    feedSettings = payload.settings && typeof payload.settings === "object" ? payload.settings : undefined;
   } catch (e) {
     const msg = e instanceof Error ? e.message : "could not reach the portal bridge";
     await setState(env, "last_pull_result", `failed: ${msg}`);
@@ -784,6 +798,38 @@ export async function pullStock(env: Env): Promise<PullResult> {
     } catch { /* pre-0014 — the sale/carousel simply waits for the migration */ }
   }
 
+  /* ---- what delivery costs (v1.13.0) ----
+     The CEO owns these two numbers in the portal now. They are stored in
+     sync_state and read by storeConfig(), which falls back to the
+     wrangler.toml vars while they are absent.
+
+     Written one at a time and only when they actually change, so the pull
+     report says something true rather than "settings updated" on every one
+     of the 1,440 pulls a day. A value that does not parse to a sane number
+     of sen is IGNORED, not stored: a typo in the portal must not be able to
+     make delivery free or charge RM 1,000 for it, and the last good number
+     is a better answer than a broken one. */
+  const settings_changed: string[] = [];
+  if (feedSettings) {
+    const current = await getState(env);
+    const rm = (c: number) => `RM ${(c / 100).toFixed(2)}`;
+    const apply = async (key: "shipping_cents" | "free_above_cents", label: string) => {
+      const raw = feedSettings![key];
+      if (raw === undefined || raw === null) return;      // absent = keep what we have
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n < 0 || n > 100_000) return;
+      const next = String(Math.round(n));
+      if (current[key] === next) return;                  // unchanged = say nothing
+      await setState(env, key, next);
+      settings_changed.push(
+        current[key] === undefined
+          ? `${label} set to ${rm(Number(next))}`
+          : `${label} ${rm(Number(current[key]))} -> ${rm(Number(next))}`);
+    };
+    await apply("shipping_cents", "delivery");
+    await apply("free_above_cents", "free delivery above");
+  }
+
   /* A row still waiting in the review list came FROM the portal, so calling
      it "unknown there" the moment the feed drops it would be noise. Only
      published products are reconciled against the portal. */
@@ -797,6 +843,7 @@ export async function pullStock(env: Env): Promise<PullResult> {
     `${stuck_skus.length ? `, ${stuck_skus.length} SKU${stuck_skus.length === 1 ? "" : "s"} with an undelivered sale (count taken from the portal anyway)` : ""}` +
     `${photos ? `, ${photos} photo${photos === 1 ? "" : "s"}` : ""}` +
     `${slides_synced ? `, ${slides_synced} slide${slides_synced === 1 ? "" : "s"}` : ""}` +
+    `${settings_changed.length ? `, ${settings_changed.join(", ")}` : ""}` +
     `${deferred.length ? `, ${deferred.length} deferred` : ""}` +
     `${unmatched_portal.length ? `, ${unmatched_portal.length} unknown here` : ""}` +
     `${unmatched_store.length ? `, ${unmatched_store.length} unknown there` : ""}`);
@@ -807,6 +854,7 @@ export async function pullStock(env: Env): Promise<PullResult> {
   return {
     configured: true, updated, price_updated, unchanged,
     unmatched_portal, unmatched_store, deferred, created, published, stuck_skus, photos, photo_errors,
+    settings_changed,
   };
 }
 

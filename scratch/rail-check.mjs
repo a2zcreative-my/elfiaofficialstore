@@ -264,6 +264,15 @@ for (const size of SIZES) {
         ok(`${path} there is a real gap between them`,
            !overlap && fabs.wa.top - fabs.up.bottom >= 6,
            `gap=${fabs.wa.top - fabs.up.bottom}px`);
+        /* v1.13.0, the CEO: "WhatsApp button should same size as Arrow
+           button size". Both read --elfia-fab, so this also catches the
+           stacking offset drifting away from the height it stacks on. */
+        const waH = fabs.wa.bottom - fabs.wa.top, upH = fabs.up.bottom - fabs.up.top;
+        ok(`${path} the two floating buttons are the same size`,
+           waH === upH && fabs.wa.right - fabs.wa.left === fabs.up.right - fabs.up.left,
+           `whatsapp ${fabs.wa.right - fabs.wa.left}x${waH}, back-to-top ${fabs.up.right - fabs.up.left}x${upH}`);
+        ok(`${path} they are right-aligned with each other`,
+           fabs.wa.right === fabs.up.right, `${fabs.wa.right} vs ${fabs.up.right}`);
       }
       if (fabs.wa && fabs.tabTop !== null) {
         ok(`${path} the WhatsApp bubble clears the tab bar`,

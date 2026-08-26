@@ -28,6 +28,15 @@
   --color-elfia-gold: #b98a4b; /* member / exclusive marks */
 
   --radius-card: 1.25rem;
+
+  /* v1.13.0 — the size BOTH floating buttons share (WhatsApp, back-to-top).
+     The CEO, 26-08: "WhatsApp button should same size as Arrow button size".
+     They are one token rather than two hard-coded classes because the
+     stacking offset in bottom-tabbar-2 has to equal the height of the button
+     it stacks on; written by hand in two places, those two numbers drift
+     apart the first time either one changes. 2.75rem = 44px, the smallest
+     comfortable tap target. */
+  --elfia-fab: 2.75rem;
 }
 
 /* The app shell sits on cream; the desktop shop keeps the same ground so the
@@ -97,13 +106,20 @@ body {
    The CEO, 25-08-2026: "Whatsapp button overlapped with the arrow up
    button." Both buttons carried `bottom-tabbar right-4`, which is one
    position, so they were drawn on top of each other and the arrow sat inside
-   the green circle. This is that position plus the bubble's own height
-   (h-14 = 3.5rem) and a 0.75rem gap. It is only used when the bubble is
-   actually on screen — see ScrollTopButton in chrome.tsx, which asks the
-   store config rather than assuming, so a shop with no WhatsApp number
-   configured does not leave a hole where the bubble would have been. */
+   the green circle. This is that position plus the bubble's own height and a
+   0.75rem gap. It is only used when the bubble is actually on screen — see
+   ScrollTopButton in chrome.tsx, which asks the store config rather than
+   assuming, so a shop with no WhatsApp number configured does not leave a
+   hole where the bubble would have been.
+
+   v1.13.0 — --elfia-fab is the height BOTH floating buttons share, so the
+   stack offset can never drift from the button it is stacking on. The CEO,
+   26-08: "WhatsApp button should same size as Arrow button size" — the
+   bubble was h-14 and the arrow h-11, and this offset had 3.5rem written
+   into it by hand, which would have gone stale the moment either changed.
+   Change --elfia-fab (in @theme, above) and both buttons and the gap follow. */
 @utility bottom-tabbar-2 {
-  bottom: calc(var(--elfia-tabbar, 6rem) + 0.75rem + 3.5rem + 0.75rem);
+  bottom: calc(var(--elfia-tabbar, 6rem) + 0.75rem + var(--elfia-fab) + 0.75rem);
 }
 /* A page's own sticky footer (the product buy bar) sits directly on it. */
 @utility above-tabbar {

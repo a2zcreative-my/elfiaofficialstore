@@ -38,8 +38,19 @@ BANK_LINE = "Maybank 5511 0086 5300 — A 2 Z Creative Marketing"
 # Digits only, country code first, no + and no spaces — this is pasted
 # straight into a wa.me link. +60 12 383 4821 -> 60123834821.
 WHATSAPP_DIGITS = "60123834821"
+# v1.13.0 — these two are now the FALLBACK, not the setting.
+# The CEO owns delivery pricing in the portal (ELFIA tab -> Delivery
+# charges); it arrives on the bridge feed and is stored in sync_state, and
+# storeConfig() prefers that. These values answer until the first pull lands,
+# and if the portal ever stops sending them. Editing them still works and
+# still needs a deploy, which is exactly why the portal took the job over.
+#
+# The free-delivery threshold was RM 150 and is now RM 45 on the CEO's
+# instruction of 26-08-2026: "I will provide a free delivery fees" above
+# RM 45.00. Set here as well as in the portal so the shop is right the moment
+# this deploys, rather than for the one minute until the first pull.
 SHIPPING_CENTS = "1000"        # RM 10 flat
-FREE_ABOVE_CENTS = "15000"     # free delivery from RM 150
+FREE_ABOVE_CENTS = "4500"      # free delivery from RM 45
 # The portal bridge endpoints are SECRETS, not vars — this file is committed,
 # and no other company's domain may live in this repo (tests/brand-isolation.mjs
 # enforces that). Set all three from your machine:

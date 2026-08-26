@@ -48,6 +48,10 @@ let downOnly = null;   // null = everything is down; "movements" = writes only
 const meta = new Map();      // sku -> { name?, category?, photo?, marker?, description?, discount? }
 /* v1.7.0 — the carousel. Test control _slide sets the whole list. */
 let slidesList = [];         // [{ id, photo, marker, title?, subtitle?, sort? }]
+/* v1.13.0 — what delivery costs, set in the portal. `undefined` models a
+   portal older than its 0052 that sends no `settings` key at all, which the
+   store must read as "keep your own numbers". */
+let settings;                // undefined | { shipping_cents?, free_above_cents? }
 
 /* A genuine 1x1 PNG — the store checks the Content-Type and the byte length,
    so the bytes have to be real. */
@@ -112,6 +116,11 @@ http.createServer(async (req, res) => {
     else { m.photo = b.photo; m.marker = b.marker ?? `m-${Date.now()}`; }
     meta.set(sku, m);
     return send(res, 200, { ok: true, marker: m.marker ?? null });
+  }
+  if (url.pathname === "/_settings") {
+    const b = await body(req);
+    settings = b.settings === null ? undefined : b.settings;
+    return send(res, 200, { ok: true, settings: settings ?? null });
   }
   if (url.pathname === "/_slides") {
     const b = await body(req);
@@ -204,6 +213,9 @@ http.createServer(async (req, res) => {
           } : {}),
         }),
       })),
+      /* v1.13.0 — omitted entirely unless a test sets it, which is how a
+         portal that does not own delivery pricing yet is expressed. */
+      ...(settings ? { settings } : {}),
     });
   }
 

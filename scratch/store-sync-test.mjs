@@ -37,6 +37,10 @@ const admin = (p, o = {}) => fetch(`${API}${p}`, { ...o, headers: { "X-Admin-Key
 const portalState = () => jget(`${PORTAL}/_state`);
 const portalSet = (sku, stock) => fetch(`${PORTAL}/_set`, { method: "POST", body: JSON.stringify({ sku, stock }) });
 const portalDown = (down) => fetch(`${PORTAL}/_down`, { method: "POST", body: JSON.stringify({ down }) });
+/* v1.13.0 — what delivery costs, decided in the portal. null clears it,
+   which models a portal that does not own delivery pricing. */
+const portalSettings = (settings) => fetch(`${PORTAL}/_settings`, { method: "POST", body: JSON.stringify({ settings }) });
+const storeConfigNow = () => jget(`${API}/store-config`);
 /* v1.5.0 controls: introduce a SKU the STORE has never had, and attach or
    replace its photo. */
 const portalAdd = (body) => fetch(`${PORTAL}/_add`, { method: "POST", body: JSON.stringify(body) });
@@ -942,6 +946,98 @@ step("a cut-out model steps out of the banner (v1.11.0)");
 
   await fetch(`${PORTAL}/_slides`, { method: "POST", body: JSON.stringify({ slides: [] }) });
   await syncNow();
+}
+
+step("delivery pricing is the portal's, not the store's config file (v1.13.0)");
+{
+  /* The CEO, 26-08: "I want to have the authority to update the shipping fees
+     which is above RM45.00, I will provide a free delivery fees." Until this
+     release both numbers lived in the store's wrangler.toml, so changing what
+     delivery costs meant a deploy. This step follows one change all the way
+     from the portal to the number a customer is actually charged. */
+  await portalSettings(null);
+  await syncNow();
+  const before = await storeConfigNow();
+  ok("with the portal silent, the store's own numbers answer",
+     Number.isInteger(before.shipping_cents) && Number.isInteger(before.free_above_cents),
+     JSON.stringify(before));
+
+  /* Both targets are chosen to DIFFER from whatever is already stored. The
+     store keeps these numbers across runs, so a fixed pair would report "no
+     change" on the second run of the day and this step would fail for a
+     reason that has nothing to do with the code — the same re-run pollution
+     that has bitten this suite before. */
+  const SHIP = before.shipping_cents === 650 ? 700 : 650;
+  const FREE = before.free_above_cents === 4500 ? 5000 : 4500;
+
+  await portalSettings({ shipping_cents: SHIP, free_above_cents: FREE });
+  const r1 = await syncNow();
+  const after = await storeConfigNow();
+  ok("the portal's delivery charge reaches the shop", after.shipping_cents === SHIP, String(after.shipping_cents));
+  ok("so does the free-delivery threshold", after.free_above_cents === FREE, String(after.free_above_cents));
+  ok("and the shop says the portal is the source now", after.delivery_source === "portal", String(after.delivery_source));
+  ok("the pull report names both changes", r1.pull.settings_changed.length === 2,
+     JSON.stringify(r1.pull.settings_changed));
+
+  /* 1,440 pulls a day: an unchanged value must be silent, or the report is
+     noise nobody reads and a real change hides inside it. */
+  const r2 = await syncNow();
+  ok("re-sending the same numbers reports nothing", r2.pull.settings_changed.length === 0,
+     JSON.stringify(r2.pull.settings_changed));
+
+  /* The number a CUSTOMER pays is the one that matters. */
+  const buyable = (await adminProducts()).find(
+    (p) => p.active === 1 && p.price_cents > 0 && p.price_cents < FREE && (p.track_stock !== 1 || p.stock > 1));
+  if (!buyable) {
+    ok("a product cheap enough to test the threshold exists", false, "none in the catalogue");
+  } else {
+    /* POST /orders answers with the token and the number only, so the money
+       is read back from the customer's own order page — which is the number
+       she is actually shown and actually asked to transfer. */
+    /* Its own customer name, and cancelled again below. The cancel step
+       earlier in this file finds ITS order by `customer_name === "Sync Test"`
+       and takes the first match, so an order of mine left behind under that
+       name is picked up on the NEXT run and cancelled in its place — which
+       is exactly what happened the first time this step was written, and it
+       failed a step three hundred lines away for no visible reason. */
+    const placed = await order(buyable.id, 1, "Delivery Test");
+    const view = await jget(`${API}/orders/${placed.token}`);
+    ok("an order under the threshold is charged the portal's rate",
+       view.shipping_cents === SHIP,
+       JSON.stringify({ got: view.shipping_cents, subtotal: view.subtotal_cents }));
+    ok("and the total is the subtotal plus that charge",
+       view.total_cents === view.subtotal_cents + SHIP,
+       JSON.stringify({ subtotal: view.subtotal_cents, shipping: view.shipping_cents, total: view.total_cents }));
+    ok("and the order page quotes the same numbers back",
+       view.config?.shipping_cents === SHIP && view.config?.free_above_cents === FREE,
+       JSON.stringify(view.config));
+
+    /* Put the piece back. This suite has to be runnable twice in a row. */
+    const list = await (await admin("/admin/orders")).json();
+    const mine = list.orders.find((x) => x.customer_name === "Delivery Test");
+    if (mine) await admin(`/admin/orders/${mine.id}`, { method: "PUT", body: JSON.stringify({ action: "cancel" }) });
+    await sleep(1200);
+  }
+
+  /* Rubbish must not reach a customer's total. The last good number is a
+     better answer than a broken one. */
+  await portalSettings({ shipping_cents: "free", free_above_cents: FREE });
+  await syncNow();
+  ok("a portal typo does NOT make delivery free",
+     (await storeConfigNow()).shipping_cents === SHIP);
+
+  await portalSettings({ shipping_cents: 4500000, free_above_cents: FREE });
+  await syncNow();
+  ok("nor does a stray zero charge RM 45,000 for postage",
+     (await storeConfigNow()).shipping_cents === SHIP);
+
+  /* And the portal going quiet must not reset delivery to the store's
+     built-in numbers mid-campaign: absent means "keep what you have". */
+  await portalSettings(null);
+  await syncNow();
+  const kept = await storeConfigNow();
+  ok("the portal falling silent keeps the last numbers it sent",
+     kept.shipping_cents === SHIP && kept.free_above_cents === FREE, JSON.stringify(kept));
 }
 
 step("tidy up after this run");

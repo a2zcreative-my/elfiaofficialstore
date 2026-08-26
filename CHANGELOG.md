@@ -1,3 +1,104 @@
+# ELFIA OFFICIAL STORE — v1.13.0 (26-08-2026)
+
+## Delivery pricing belongs to the CEO now
+
+The CEO, 26-08: *"I want to have the authority to update the shipping fees
+which is above RM45.00, I will provide a free delivery fees."*
+
+Both numbers lived in `worker/wrangler.toml`, so changing what delivery cost
+was a code edit and a deploy — something she had to ask someone for. Prices,
+stock, photos, discounts and collections already come from the portal.
+Delivery was the odd one out, and it is the number most likely to change
+during a campaign.
+
+It comes down the bridge now, in a `settings` block on the same feed as
+everything else, and is kept in `sync_state`. `storeConfig()` prefers it and
+falls back to the wrangler var — so an absent `settings` means "keep what you
+have", the rule every optional field on this feed already follows. **No
+migration on either side**: `sync_state` has been the store's key/value
+scratchpad since 0008, and the portal's `system_meta` is older still.
+
+Set it in the portal: **ELFIA tab → Delivery charges**. It reaches the shop
+within a minute, or immediately with "Update the shop now".
+
+### What the numbers are guarded against
+
+This is money a customer is charged, so the failure modes matter more than
+the feature:
+
+- A value that will not parse is **ignored, not stored**. A typo in the
+  portal cannot make delivery free; the last good number stands.
+- A stray zero — RM 45,000 of postage — is **refused, not clamped**, because
+  a clamped number is a wrong number that looks deliberate.
+- An empty box is **not** zero. Sending 0 for "unset" would read at the shop
+  as "delivery is free" and "free delivery from RM 0.00".
+- Zero **is** a legal delivery charge, because free postage is a real choice
+  someone might make on purpose.
+- The portal going quiet does not reset delivery to the built-in numbers
+  mid-campaign.
+
+All six are assertions in `scratch/store-sync-test.mjs`, which now runs 163
+checks against two real workers and follows one change from the portal to the
+`shipping_cents` on a customer's own order page.
+
+`/api/v1/health` now reports `shipping_cents`, `free_above_cents` and
+`delivery_from` — so you can confirm a portal change landed without opening
+the shop and squinting at the announcement bar. `delivery_from: "store"`
+means nobody has set it in the portal yet.
+
+### Free delivery is RM 45
+
+`FREE_ABOVE_CENTS` moves from RM 150 to RM 45 as well as being set in the
+portal, so the shop is right the moment this deploys rather than for the one
+minute until the first pull.
+
+## The two floating buttons are the same size
+
+The CEO: *"WhatsApp button should same size as Arrow button size"*. The
+bubble was 56px and the arrow 44px.
+
+Both now read one `--elfia-fab` token, and so does the stacking offset that
+puts the arrow above the bubble. Written by hand in three places, those
+numbers drift apart the first time any one of them changes — which is exactly
+what v1.12.2 had already set up, with `3.5rem` typed into the offset to match
+a height defined elsewhere. `rail-check.mjs` now asserts the two buttons are
+the same size and right-aligned, not just that they do not overlap.
+
+## The phone has a footer
+
+The CEO: *"mobile apps view there is no footer"*. It was desktop-only on the
+reasoning that the tab bar is the navigation and a four-column link list at
+the bottom of a phone is noise.
+
+That reasoning was half right: the LIST is noise, the footer is not. Reaching
+the delivery policy or the privacy page from a phone meant knowing the URL,
+and a shop that asks for a bank transfer and shows no terms anywhere reads as
+less trustworthy than it is.
+
+So the phone gets its own shape — wordmark, the three links a customer
+reaches for after ordering (track, delivery & returns, privacy), and the
+copyright — rather than the desktop footer squeezed into 390px. The same
+two-faces-of-one-storefront idea as the header.
+
+It also moved INSIDE the tab-bar clearance wrapper. Outside it, its last line
+would have been drawn underneath the tab bar — the exact fault v1.4.1 fixed
+for page content, and one it could not hit while it was desktop-only.
+
+## A test that broke a test three hundred lines away
+
+Worth recording. The new delivery step places a real order to check what the
+customer is charged, and it first did so under the default customer name.
+An earlier step cancels "the" order by finding the first row named
+`Sync Test` — so on the SECOND run of the suite it found my leftover order
+instead, cancelled that, and failed an assertion about LUMI001 with no
+visible connection to the change. The step now uses its own name and cancels
+its own order. The suite passes three times in a row, which is the only
+proof that means anything here.
+
+## Deploy
+
+**No migration.** Engine + website. The portal must be deployed too for the
+Delivery charges card to exist — its half is v1.52.0.
 # ELFIA OFFICIAL STORE — v1.12.4 (26-08-2026)
 
 ## The safety checks had never run on Windows

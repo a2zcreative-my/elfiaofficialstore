@@ -74,7 +74,7 @@ export interface Env {
   STORE_ORIGIN?: string;     // override for local testing
 }
 
-const VERSION = "1.12.0";
+const VERSION = "1.13.0";
 const STATUSES = ["pending_payment", "payment_review", "paid", "shipped", "completed", "cancelled"] as const;
 type Status = (typeof STATUSES)[number];
 
@@ -125,14 +125,53 @@ async function keyOk(request: Request, env: Env): Promise<boolean> {
   return diff === 0;
 }
 
-function storeConfig(env: Env) {
+/**
+ * v1.13.0 — the delivery numbers are the PORTAL's to set.
+ *
+ * The CEO, 26-08-2026: "I want to have the authority to update the shipping
+ * fees which is above RM45.00, I will provide a free delivery fees."
+ *
+ * Both used to live in wrangler.toml, which made changing what delivery
+ * costs a code edit and a deploy — something she has to ask someone for.
+ * Prices, stock, photos and collections already come from the portal;
+ * delivery was the odd one out, and it is the number most likely to change
+ * during a campaign.
+ *
+ * They now come from `sync_state`, written by the bridge pull (portal.ts)
+ * whenever the feed carries a `settings` block. The wrangler var is the
+ * FALLBACK: used until the first pull lands, and if the portal ever stops
+ * sending them — absent means "keep what you have", the feed's oldest rule.
+ * No new table and no migration; sync_state has been the store's key/value
+ * scratchpad since 0008.
+ *
+ * Async because it reads the database now. The checkout caller is the one
+ * that matters: this is the number the customer is actually charged, and it
+ * must be the same number the shop quoted.
+ */
+async function storeConfig(env: Env) {
+  const got = await env.DB.prepare(
+    `SELECT key, value FROM sync_state WHERE key IN ('shipping_cents', 'free_above_cents')`,
+  ).all<{ key: string; value: string }>().catch(() => ({ results: [] as { key: string; value: string }[] }));
+  const portal = Object.fromEntries((got.results ?? []).map((r) => [r.key, r.value]));
+
+  /* A stored value only wins if it parses to a sane number of sen. A blank
+     or corrupted row must never silently make delivery free, or charge
+     RM 10,000 for it. */
+  const pick = (key: string, fallback: number): number => {
+    const n = Number(portal[key]);
+    return Number.isFinite(n) && n >= 0 && n <= 100_000 ? Math.round(n) : fallback;
+  };
+
   return {
     bank_line: env.BANK_LINE ?? "REPLACE — set BANK_LINE in worker/wrangler.toml",
     whatsapp_digits: env.WHATSAPP_DIGITS ?? "60000000000",
-    shipping_cents: intVar(env.SHIPPING_CENTS, 1000),
-    free_above_cents: intVar(env.FREE_ABOVE_CENTS, 15000),
+    shipping_cents: pick("shipping_cents", intVar(env.SHIPPING_CENTS, 1000)),
+    free_above_cents: pick("free_above_cents", intVar(env.FREE_ABOVE_CENTS, 4500)),
     gateway: billplzConfigured(env),
     hold_hours: intVar(env.ORDER_HOLD_HOURS, 12),
+    /** Which of the two answered — so /admin and the health probe can tell
+        "the portal set this" apart from "nobody has set it yet". */
+    delivery_source: portal.shipping_cents === undefined ? "store" : "portal",
   };
 }
 
@@ -360,7 +399,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
         probe("SELECT cutout_key FROM portal_slides LIMIT 1"),
       ]);
       const migrationsCurrent = accounts && progress && syncReady && traffic && consent && portalProducts && saleSlides && framing && slideZoom && cutout;
-      const cfg = storeConfig(env);
+      const cfg = await storeConfig(env);
       return json({
         ok: db && migrationsCurrent, version: VERSION, db, r2,
         migrations_current: migrationsCurrent,
@@ -385,12 +424,20 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
         gateway_signature_configured: billplzSignatureConfigured(env),
         store_url: storeUrl(env),
         order_hold_hours: intVar(env.ORDER_HOLD_HOURS, 12),
+        /* v1.13.0 — what delivery costs, and WHICH side decided it. On the
+           live health endpoint this is how you confirm a change made in the
+           portal actually landed, without opening the shop and squinting at
+           the announcement bar. "store" means nobody has set it in the
+           portal yet and wrangler.toml is still answering. */
+        shipping_cents: cfg.shipping_cents,
+        free_above_cents: cfg.free_above_cents,
+        delivery_from: cfg.delivery_source,
         bridge_pull_configured: pullConfigured(env),
         bridge_push_configured: pushConfigured(env),
       });
     }
 
-    if (path === "/store-config" && method === "GET") return json(storeConfig(env));
+    if (path === "/store-config" && method === "GET") return json(await storeConfig(env));
 
     /* v1.2.0 — the visit beacon. Anonymous by construction (see traffic.ts:
        no IP stored, daily-rotating hash, no cookie); always 204, because the
@@ -601,7 +648,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
 
       const items = results.map((p) => ({ product_id: p.id, name: p.name, qty: wanted.get(p.id)!, price_cents: p.price_cents }));
       const subtotal = items.reduce((n, it) => n + it.price_cents * it.qty, 0);
-      const cfg = storeConfig(env);
+      const cfg = await storeConfig(env);
       const shipping = subtotal >= cfg.free_above_cents ? 0 : cfg.shipping_cents;
       const number = await orderNumber(env);
       const token = crypto.randomUUID().replace(/-/g, "");
@@ -678,7 +725,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
         tracking_courier: courier?.label ?? null,
         tracking_url: courier && o.tracking_no ? courier.url(o.tracking_no) : null,
         events,
-        created_at: o.created_at, config: storeConfig(env),
+        created_at: o.created_at, config: await storeConfig(env),
       });
     }
 

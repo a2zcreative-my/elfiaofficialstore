@@ -39,8 +39,18 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="min-h-screen bg-elfia-cream text-elfia-ink antialiased">
         <SiteHeader />
         {/* Every screen ends above the phone tab bar; on desktop there is no
-            tab bar and the padding collapses. */}
-        <div className="pb-tabbar lg:pb-0">{children}</div>
+            tab bar and the padding collapses.
+
+            v1.13.0 — the footer moved INSIDE this wrapper. It used to sit
+            after it, which was harmless while the footer was desktop-only
+            (no tab bar there to clear). The CEO asked for a footer on the
+            phone too, and outside the wrapper its last line would have been
+            drawn underneath the tab bar — the exact fault v1.4.1 fixed for
+            page content. */}
+        <div className="pb-tabbar lg:pb-0">
+          {children}
+          <SiteFooter />
+        </div>
         <WhatsAppButton />
         <ScrollTopButton />
         <BottomTabBar />
@@ -55,7 +65,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               `(function(){var t=0;var s=function(){var p=location.pathname+location.search;if(p===t)return;t=p;try{navigator.sendBeacon&&navigator.sendBeacon("/api/v1/t",new Blob([JSON.stringify({p:p,r:document.referrer||""})],{type:"text/plain"}))}catch(e){}};s();var w=history.pushState;history.pushState=function(){w.apply(this,arguments);setTimeout(s,0)};window.addEventListener("popstate",function(){setTimeout(s,0)})})();`,
           }}
         />
-        <SiteFooter />
       </body>
     </html>
   );
