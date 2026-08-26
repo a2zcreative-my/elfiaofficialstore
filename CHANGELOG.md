@@ -1,3 +1,153 @@
+# ELFIA OFFICIAL STORE — v1.18.0 (26-08-2026)
+
+## Her own PDF, embedded, pricing itself
+
+The CEO: *"I want my own PDF without create any new catalog, I want PDF to be
+embedded with this website! I also want to make sure this PDF able to fetch
+the actual prices of my Product!!!"*
+
+Three things that cannot all be true of a **file**. A PDF sitting in a folder
+is a photograph of a moment; it cannot fetch anything, ever. What CAN be true
+is a PDF that is **built at the moment somebody asks for it**.
+
+`GET /api/v1/catalog.pdf` does exactly that. Every copy anyone opens, prints,
+saves or forwards on WhatsApp was drawn from the prices in the database a
+second earlier. Nobody re-exports anything, ever again.
+
+### What is hers, and what is drawn
+
+- **Page 1 is her cover artwork, untouched** — exactly as her designer made
+  it. It carries no prices, so it can never go out of date.
+- **Pages 2 onward are drawn** in her lookbook's style, because these are the
+  pages with prices on them and prices are the whole point.
+
+The style is not guessed. The colours and page size were sampled from the PDF
+she supplied: ground `rgb(251,246,240)`, circles `rgb(112,112,110)`, A4
+portrait (her cover is 1100×1556, A4 to within a pixel). The wordmark, the
+dashed rule, the collection name, the grey circles, the shade names in deep
+rose, "First Sight, Forever Yours" in the footer.
+
+PDF has no `border-radius`, so the circular photo tiles are a real clipping
+path — four beziers and a `clip` operator — with each portrait anchored to
+the TOP of its circle, because centring a portrait crops the face.
+
+### What it does that a file could not
+
+- A price changed in the portal is in the **next** PDF anyone opens.
+- A promotion prints as a sale: the new price, and the old one struck through
+  beside it.
+- A shade published in the portal **appears in the PDF by itself**.
+- A collection she invents gets its own section by itself.
+- Sold-out shades say so.
+- The footer stamps **"Prices as at YYYY-MM-DD"**, because a PDF outlives the
+  tab it came from and somebody will still have this file in a month.
+
+### Embedded — and honest about where
+
+`/catalog` embeds it in an `<object>` **on desktop widths only**. iOS Safari
+and Android Chrome do not render a PDF inside a frame; they draw a blank
+rectangle. Shipping that to the customers who are mostly on phones would be
+worse than not embedding at all, so a phone gets the live product tiles —
+same shades, same live prices — with the PDF one tap away.
+
+`lg:` rather than a user-agent sniff: the widths that render PDFs inline are
+the widths with a desktop browser behind them, and a media query cannot be
+wrong about what a browser IS the way a sniff can.
+
+### One security header had to move
+
+`public/_headers` carried `object-src 'none'`, which blocks `<object>`
+outright — the embed would have silently shown nothing on a page that looked
+perfectly fine. It is now `object-src 'self'`: still refuses every plugin and
+document from anywhere else, and permits only a file this same origin built
+and served. The rig fails if a CSP violation appears in the console, so this
+cannot regress quietly.
+
+## The rig
+
+`scratch/catalog-pdf-check.mjs` — 22 checks, split by claim, because the
+three claims can fail separately:
+
+- **real** — PDF magic header, `pdfinfo` reads the page count, A4, titled;
+- **current** — change a price in the stand-in portal, and `pdftotext` finds
+  the new number in the NEXT download (this is the claim a file cannot make);
+- **embedded** — the page carries the `<object>`, it points at the generated
+  route, **no CSP violation reaches the console**, and a phone is not shown an
+  empty frame.
+
+It reads prices back out of the PDF with `pdftotext` rather than trusting the
+database, because "the price is in the document" is the only thing that
+matters to somebody holding the document.
+
+## Deploy
+
+**No migration.** Engine + website — both, since the CSP lives in the website
+half and the generator in the engine.
+
+`worker/package.json` gains `pdf-lib` (pure JS, no native code, no network).
+PUSH.bat's `npm install` picks it up; the worker folder may need its own
+`npm install` the first time.
+
+# ELFIA OFFICIAL STORE — v1.17.0 (26-08-2026)
+
+## The catalog is priced by the shop, not by a picture
+
+The CEO, on v1.15.0: *"I need the catalog fetch the prices from it actual
+price in web/mobile. this is to make everything automatically without me need
+to regenerate the pdf which is difficult for me."*
+
+She is right and I was wrong. I built /catalog out of the PDF's page scans,
+which means **a price printed into a JPEG**. The moment she ran a promotion,
+the catalog would quote last month's numbers at customers, and the only fix
+would be re-exporting a PDF and re-cutting five images. That is not
+automation, it is homework — and I even wrote "the catalog needs
+regenerating" in the last release as though it were an acceptable answer.
+
+The catalog is no longer a picture of a document. It is the **same data every
+other page uses** — `/api/v1/products` — laid out to look like the printed
+lookbook: the cream ground, circular photo tiles, the shade name, the price.
+
+- Every price is the price the customer is charged, sale struck through.
+- It refreshes on the same signal as the rest of the shop (v1.16.0), so a
+  discount reaches an open catalog when the reader comes back to the tab.
+- It groups by the collections **the portal names**, so a collection she
+  invents gets its own section.
+- **A new shade published in the portal appears in the catalog by itself.**
+  There is no step where anyone has to remember, which is the only kind of
+  "automatically" that survives a busy week.
+
+The four priced page scans are deleted from the repo. Only the cover survives
+as an image, because the cover carries no prices and therefore cannot go
+stale.
+
+### The printed PDF stays, and says so
+
+A physical catalog is a real thing to hand someone, so the file is still
+offered — labelled **"Printed edition (PDF)"** with the month it was made,
+under a line saying the prices on the page are the current ones. A customer
+who downloads a file and then finds a different number at checkout is
+entitled to be annoyed; being plain about which is which costs one sentence.
+
+### Smaller things
+
+- The cover is capped at 42vh on a phone. At full height it was a whole
+  screen of scrolling before a customer reached a single shade, which is the
+  opposite of what a catalog is for.
+- `/catalog` joins `overflow-check.mjs` (now 35 checks across 7 pages), so
+  the new page is held to the same no-sideways-scroll rule as the rest.
+
+## The rig
+
+`scratch/catalog-live-check.mjs` — 14 checks. It changes a price in the
+stand-in portal, syncs, and asks whether the catalog followed; then adds a
+discount and checks the sale renders struck through. It also asserts that
+**no priced page scan is on the page any more** — if those images ever come
+back, that check fails, which is the point of writing it that way.
+
+## Deploy
+
+**No migration.** Engine + website.
+
 # ELFIA OFFICIAL STORE — v1.16.0 (26-08-2026)
 
 ## Prices and discounts on a page that is already open

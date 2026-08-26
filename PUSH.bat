@@ -39,6 +39,14 @@ echo         signed in.
 echo   [2/7] Installing what the build needs...
 call npm install --no-audit --no-fund
 if errorlevel 1 goto :failed
+REM  The ENGINE has its own dependencies now (v1.18.0: pdf-lib, which draws
+REM  the live-priced catalog). Installing only the website's would leave the
+REM  deploy at step [5] failing on a module it cannot find - a confusing
+REM  error a long way from its cause.
+cd worker
+call npm install --no-audit --no-fund
+if errorlevel 1 goto :failedpop
+cd ..
 
 REM  These four take seconds, and each one exists because something went
 REM  wrong once. Until v1.12.3 they were only ever run by hand - which meant

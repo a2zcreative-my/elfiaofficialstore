@@ -35,6 +35,7 @@ import {
 import {
   flushStockEvents, getState, pullConfigured, pushConfigured, recordStockEvents, setState, syncNow,
 } from "./portal";
+import { buildCatalogPdf, type CatalogProduct } from "./catalog-pdf";
 import { recordHit, rollupTraffic, trafficFeed } from "./traffic";
 
 export interface Env {
@@ -74,7 +75,7 @@ export interface Env {
   STORE_ORIGIN?: string;     // override for local testing
 }
 
-const VERSION = "1.16.0";
+const VERSION = "1.18.0";
 const STATUSES = ["pending_payment", "payment_review", "paid", "shipped", "completed", "cancelled"] as const;
 type Status = (typeof STATUSES)[number];
 
@@ -438,6 +439,66 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
     }
 
     if (path === "/store-config" && method === "GET") return json(await storeConfig(env));
+
+    /* ---- the catalog, as a real PDF, priced now (v1.18.0) ----
+     *
+     * The CEO: "I want my own PDF ... I also want to make sure this PDF able
+     * to fetch the actual prices of my Product!!!"
+     *
+     * A PDF sitting in a folder cannot fetch anything, ever — it is a
+     * photograph of a moment. So the file is BUILT WHEN SOMEBODY ASKS FOR
+     * IT, from the prices in this database a second earlier. Every copy
+     * anyone views, prints or forwards on WhatsApp was correct when it was
+     * made, and nobody re-exports anything by hand.
+     *
+     * Cached for a minute: the portal syncs on that same cadence, so a
+     * shorter cache would only rebuild a document that could not have
+     * changed. Nothing here is private — it is the products and prices
+     * /api/v1/products already serves to anyone. */
+    if (path === "/catalog.pdf" && (method === "GET" || method === "HEAD")) {
+      if (method === "HEAD") {
+        return new Response(null, {
+          headers: { "Content-Type": "application/pdf", "Cache-Control": "public, max-age=60" },
+        });
+      }
+      const { results: rows } = await env.DB.prepare(
+        `SELECT id, name, price_cents, compare_price_cents, image_key, sku, category, stock, track_stock
+           FROM products
+          WHERE active = 1 AND price_cents > 0
+          ORDER BY category, sort, id
+          LIMIT 120`,
+      ).all<CatalogProduct>().catch(() => ({ results: [] as CatalogProduct[] }));
+
+      try {
+        const bytes = await buildCatalogPdf(rows, {
+          /* THIS request's origin, not the configured STORE_URL. The cover
+             and the shipped /collection photos are served by the website
+             half of the SAME domain, so the request already says where to
+             find them — right on the live shop and on a preview deployment
+             alike, with nothing to configure and nothing to get wrong.
+             STORE_ORIGIN is the local rig's exception, where the API is on
+             :8787 and the website on :8100; it is unset in production. */
+          origin: env.STORE_ORIGIN || url.origin,
+          media: env.MEDIA,
+          generatedAt: new Date(),
+        });
+        return new Response(bytes, {
+          headers: {
+            "Content-Type": "application/pdf",
+            /* `inline` so a browser SHOWS it where the page embeds it, and a
+               real filename so "Save as" offers something recognisable. */
+            "Content-Disposition": 'inline; filename="ELFIA-Catalog.pdf"',
+            "Cache-Control": "public, max-age=60",
+            "X-Content-Type-Options": "nosniff",
+          },
+        });
+      } catch (e) {
+        /* Never a broken download. Say what happened in words a person can
+           read; the storefront's own catalog page still stands. */
+        return err("catalog_failed",
+          `The catalog could not be built just now (${e instanceof Error ? e.message : "unknown"}).`, 500);
+      }
+    }
 
     /* v1.2.0 — the visit beacon. Anonymous by construction (see traffic.ts:
        no IP stored, daily-rotating hash, no cookie); always 204, because the

@@ -16,7 +16,7 @@
 import { chromium } from "playwright";
 
 const BASE = process.env.SITE ?? "http://127.0.0.1:8100";
-const PAGES = ["/", "/shop", "/categories", "/wishlist", "/cart", "/track"];
+const PAGES = ["/", "/shop", "/categories", "/catalog", "/wishlist", "/cart", "/track"];
 const SIZES = [
   { name: "iPhone SE", width: 320, height: 700, mobile: true },
   { name: "iPhone 12", width: 390, height: 844, mobile: true },
