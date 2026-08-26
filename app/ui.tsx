@@ -25,7 +25,10 @@ import {
 export type IconName =
   | "home" | "bag" | "grid" | "heart" | "user" | "cart" | "search" | "chevron"
   | "back" | "filter" | "sort" | "bell" | "truck" | "box" | "receipt" | "ticket"
-  | "gift" | "pin" | "clock" | "check" | "spark" | "shield" | "clock-history";
+  | "gift" | "pin" | "clock" | "check" | "spark" | "shield" | "clock-history"
+  /* v1.15.0 — the catalog page: a link to the PDF, and a way out of the
+     full-screen page view. */
+  | "download" | "close";
 
 const PATHS: Record<IconName, React.ReactNode> = {
   home: <><path d="M3 10.5 12 3l9 7.5" /><path d="M5.5 9.5V20a1 1 0 0 0 1 1H10v-5.5h4V21h3.5a1 1 0 0 0 1-1V9.5" /></>,
@@ -51,6 +54,8 @@ const PATHS: Record<IconName, React.ReactNode> = {
   check: <path d="m5 12.5 4.5 4.5L19 7.5" />,
   spark: <><path d="M12 3.5 13.9 9l5.6 2-5.6 2-1.9 5.5L10.1 13 4.5 11l5.6-2Z" /><path d="M18.5 4v3" /><path d="M20 5.5h-3" /></>,
   shield: <><path d="M12 3 5 6v6c0 4.2 3 7.5 7 9 4-1.5 7-4.8 7-9V6Z" /><path d="m9 12 2 2 4-4" /></>,
+  download: <><path d="M12 3.5v11" /><path d="m7.5 10 4.5 4.5 4.5-4.5" /><path d="M4.5 19.5h15" /></>,
+  close: <><path d="m6 6 12 12" /><path d="m18 6-12 12" /></>,
 };
 
 export function Icon({ name, size = 22, className = "", strokeWidth = 1.6 }: {
@@ -63,6 +68,80 @@ export function Icon({ name, size = 22, className = "", strokeWidth = 1.6 }: {
       {PATHS[name]}
     </svg>
   );
+}
+
+/* ---------- keeping prices honest on a page already open ---------- */
+
+/**
+ * v1.16.0 — a counter that ticks whenever the shop should re-read its prices.
+ *
+ * The CEO: "How to make all the pages automatically update the prices and
+ * promotion/discount?"
+ *
+ * Almost all of it already worked. Every page fetches /api/v1/products when
+ * it mounts, the Worker sends `Cache-Control: no-store` so nothing caches a
+ * price, and the portal's changes reach the store within a minute. What was
+ * missing is the case nobody notices: a page ALREADY OPEN.
+ *
+ * Someone opens the shop, is distracted, comes back an hour later — and is
+ * reading last hour's prices, because the fetch only ever ran on mount. A
+ * discount started in the meantime is invisible to exactly the customer who
+ * is still browsing. (Nobody could ever PAY a stale price: checkout re-prices
+ * every line from the database. But being shown one number and charged
+ * another is its own kind of wrong.)
+ *
+ * So the shop re-reads when the tab becomes visible again, when the window
+ * regains focus, and on a slow timer while the tab is actually being looked
+ * at. The timer deliberately does NOT run in a hidden tab: a shop left open
+ * in a background tab overnight should not poll a worker 480 times.
+ *
+ * Pages use it by putting the value in their fetch effect's dependencies —
+ * one line each, and the fetch they already had does the rest.
+ */
+const REFRESH_MS = 90_000;
+
+/* ONE signal for the whole app, not one per component. Two reasons:
+   the header and the page beneath it must re-read at the SAME moment (a
+   banner promising free delivery over RM 45 while the page below prices it
+   at RM 50 is worse than either number being briefly old), and a single
+   interval is a single interval however many components are listening. */
+let tickValue = 0;
+const listeners = new Set<() => void>();
+let wired = false;
+
+function bump() {
+  tickValue += 1;
+  for (const f of listeners) f();
+}
+
+function wire() {
+  if (wired || typeof window === "undefined") return;
+  wired = true;
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") bump();
+  });
+  window.addEventListener("focus", bump);
+  /* Ninety seconds is longer than the portal's own one-minute sync, so a
+     change made in the portal has always reached the store before the shop
+     asks for it again. It does NOT run in a hidden tab: a shop left open in
+     a background tab overnight should not poll a worker 480 times. */
+  window.setInterval(() => {
+    if (document.visibilityState === "visible") bump();
+  }, REFRESH_MS);
+}
+
+export function useDataRefresh(): number {
+  const [t, setT] = useState(tickValue);
+  useEffect(() => {
+    wire();
+    const f = () => setT(tickValue);
+    listeners.add(f);
+    /* A component mounting after a tick has already happened must not sit on
+       the stale number it initialised with. */
+    setT(tickValue);
+    return () => { listeners.delete(f); };
+  }, []);
+  return t;
 }
 
 /* ---------- wishlist heart ---------- */

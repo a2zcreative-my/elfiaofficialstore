@@ -24,7 +24,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { CART_EVENT, NAV_LINKS, STORE, TABS, cartCount, fmtRM, waLink, type StoreConfig } from "@/lib/config";
 
-import { Icon, useWishlist, type IconName } from "./ui";
+import { Icon, useDataRefresh, useWishlist, type IconName } from "./ui";
 
 /** One fetch of the store config, shared by the header and the bubble.
  *
@@ -33,16 +33,29 @@ import { Icon, useWishlist, type IconName } from "./ui";
  * own request for the same handful of bytes. The promise is cached at module
  * scope, so the second and third callers await the first one's answer. */
 let configOnce: Promise<StoreConfig | null> | null = null;
+let configTick = -1;
 function useStoreConfig(): StoreConfig | null {
+  /* v1.16.0 — the cache is now per REFRESH, not forever.
+     v1.13.0 cached this promise at module scope to stop three components
+     fetching the same bytes three times, which was right — but it also meant
+     the announcement bar showed whatever the delivery threshold was when the
+     tab was first opened, for as long as the tab stayed open. The CEO can
+     change that number in the portal; the banner has to follow it.
+     Deduped within a tick, refetched across ticks. */
+  const refresh = useDataRefresh();
   const [config, setConfig] = useState<StoreConfig | null>(null);
   useEffect(() => {
-    configOnce ??= fetch("/api/v1/store-config")
-      .then((r) => (r.ok ? r.json() as Promise<StoreConfig> : null))
-      .catch(() => null);
+    if (configTick !== refresh || configOnce === null) {
+      configTick = refresh;
+      configOnce = fetch("/api/v1/store-config")
+        .then((r) => (r.ok ? r.json() as Promise<StoreConfig> : null))
+        .catch(() => null);
+    }
+    const pending = configOnce;
     let live = true;
-    void configOnce.then((j) => { if (live) setConfig(j); });
+    void pending.then((j) => { if (live && j) setConfig(j); });
     return () => { live = false; };
-  }, []);
+  }, [refresh]);
   return config;
 }
 
@@ -359,6 +372,10 @@ export function SiteFooter() {
             Shop and Wishlist are NOT here: the tab bar already owns those,
             and repeating them is the noise this footer was avoiding. */}
         <div className="mt-5 flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-[13px]">
+          {/* v1.15.0 — the catalog is here too. The phone tab bar is full at
+              five, and pushing a sixth into it would shrink every label; the
+              footer is where someone who has finished scrolling looks. */}
+          <Link href="/catalog" className="font-medium text-elfia-body">Catalog</Link>
           <Link href="/track" className="font-medium text-elfia-body">Track my order</Link>
           <Link href="/policies" className="font-medium text-elfia-body">Delivery &amp; returns</Link>
           <Link href="/policies#privacy" className="font-medium text-elfia-body">Privacy</Link>
@@ -399,6 +416,7 @@ function DesktopFooter({ year }: { year: number }) {
             <div className="mt-3 flex flex-col gap-2 text-sm text-elfia-body">
               <Link href="/shop" className="hover:text-elfia-deep">All products</Link>
               <Link href="/categories" className="hover:text-elfia-deep">Collections</Link>
+              <Link href="/catalog" className="hover:text-elfia-deep">Catalog</Link>
               <Link href="/wishlist" className="hover:text-elfia-deep">Wishlist</Link>
               <Link href="/cart" className="hover:text-elfia-deep">Cart</Link>
             </div>

@@ -16,7 +16,7 @@ import {
   type CartLine, type Product, type StoreConfig,
 } from "@/lib/config";
 
-import { EmptyState, Icon } from "./../ui";
+import { EmptyState, Icon, useDataRefresh } from "./../ui";
 
 export default function Cart() {
   const [lines, setLines] = useState<CartLine[]>([]);
@@ -24,13 +24,17 @@ export default function Cart() {
   const [config, setConfig] = useState<StoreConfig | null>(null);
   const [loaded, setLoaded] = useState(false);
 
+  /* v1.16.0 — `refresh` re-runs this same fetch when the customer returns
+     to the tab or 90s of reading has passed, so a price or discount changed
+     in the portal reaches a page that is already open. */
+  const refresh = useDataRefresh();
   useEffect(() => {
     setLines(readCart());
     void fetch("/api/v1/products").then((r) => r.json())
       .then((j: { products: Product[] }) => setProducts(j.products)).finally(() => setLoaded(true));
     void fetch("/api/v1/store-config").then((r) => r.json())
       .then((j: StoreConfig) => setConfig(j)).catch(() => null);
-  }, []);
+  }, [refresh]);
 
   const rows = lines
     .map((l) => ({ line: l, product: products.find((p) => p.id === l.id) }))

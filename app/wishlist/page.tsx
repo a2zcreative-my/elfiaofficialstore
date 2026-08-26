@@ -16,19 +16,21 @@ import { useEffect, useState } from "react";
 
 import { addToCart, isSoldOut, readWishlist, type Product } from "@/lib/config";
 
-import { CardSkeleton, EmptyState, ProductCard, useWishlist } from "./../ui";
+import { CardSkeleton, EmptyState, ProductCard, useDataRefresh, useWishlist } from "./../ui";
 
 export default function WishlistPage() {
   const ids = useWishlist();
   const [products, setProducts] = useState<Product[] | null>(null);
   const [added, setAdded] = useState(false);
 
+  /* v1.16.0 — re-priced when the tab comes back, not only on mount. */
+  const refresh = useDataRefresh();
   useEffect(() => {
     void fetch("/api/v1/products")
       .then((r) => r.json())
       .then((j: { products: Product[] }) => setProducts(j.products))
       .catch(() => setProducts([]));
-  }, []);
+  }, [refresh]);
 
   /* Keep the customer's own order (newest saved first), and drop anything
      that has since been removed from the shop. */

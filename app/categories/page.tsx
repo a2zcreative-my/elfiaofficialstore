@@ -15,17 +15,21 @@ import { useEffect, useState } from "react";
 
 import { collectionsOf, fmtRM, imageUrl, type Product } from "@/lib/config";
 
-import { EmptyState, Icon } from "./../ui";
+import { EmptyState, Icon, useDataRefresh } from "./../ui";
 
 export default function CategoriesPage() {
   const [products, setProducts] = useState<Product[] | null>(null);
 
+  /* v1.16.0 — `refresh` re-runs this same fetch when the customer returns
+     to the tab or 90s of reading has passed, so a price or discount changed
+     in the portal reaches a page that is already open. */
+  const refresh = useDataRefresh();
   useEffect(() => {
     void fetch("/api/v1/products")
       .then((r) => r.json())
       .then((j: { products: Product[] }) => setProducts(j.products))
       .catch(() => setProducts([]));
-  }, []);
+  }, [refresh]);
 
   const all = products ?? [];
   const rows = collectionsOf(all).map((g) => ({ g, items: all.filter(g.match) })).filter((r) => r.items.length > 0);

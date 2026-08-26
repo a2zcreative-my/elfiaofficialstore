@@ -316,6 +316,10 @@ export const cartCount = (): number => readCart().reduce((n, l) => n + l.qty, 0)
 export const NAV_LINKS = [
   { href: "/shop", label: "Shop" },
   { href: "/categories", label: "Collections" },
+  /* v1.15.0 — the lookbook (CEO, 26-08: "a new slug for Catalog so that
+     customer has option to view the catalog"). It sits next to Collections
+     because that is what someone browsing is already looking at. */
+  { href: "/catalog", label: "Catalog" },
   { href: "/track", label: "Track order" },
   { href: "/policies", label: "Delivery & returns" },
 ] as const;

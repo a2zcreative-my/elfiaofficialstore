@@ -24,8 +24,8 @@
  * stays inert until both secrets exist — see that file's header.
  */
 import {
-  billplzCheck, billplzConfigured, billplzCreateBill, billplzSignatureConfigured,
-  billplzSignatureOk, billplzVerifyPaid, storeUrl,
+  billplzCheck, billplzConfigured, billplzCreateBill, billplzFailureHint,
+  billplzSignatureConfigured, billplzSignatureOk, billplzVerifyPaid, storeUrl,
 } from "./billplz";
 import {
   callerIp, clearLimit, createSession, currentCustomer, destroySession, hashPassword, hitLimit,
@@ -33,7 +33,7 @@ import {
   timingSafeEqual, verifyPassword, type Customer,
 } from "./auth";
 import {
-  flushStockEvents, getState, pullConfigured, pushConfigured, recordStockEvents, syncNow,
+  flushStockEvents, getState, pullConfigured, pushConfigured, recordStockEvents, setState, syncNow,
 } from "./portal";
 import { recordHit, rollupTraffic, trafficFeed } from "./traffic";
 
@@ -74,7 +74,7 @@ export interface Env {
   STORE_ORIGIN?: string;     // override for local testing
 }
 
-const VERSION = "1.14.0";
+const VERSION = "1.16.0";
 const STATUSES = ["pending_payment", "payment_review", "paid", "shipped", "completed", "cancelled"] as const;
 type Status = (typeof STATUSES)[number];
 
@@ -865,8 +865,15 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
       const givenPc = request.headers.get("X-Bridge-Key") ?? "";
       if (!timingSafeEqual(givenPc, env.BRIDGE_KEY)) return err("unauthorized", "Bad key", 401);
       const check = await billplzCheck(env);
+      /* v1.14.1 — the last real failure, in Billplz's own words, plus the
+         sentence that names the fix. "The key works" is not the same claim
+         as "the last customer could pay": a bill can be refused for reasons
+         a collection read never sees. */
+      const st = await getState(env);
       return json({
         ...check,
+        last_gateway_error: st.last_gateway_error ?? null,
+        last_gateway_hint: st.last_gateway_hint ?? null,
         signature_key_set: billplzSignatureConfigured(env),
         /* Live money and a sandbox key is the one combination that looks
            fine in testing and fails in front of a customer. */
@@ -1228,7 +1235,27 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
         order_number: o.order_number, token: o.token, total_cents: o.total_cents,
         customer_name: o.customer_name, phone: o.phone, email: o.email,
       });
-      if (!bill) return err("gateway_error", "Payment gateway unavailable — pay by bank transfer instead", 502);
+      if (!bill.ok) {
+        /* v1.14.1 — WRITE DOWN WHY.
+         *
+         * The CEO, 26-08, on the live shop: "This appear on the gateway
+         * payment!" — the customer-facing "Payment gateway unavailable".
+         * That message was the whole of what the shop knew, because the
+         * failure reason was thrown away at the point it was learned. A
+         * wrong key, a sandbox key on a live shop, an unactivated account
+         * and a rejected phone number all produced the same dead end.
+         *
+         * Billplz's own reply is kept in sync_state, where the portal reads
+         * it (ELFIA tab) and /bridge/payment-check reports it. It never
+         * reaches the customer: they get a sentence they can act on, and
+         * bank transfer, which works. */
+        await setState(env, "last_gateway_error",
+          `${new Date().toISOString()} · order ${o.order_number} · Billplz ${bill.status || "unreachable"}: ${bill.detail}`);
+        await setState(env, "last_gateway_hint", billplzFailureHint(bill.status, env.BILLPLZ_SANDBOX === "1"));
+        return err("gateway_error",
+          "Online banking isn't going through at the moment — please pay by bank transfer below. Your order and its prices are unchanged.",
+          502);
+      }
       /* Remember which bill belongs to this order, so the callback can flip
          the order by BILL id (which we verify) rather than by an order
          number the caller typed. */

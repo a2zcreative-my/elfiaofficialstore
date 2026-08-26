@@ -20,7 +20,7 @@ import {
   type Product, type SortKey,
 } from "@/lib/config";
 
-import { CardSkeleton, EmptyState, Icon, ProductCard } from "./../ui";
+import { CardSkeleton, EmptyState, Icon, ProductCard, useDataRefresh } from "./../ui";
 
 function ShopInner() {
   const params = useSearchParams();
@@ -33,12 +33,17 @@ function ShopInner() {
   const [sheet, setSheet] = useState<null | "filter" | "sort">(null);
   const [inStockOnly, setInStock] = useState(false);
 
+  /* v1.16.0 — `refresh` in the deps is the whole change: the same fetch,
+     re-run when the customer comes back to the tab or 90s of reading has
+     passed, so a discount started in the portal reaches a page already
+     open. */
+  const refresh = useDataRefresh();
   useEffect(() => {
     void fetch("/api/v1/products")
       .then((r) => r.json())
       .then((j: { products: Product[] }) => setProducts(j.products))
       .catch(() => setProducts([]));
-  }, []);
+  }, [refresh]);
 
   /** Change one query param and keep the rest. */
   const go = (patch: Record<string, string | null>) => {

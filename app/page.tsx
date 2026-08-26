@@ -26,7 +26,7 @@ import {
   type PortalSlide, type Product,
 } from "@/lib/config";
 
-import { CardSkeleton, Icon, ProductCard, SectionHeader, type IconName } from "./ui";
+import { CardSkeleton, Icon, ProductCard, SectionHeader, useDataRefresh, type IconName } from "./ui";
 
 interface Slide {
   image: string; title: string; subtitle: string; href?: string;
@@ -230,6 +230,10 @@ export default function Home() {
   const [portalSlides, setPortalSlides] = useState<PortalSlide[]>([]);
   const [tab, setTab] = useState<string>("all");
 
+  /* v1.16.0 — `refresh` re-runs this same fetch when the customer returns
+     to the tab or 90s of reading has passed, so a price or discount changed
+     in the portal reaches a page that is already open. */
+  const refresh = useDataRefresh();
   useEffect(() => {
     void fetch("/api/v1/products")
       .then((r) => r.json())
@@ -238,7 +242,7 @@ export default function Home() {
         if (Array.isArray(j.slides)) setPortalSlides(j.slides);
       })
       .catch(() => setProducts([]));
-  }, []);
+  }, [refresh]);
 
   const all = products ?? [];
 
@@ -345,6 +349,31 @@ export default function Home() {
             </div>
           </section>
         )}
+
+        {/* ---- the catalog (v1.15.0) ----
+            The CEO asked for a slug customers can reach. A slug nobody can
+            find is a slug nobody visits, and the phone tab bar is full at
+            five — so the entry point is here, on the screen everyone lands
+            on, using the catalog's own cover rather than an icon. */}
+        <section className="mt-9">
+          <Link href="/catalog"
+            className="group flex items-center gap-4 overflow-hidden rounded-2xl border border-elfia-line bg-white p-3 transition-colors hover:border-elfia-rose sm:p-4">
+            <span className="h-24 w-[4.5rem] shrink-0 overflow-hidden rounded-xl bg-elfia-blush ring-1 ring-elfia-line sm:h-28 sm:w-20">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src="/lookbook/page-1.jpg" alt="" className="h-full w-full object-cover" loading="lazy" />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-[11px] font-semibold tracking-[0.2em] text-elfia-rose uppercase">The lookbook</span>
+              <span className="mt-1 block text-base font-bold text-elfia-ink group-hover:text-elfia-deep sm:text-lg">
+                ELFIA Catalog
+              </span>
+              <span className="mt-1 block text-xs leading-relaxed text-elfia-muted">
+                Every shade photographed, with sizes and materials. Browse it here or take the PDF.
+              </span>
+            </span>
+            <Icon name="chevron" size={18} className="shrink-0 text-elfia-rose" />
+          </Link>
+        </section>
 
         {/* new arrivals */}
         <section className="mt-10">

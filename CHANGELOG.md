@@ -1,3 +1,228 @@
+# ELFIA OFFICIAL STORE — v1.16.0 (26-08-2026)
+
+## Prices and discounts on a page that is already open
+
+The CEO: *"How to make all the pages automatically update the prices and
+promotion/discount?"*
+
+Most of the answer was already true, and worth writing down in one place:
+
+```
+portal edit  ->  bridge feed  ->  store database  ->  the page a customer sees
+              (1 min by cron,
+           or instant with "Update the shop now")
+```
+
+Every page fetches `/api/v1/products` when it opens, and the Worker sends
+`Cache-Control: no-store`, so no browser and no CDN ever holds a price. And
+**nobody can be charged a stale price whatever happens**: checkout re-prices
+every line from the database at the moment the order is placed.
+
+What was NOT true is the case nobody sees. A page **already open** fetched
+its prices once, on mount, and never again. Someone opens the shop, is
+distracted, comes back an hour later — and is reading last hour's prices. A
+promotion started in between was invisible to precisely the customer who was
+still browsing.
+
+### One shared refresh signal
+
+`useDataRefresh()` (app/ui.tsx) ticks when the tab becomes visible again,
+when the window regains focus, and on a 90-second timer **while the tab is
+actually being looked at** — a shop left open in a background tab overnight
+should not poll a Worker 480 times.
+
+It is ONE signal for the whole app, not one per component, for two reasons:
+the header and the page beneath it must re-read at the same moment (a banner
+promising free delivery over RM 45 above a page pricing it at RM 50 is worse
+than either number being briefly old), and one interval is one interval
+however many components listen.
+
+Pages use it by putting it in the dependencies of the fetch they already had
+— one line each, in Home, Shop, Collections, the product page, Cart and
+Wishlist.
+
+The page does **not** move under a reader's eyes mid-sentence: the refresh
+lands when they come back to the tab. This is a shop, not a ticker.
+
+### The header had its own staleness, and it was mine
+
+v1.13.0 cached the store config promise at module scope so three components
+would not fetch the same bytes three times. Correct — but it also froze the
+announcement bar's free-delivery figure at whatever it was when the tab
+opened, for as long as the tab stayed open. The CEO can change that number in
+the portal now (v1.13.0), so the banner has to follow it. The cache is now
+per refresh rather than forever: still deduped within a tick, refetched
+across ticks.
+
+## The rig
+
+`scratch/live-price-check.mjs` — 9 checks, and it never touches the browser's
+data directly. It changes the price in the stand-in portal, syncs, and asks
+whether the page a customer is still looking at followed:
+
+- the open page has NOT moved on its own;
+- coming back to the tab re-prices it;
+- a discount started mid-visit shows as a sale, struck-through price and all;
+- the shop listing follows the same change;
+- the announcement bar follows the delivery threshold.
+
+The product page gained two `data-testid` marks so the rig reads THAT
+product's price rather than one of the prices in "You may also like".
+
+## A rig that poisoned its own next run
+
+`gateway-error-check.mjs` used a fixed landline number to prove a landline no
+longer sinks a bill. The shop caps unpaid orders at two per phone, so it
+passed twice and then failed on its own litter. It now uses a per-run number
+and cancels the orders it creates. Runs three times in a row.
+
+## Deploy
+
+**No migration.** Engine + website.
+
+# ELFIA OFFICIAL STORE — v1.15.0 (26-08-2026)
+
+## /catalog — the lookbook
+
+The CEO: *"Use this catalog and place it inside ELFIA which is a new slug for
+Catalog so that customer has option to view the catalog."*
+
+Her five-page catalog is now a page of the shop, at **/catalog**.
+
+### Why page images and not the PDF
+
+Nearly every customer here is on a phone, and **iOS Safari does not render a
+PDF inside an `iframe` or `object`** — it draws a blank box, or offers a
+download and takes the customer out of the shop. Chrome on Android is no
+better with a 5MB file on mobile data.
+
+So the pages are laid out as ordinary images: every browser draws them, they
+lazy-load one at a time instead of five megabytes at once, and each one taps
+to full screen with Previous/Next and Escape. The PDF is still there for
+anyone who wants the file — as a link, not as the reading experience.
+
+Regenerating after a new catalog (the recipe is in the page's own header):
+
+```
+pdftoppm -jpeg -r 110 -jpegopt quality=82 public/lookbook/elfia-catalog.pdf /tmp/cat
+for i in 1 2 3 4 5; do convert /tmp/cat-$i.jpg -resize 1100x -quality 80 -strip public/lookbook/page-$i.jpg; done
+```
+
+then set `PAGES` in `app/catalog/page.tsx` to the new count.
+
+### The assets live under /lookbook, not /catalog
+
+Deliberately. This page IS `/catalog`, and a static export carrying both a
+`catalog.html` and a `catalog/` directory asks the host to guess which one
+`/catalog` means. The local rig guessed the directory and served **404 for a
+page that had built perfectly**. Different names, no guessing, on any host.
+
+### Finding it
+
+A slug nobody can find is a slug nobody visits, so there are three ways in:
+
+- **A card on the home page**, using the catalog's own cover — this is the
+  one that matters, because it is the screen everyone lands on.
+- The desktop nav, next to Collections.
+- The footer, on both phone and desktop.
+
+Not the phone tab bar: it is full at five, and a sixth would shrink every
+label. That was the v1.10.1 fault and it is not worth repeating for this.
+
+### It quotes no prices
+
+The catalog is a picture of what the studio printed. Prices and stock live on
+the product pages, and the buttons here send people there rather than
+restating a number that could be a month old.
+
+## Deploy
+
+**No migration.** Engine + website. The website step carries about 6MB of new
+assets — the PDF and five page images.
+
+# ELFIA OFFICIAL STORE — v1.14.1 (26-08-2026)
+
+## "Payment gateway unavailable" — and no way to find out why
+
+The CEO, on the live shop: *"This appear on the gateway payment!"*
+
+That message was not a bug in itself. The bug is that it was **everything the
+shop knew**. `billplzCreateBill` returned `null` for every kind of failure, so
+the reason was thrown away at the exact moment it was learned:
+
+```ts
+if (!r.ok) return null;   // <- Billplz just told us what was wrong
+```
+
+A wrong API key, a regenerated key the shop is still holding, a sandbox key
+on a live shop, an unactivated Billplz account, a wrong Collection ID and a
+rejected phone number were all one indistinguishable dead end — for the
+customer AND for whoever had to repair it.
+
+### The reason is now written down
+
+Billplz's own reply is kept in `sync_state`, with the order it happened to
+and a timestamp:
+
+```
+2026-08-26T10:01 · order ELF-260826-140 · Billplz 403: <Billplz's own words>
+```
+
+alongside a hint that names the fix — for 401, *"if the key was regenerated
+in the dashboard, the shop is still holding the old one"*; for 404, which
+secret to re-set; for 422, that Billplz refused the bill's contents.
+
+**The raw detail is shown before the hint, on purpose.** Proving this out
+locally, the hint said "the account may not be activated" while the detail
+said the request had been blocked by a network policy. The hint is a guess
+about a status code; the detail is what actually happened, and when they
+disagree the detail is right.
+
+### Where to read it
+
+**Portal → ELFIA tab → Online payment (Billplz FPX) → Check now.** The portal
+relays it server-side with the bridge key it already holds, so nobody has to
+carry a credential around to see the answer.
+
+Also `GET /api/v1/bridge/payment-check` directly, behind the bridge key. It
+is NOT on the public health endpoint, and it carries no key material — the
+rig asserts all three secrets are absent from the response.
+
+### The customer gets a better sentence
+
+> Online banking isn't going through at the moment — please pay by bank
+> transfer below. Your order and its prices are unchanged.
+
+"Payment gateway unavailable" reads as a shop that is permanently broken.
+This says what to do instead and that nothing has been lost. Billplz's status
+codes are not the customer's problem and no longer reach them.
+
+## A phone number could stop a payment dead
+
+Found while reading the bill payload rather than reported: the customer's
+phone was always sent to Billplz as `mobile`, reformatted to `+60…` whatever
+it was. Billplz validates that field and answers 422 for anything it does not
+like — so **a customer who typed a landline, an office number, or a number
+with a typo could not pay online at all**, and the shop could not say why.
+
+`mobile` is now sent only when it really is a Malaysian mobile. The email is
+always present (falling back to the store's own mailbox), so Billplz always
+has a contact and dropping a doubtful number costs nothing.
+
+## The rig
+
+`scratch/gateway-error-check.mjs` — 20 checks. The local rig has deliberately
+fake Billplz credentials, so every bill creation fails, which makes it the
+right place to walk the whole failure path: what the customer is shown, what
+the shop records, what `payment-check` hands back, that the diagnosis is not
+public, and that none of the three secrets leak into the response. It also
+proves a landline no longer sinks the bill.
+
+## Deploy
+
+**No migration.** Engine + website. The portal's half is v1.53.0 — deploy
+both, then press "Check now" in the ELFIA tab.
+
 # ELFIA OFFICIAL STORE — v1.14.0 (26-08-2026)
 
 ## The journey back from the bank

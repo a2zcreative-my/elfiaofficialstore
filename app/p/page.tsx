@@ -15,7 +15,7 @@ import {
   maxQty, splitName, STORE, type Product,
 } from "@/lib/config";
 
-import { Icon, ProductCard, SectionHeader, WishHeart } from "./../ui";
+import { Icon, ProductCard, SectionHeader, WishHeart, useDataRefresh } from "./../ui";
 
 /** The share row: the phone's own share sheet where there is one, a
     WhatsApp hand-off and a copy button everywhere else. */
@@ -139,6 +139,10 @@ function ProductInner() {
     return () => io.disconnect();
   }, [p]);
 
+  /* v1.16.0 — `refresh` re-runs this same fetch when the customer returns
+     to the tab or 90s of reading has passed, so a price or discount changed
+     in the portal reaches a page that is already open. */
+  const refresh = useDataRefresh();
   useEffect(() => {
     if (!id) { setP("missing"); return; }
     setAdded(false); setQty(1);
@@ -151,7 +155,7 @@ function ProductInner() {
       .then((r) => r.json())
       .then((j: { products: Product[] }) => setOthers(j.products))
       .catch(() => setOthers([]));
-  }, [id]);
+  }, [id, refresh]);
 
   if (p === null) return <main className="px-6 py-16 text-center text-sm text-elfia-muted">Loading…</main>;
   if (p === "missing") {
@@ -209,11 +213,14 @@ function ProductInner() {
             </p>
             <h1 className="mt-2 text-3xl leading-tight font-bold text-elfia-ink">{shade}</h1>
             {series && <p className="mt-1 text-sm text-elfia-muted">{series}</p>}
-            <p className="mt-4 text-2xl font-bold text-elfia-deep">
+            {/* The test ids are how scratch/live-price-check.mjs reads THIS
+                product's price rather than any of the prices in "You may also
+                like" further down the page. */}
+            <p className="mt-4 text-2xl font-bold text-elfia-deep" data-testid="product-price">
               {fmtRM(p.price_cents)}
               {was && (
                 <>
-                  <s className="ml-2 text-base font-normal text-elfia-muted">{fmtRM(was)}</s>
+                  <s className="ml-2 text-base font-normal text-elfia-muted" data-testid="product-was">{fmtRM(was)}</s>
                   <span className="ml-2 align-middle rounded-full bg-elfia-gold px-2 py-0.5 text-[10px] font-bold tracking-wider text-white uppercase">
                     Save {fmtRM(was - p.price_cents)}
                   </span>

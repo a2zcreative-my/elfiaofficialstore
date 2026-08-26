@@ -115,11 +115,28 @@ export function billplzConfigured(env: Env): boolean {
   return Boolean(env.BILLPLZ_SECRET && env.BILLPLZ_COLLECTION);
 }
 
+/**
+ * v1.14.1 — the result of trying to create a bill, INCLUDING why it failed.
+ *
+ * This used to return `null` for every failure, so a live shop showed the
+ * customer "Payment gateway unavailable" and kept the only useful fact — what
+ * Billplz actually said — entirely to itself. A wrong key, a sandbox key on a
+ * live shop, an unactivated account and a rejected phone number were all one
+ * indistinguishable dead end.
+ *
+ * `detail` is Billplz's own reply, truncated. It never contains our
+ * credentials: the key travels in the Authorization header and is not echoed
+ * back in a response body.
+ */
+export type BillResult =
+  | { ok: true; id: string; url: string }
+  | { ok: false; status: number; detail: string };
+
 /** Create a bill for the order; returns the Billplz payment page URL. */
 export async function billplzCreateBill(
   env: Env,
   o: { order_number: string; token: string; total_cents: number; customer_name: string; phone: string; email: string | null },
-): Promise<{ id: string; url: string } | null> {
+): Promise<BillResult> {
   try {
     const form = new URLSearchParams({
       collection_id: env.BILLPLZ_COLLECTION!,
@@ -135,19 +152,60 @@ export async function billplzCreateBill(
       reference_1_label: "Order",
       reference_1: o.order_number,
     });
-    const mobile = o.phone.replace(/[^0-9]/g, "");
-    if (mobile) form.set("mobile", mobile.startsWith("60") ? `+${mobile}` : `+60${mobile.replace(/^0/, "")}`);
+    /* v1.14.1 — the mobile is sent ONLY when it really is a Malaysian mobile
+       number. Billplz validates this field and answers 422 for anything it
+       does not like, which would refuse the whole bill — so a customer who
+       typed a landline, an office number or a number with a typo could not
+       pay at all, and the shop could not say why. The email above is always
+       present (falling back to the store's own mailbox), so Billplz always
+       has a contact and dropping a doubtful mobile costs nothing. */
+    const digits = o.phone.replace(/[^0-9]/g, "");
+    const local = digits.startsWith("60") ? digits.slice(2) : digits.replace(/^0/, "");
+    if (/^1\d{8,9}$/.test(local)) form.set("mobile", `+60${local}`);
+
     const r = await fetch(`${base(env)}/bills`, {
       method: "POST",
       headers: { Authorization: authHeader(env) },
       body: form,
     });
-    if (!r.ok) return null;
+    if (!r.ok) {
+      /* Billplz's own words, kept short and stripped of newlines so they fit
+         in one line of a report. Nothing here can contain the API key — it
+         goes out in the Authorization header and is never echoed back. */
+      const raw = (await r.text().catch(() => "")).replace(/\s+/g, " ").trim();
+      return { ok: false, status: r.status, detail: raw.slice(0, 300) || "(no reply body)" };
+    }
     const j = (await r.json()) as { id?: string; url?: string };
-    return j.id && j.url ? { id: j.id, url: j.url } : null;
-  } catch {
-    return null;
+    return j.id && j.url
+      ? { ok: true, id: j.id, url: j.url }
+      : { ok: false, status: r.status, detail: "Billplz accepted the request but returned no bill id or URL." };
+  } catch (e) {
+    return { ok: false, status: 0, detail: `Could not reach Billplz: ${e instanceof Error ? e.message : "network error"}` };
   }
+}
+
+/**
+ * v1.14.1 — turn a bill failure into a sentence that names the fix.
+ *
+ * Kept beside the codes it explains rather than in the route, because the
+ * route's job is to answer the customer and this is for whoever has to
+ * repair the shop.
+ */
+export function billplzFailureHint(status: number, sandbox: boolean): string {
+  if (status === 401) {
+    return `Billplz rejected the API Secret Key. If the key was regenerated in the dashboard, the shop is still holding the old one — set it again with \`wrangler secret put BILLPLZ_SECRET\`. Check too that it is a ${sandbox ? "billplz-sandbox.com" : "billplz.com"} key: sandbox and live are separate accounts.`;
+  }
+  if (status === 403) {
+    return "Billplz knows the key but refused it. That usually means the account is not fully activated for collections yet, or its access was withdrawn — check the Billplz dashboard.";
+  }
+  if (status === 404) {
+    return "The Collection ID does not exist in this account. Copy it again from the collection's page and set it with `wrangler secret put BILLPLZ_COLLECTION`.";
+  }
+  if (status === 422) {
+    return "Billplz refused the bill's contents — read the detail above. The usual causes are an amount below their minimum, or a name, email or mobile it will not accept.";
+  }
+  if (status === 0) return "The shop could not reach Billplz at all.";
+  return `Billplz answered ${status}. The detail above is their own reply.`;
 }
 
 /**
