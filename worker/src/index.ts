@@ -79,7 +79,7 @@ export interface Env {
   CATALOG_FILENAME?: string;
 }
 
-const VERSION = "1.22.0";
+const VERSION = "1.23.0";
 const STATUSES = ["pending_payment", "payment_review", "paid", "shipped", "completed", "cancelled"] as const;
 type Status = (typeof STATUSES)[number];
 
@@ -466,6 +466,50 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
          alike, so copies already shared benefit too. Sanitised because a
          header value must stay a single clean line whatever the toml says. */
       const catalogName = `${(env.CATALOG_FILENAME || "Catalog ELFIA v1").replace(/["\\\r\n]/g, "").trim() || "ELFIA Catalog"}.pdf`;
+
+      /* v1.23.0 — the share THUMBNAIL (CEO: "catalog missing thumbnail for
+         the PDF share!"). A PDF cannot carry og: tags, so a link to it never
+         gets a preview card — the platforms' crawlers need HTML. So the
+         crawlers GET HTML: when the request comes from a link-preview bot
+         (WhatsApp, Facebook, Telegram, X, LinkedIn, Slack, Discord — they
+         all announce themselves), this route answers with a tiny page whose
+         og:image is the SAME stable cover the /catalog page previews with
+         (/api/v1/catalog-cover — the uploaded cover when one exists, the
+         shipped page-1 otherwise). Every human, and every other client,
+         still gets the PDF itself. One cover route feeds every surface, so
+         the thumbnails can never disagree. */
+      const shareUA = request.headers.get("User-Agent") ?? "";
+      const isPreviewBot = /WhatsApp|facebookexternalhit|Facebot|Twitterbot|TelegramBot|LinkedInBot|Slackbot|Discordbot|SkypeUriPreview|Pinterestbot/i.test(shareUA);
+      if (isPreviewBot) {
+        const shareBase = storeUrl(env);
+        const shareTitle = catalogName.replace(/\.pdf$/i, "");
+        const previewHtml = `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<title>${shareTitle} — ELFIA</title>
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="ELFIA">
+<meta property="og:title" content="${shareTitle}">
+<meta property="og:description" content="Every shade we make, with today's prices. First Sight, Forever Yours.">
+<meta property="og:url" content="${shareBase}/catalog.pdf">
+<meta property="og:image" content="${shareBase}/api/v1/catalog-cover">
+<meta property="og:image:type" content="image/jpeg">
+<meta property="og:image:width" content="1100">
+<meta property="og:image:height" content="1556">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="${shareTitle}">
+<meta name="twitter:image" content="${shareBase}/api/v1/catalog-cover">
+</head><body><p><a href="${shareBase}/catalog.pdf">${shareTitle} (PDF)</a></p></body></html>`;
+        return new Response(method === "HEAD" ? null : previewHtml, {
+          headers: {
+            "Content-Type": "text/html; charset=utf-8",
+            /* Five minutes, same as the cover route: a new uploaded catalog
+               should change the card without a long wait, and the platforms
+               cache previews on their own side anyway. */
+            "Cache-Control": "public, max-age=300",
+            "X-Catalog-Preview": "bot",
+          },
+        });
+      }
+
       if (method === "HEAD") {
         return new Response(null, {
           headers: {

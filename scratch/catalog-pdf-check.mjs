@@ -280,6 +280,38 @@ console.log("\nTHE LINK SHE SHARES: a clean address and a named file");
   ok("a HEAD probe names the file too (WhatsApp checks before it fetches)",
      head.headers.get("content-disposition") === 'inline; filename="Catalog ELFIA v1.pdf"',
      head.headers.get("content-disposition") ?? "(none)");
+
+  /* v1.23.0 — the CEO: "catalog missing thumbnail for the PDF share!" A PDF
+     cannot carry og: tags, so the preview crawlers are answered with HTML
+     whose og:image is the same stable cover every other surface uses. */
+  const bot = await fetch(`${ROOT}/catalog.pdf`, {
+    headers: { "User-Agent": "WhatsApp/2.24.10.74 A" } });
+  const botHtml = await bot.text();
+  ok("WhatsApp's crawler gets a preview page, not the PDF",
+     (bot.headers.get("content-type") ?? "").includes("text/html"), bot.headers.get("content-type") ?? "");
+  const ogImage = botHtml.match(/property="og:image" content="([^"]+)"/)?.[1];
+  ok("its thumbnail is the stable cover route",
+     ogImage === "https://elfiaofficialstore.my/api/v1/catalog-cover", ogImage ?? "(none)");
+  ok("its title is the catalog's name",
+     botHtml.includes('og:title" content="Catalog ELFIA v1"'), botHtml.slice(0, 120));
+  ok("its canonical link is the pretty address",
+     botHtml.includes('og:url" content="https://elfiaofficialstore.my/catalog.pdf"'));
+  const human = await fetch(`${ROOT}/catalog.pdf?t=human`, {
+    headers: { "User-Agent": "Mozilla/5.0 (iPhone; like Mac OS X) Safari/604.1" } });
+  ok("a customer's browser still gets the PDF itself",
+     (human.headers.get("content-type") ?? "").includes("application/pdf"), human.headers.get("content-type") ?? "");
+
+  /* And the thumbnails MATCH across surfaces: the /catalog PAGE's own og:image
+     (baked into the static export) must be the very same URL the bot page
+     serves — one cover route feeding every card. */
+  const { readFileSync: rf, existsSync: ex } = await import("node:fs");
+  if (ex("out/catalog.html")) {
+    const pageHtml = rf("out/catalog.html", "utf8");
+    const pageOg = pageHtml.match(/property="og:image" content="([^"]+)"/)?.[1];
+    ok("the /catalog page's share card uses the SAME cover URL", pageOg === ogImage, `${pageOg} vs ${ogImage}`);
+  } else {
+    ok("the /catalog page's share card uses the SAME cover URL (out/ not built — run npx next build)", false, "out/catalog.html missing");
+  }
 }
 
 console.log(fail === 0

@@ -1,3 +1,49 @@
+# ELFIA OFFICIAL STORE — v1.23.0 (26-08-2026)
+
+## The shared catalog link shows its cover
+
+The CEO: "catalog missing thumbnail for the PDF share! and you require to
+review all the thumbnail url so that it is match."
+
+A PDF cannot carry og: tags, so a link straight to it never got a preview
+card — WhatsApp showed bare text. The platforms' crawlers need HTML, so now
+the crawlers get HTML: when the request for `/catalog.pdf` (either address)
+comes from a link-preview bot — WhatsApp, Facebook, Telegram, X, LinkedIn,
+Slack, Discord, Skype, Pinterest, all of which announce themselves — the
+engine answers with a tiny page whose card is the catalog: title "Catalog
+ELFIA v1" (from `CATALOG_FILENAME`), the cover as the image, the pretty
+address as the canonical link. Every human and every other client still
+receives the PDF itself, named and priced as before.
+
+**The thumbnail audit the CEO asked for — every card, one cover:**
+
+| Surface | Image URL |
+| --- | --- |
+| `/catalog` page share card (og + twitter) | `…/api/v1/catalog-cover` |
+| `/catalog.pdf` link share card (og + twitter) | `…/api/v1/catalog-cover` |
+| `/api/v1/catalog.pdf` (old link) share card | `…/api/v1/catalog-cover` |
+| WhatsApp document card (file attached) | page 1 of the PDF itself |
+
+`/api/v1/catalog-cover` is the single source: the portal-uploaded cover
+when one exists, the shipped page-1 scan otherwise — so uploading a new
+catalog changes EVERY card at once, and none of them can disagree. The
+declared card size (1100×1556) is the cover file's real size. The
+homepage's own card keeps the campaign photo on purpose — it previews the
+shop, not the catalog.
+
+The rig's THE LINK SHE SHARES claim grew to 11 checks (43 total): the
+WhatsApp crawler gets HTML with the right image/title/canonical URL, a
+customer's browser still gets the PDF, and the bot page's cover URL is
+byte-identical to the one baked into the /catalog page's static export.
+
+**Note for the CEO:** WhatsApp caches link previews on its side. After
+PUSH.bat, send the link in a fresh message to see the card; a copy sent
+before the deploy keeps its old (bare) look.
+
+## Deploy
+
+**No migration.** Engine only.
+
 # ELFIA OFFICIAL STORE — v1.22.0 (26-08-2026)
 
 ## The catalog's own address, and its own name
