@@ -174,8 +174,19 @@ export async function billplzCheck(env: Env): Promise<{ ok: boolean; status: num
         message: `Connected to the ${sandbox ? "SANDBOX" : "LIVE"} collection "${j.title ?? env.BILLPLZ_COLLECTION}"${j.status ? ` (${j.status})` : ""}.`,
       };
     }
-    if (r.status === 401) {
-      return { ok: false, status: 401, sandbox, message: `Billplz rejected the API Secret Key. Check it was copied whole, and that it is a ${sandbox ? "billplz-sandbox.com" : "billplz.com"} key — sandbox and live accounts are separate.` };
+    /* v1.14.0 — 403 belongs with 401. Billplz answers 401 for a key it does
+       not recognise and 403 for a key it recognises but will not accept here
+       (an account not yet activated, or one whose access has been withdrawn).
+       Both are credential problems the CEO must act on; the old code filed
+       403 under "try again in a moment", which is advice that never comes
+       good. */
+    if (r.status === 401 || r.status === 403) {
+      return {
+        ok: false, status: r.status, sandbox,
+        message: r.status === 401
+          ? `Billplz rejected the API Secret Key. Check it was copied whole, and that it is a ${sandbox ? "billplz-sandbox.com" : "billplz.com"} key — sandbox and live accounts are separate.`
+          : "Billplz recognised the key but refused it (403). That usually means the account is not fully activated for collections yet, or its access was withdrawn — check the Billplz dashboard.",
+      };
     }
     if (r.status === 404) {
       return { ok: false, status: 404, sandbox, message: "The key works but that Collection ID does not exist in this account. Copy the id from the collection's page in the Billplz dashboard." };

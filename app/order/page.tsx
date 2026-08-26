@@ -155,6 +155,8 @@ function OrderInner() {
   const [order, setOrder] = useState<OrderView | null | "missing">(null);
   const [uploading, setUploading] = useState(false);
   const [uploadMsg, setUploadMsg] = useState("");
+  /* Kept apart from uploadMsg on purpose — see payOnline below. */
+  const [payMsg, setPayMsg] = useState("");
   const [method, setMethod] = useState<"fpx" | "transfer" | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -195,32 +197,95 @@ function OrderInner() {
      bill, never from these URL parameters, which anyone could forge.
      Returning from a payment (billplz[id] in the URL) polls for ~15s;
      otherwise a single check on load is enough. */
-  const returnedFromGateway = params.has("billplz[id]") || params.has("billplz[paid]");
+  /* v1.14.0 — the RETURN JOURNEY.
+   *
+   * Everything up to Billplz worked; coming back did not. A customer who
+   * cancelled at their bank, or whose payment failed, landed on a page that
+   * looked exactly as it had before they left: same Pay button, no
+   * acknowledgement, no explanation. The old code polled for eighteen
+   * seconds and then went quiet whatever the answer, so "it worked",
+   * "it failed" and "the bank is slow" were all rendered as silence.
+   *
+   * These three are now separate outcomes with separate screens, because
+   * they need different things from the customer:
+   *   checking  — the poll is running.
+   *   slow      — the bank said paid, our authenticated re-query has not
+   *               confirmed it yet. Do NOT ask them to pay again.
+   *   declined  — no payment. Say so, say they were not charged, offer
+   *               both ways forward.
+   * Captured ONCE on first render: the parameters are then stripped from
+   * the URL, so a refresh an hour later does not replay a stale outcome. */
+  const [gwReturn] = useState(() => ({
+    returned: params.has("billplz[id]") || params.has("billplz[paid]"),
+    /* Billplz's own claim. It is not proof — only the worker's authenticated
+       re-query decides whether money moved — but it is the difference
+       between "we are still confirming" and "that did not go through". */
+    claimsPaid: params.get("billplz[paid]") === "true",
+  }));
+  const returnedFromGateway = gwReturn.returned;
+  const [outcome, setOutcome] = useState<"none" | "checking" | "slow" | "declined">("none");
+  const [recheck, setRecheck] = useState(0);
   const [checking, setChecking] = useState(false);
+
+  /* Strip billplz[...] from the address bar once it has been read. The
+     customer's order link stays shareable and a reload starts clean. */
+  useEffect(() => {
+    if (!gwReturn.returned || typeof window === "undefined") return;
+    const u = new URL(window.location.href);
+    let touched = false;
+    for (const k of [...u.searchParams.keys()]) {
+      if (k.startsWith("billplz[")) { u.searchParams.delete(k); touched = true; }
+    }
+    if (touched) window.history.replaceState(null, "", u.toString());
+  }, [gwReturn.returned]);
   useEffect(() => {
     if (!token || order === null || order === "missing") return;
     if (order.status !== "pending_payment" && order.status !== "payment_review") return;
     if (!order.config.gateway) return;
     let cancelled = false;
     let attempts = 0;
-    const max = returnedFromGateway ? 6 : 1;
-    setChecking(returnedFromGateway);
+    /* Ten tries at 3s is thirty seconds. FPX usually answers in a few, but a
+       slow bank on a busy evening takes longer than the eighteen seconds
+       this used to allow — and giving up early is what made a successful
+       payment look like a failed one. */
+    const polling = returnedFromGateway || recheck > 0;
+    const max = polling ? 10 : 1;
+    setChecking(polling);
+    if (polling) setOutcome("checking");
     const tick = async () => {
       if (cancelled) return;
       attempts += 1;
       try {
         const r = await fetch(`/api/v1/orders/${encodeURIComponent(token)}/verify-payment`, { method: "POST" });
-        const j = (await r.json()) as { paid?: boolean };
-        if (j.paid) { setChecking(false); void load(); return; }
-      } catch { /* offline — try again or give up quietly */ }
-      if (attempts >= max) { setChecking(false); return; }
+        const j = (await r.json()) as { paid?: boolean; bill?: boolean };
+        if (j.paid) { setChecking(false); setOutcome("none"); void load(); return; }
+        /* v1.14.0 — no bill was ever created, so nothing is in flight and
+           there is nothing to wait for. Waiting half a minute to say so
+           just delays the truth. (An older worker omits `bill` entirely,
+           and then the full poll runs as before.) */
+        if (j.bill === false && polling) {
+          setChecking(false);
+          setOutcome(gwReturn.claimsPaid ? "slow" : "declined");
+          return;
+        }
+      } catch { /* offline — try again, or settle below */ }
+      if (attempts >= max) {
+        setChecking(false);
+        /* The two silences, separated. Billplz saying paid while our own
+           authenticated read does not yet agree is a SLOW confirmation, not
+           a failure — telling that customer to pay again risks charging
+           them twice. */
+        if (polling) setOutcome(gwReturn.claimsPaid ? "slow" : "declined");
+        return;
+      }
       setTimeout(() => void tick(), 3000);
     };
     void tick();
     return () => { cancelled = true; };
-    // Runs once per status change; `load` is stable via useCallback.
+    // Runs once per status change, and again when the customer asks.
+    // `load` is stable via useCallback.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, order === null || order === "missing" ? order : order.status]);
+  }, [token, recheck, order === null || order === "missing" ? order : order.status]);
 
   /* Stage B (Billplz): visible only when the worker reports gateway:true.
      One tap -> the worker creates the bill -> the customer lands on
@@ -233,9 +298,14 @@ function OrderInner() {
       const r = await fetch(`/api/v1/orders/${encodeURIComponent(token)}/pay`, { method: "POST" });
       const j = (await r.json()) as { url?: string; error?: { message?: string } };
       if (r.ok && j.url) { window.location.href = j.url; return; }
-      setUploadMsg(j.error?.message ?? "Online payment unavailable — please use bank transfer.");
+      /* v1.14.0 — its own message, shown inside the FPX row. This used to
+         write into setUploadMsg, which renders at the BOTTOM of the bank
+         transfer section: a customer who tapped Pay and got a gateway error
+         saw nothing where they were looking, and an unexplained line under
+         a different payment method further down the page. */
+      setPayMsg(j.error?.message ?? "Online payment isn't available right now — please use bank transfer below.");
     } catch {
-      setUploadMsg("Online payment unavailable — please use bank transfer.");
+      setPayMsg("We couldn't reach the payment page. Check your connection and try again, or use bank transfer below.");
     }
     setPaying(false);
   };
@@ -297,10 +367,71 @@ function OrderInner() {
         {/* ---- payment ---- */}
         {awaitingPayment && !cancelled && (
           <section className="mt-5">
-            {checking && (
-              <p className="mb-3 rounded-xl bg-white px-3.5 py-2.5 text-xs font-medium text-elfia-body ring-1 ring-elfia-line">
-                Checking your payment with the bank… this page updates by itself.
-              </p>
+            {/* ---- coming back from the bank (v1.14.0) ----
+                One of three, never nothing. The old build showed a thin grey
+                line while polling and then said nothing at all, so a failed
+                payment and a successful one looked identical. */}
+
+            {outcome === "checking" && (
+              <div className="mb-4 flex items-start gap-3 rounded-2xl border border-elfia-line bg-white p-4">
+                <span aria-hidden
+                  className="mt-0.5 h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-elfia-line border-t-elfia-deep" />
+                <div>
+                  <p className="text-sm font-semibold text-elfia-ink">Confirming your payment with the bank…</p>
+                  <p className="mt-1 text-xs leading-relaxed text-elfia-body">
+                    This usually takes a few seconds. Keep this page open — it updates by itself.
+                    Please don&apos;t pay again while this is running.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* The bank says paid; our own check has not caught up. The one
+                thing this screen must NOT do is offer to take the money
+                again. */}
+            {outcome === "slow" && (
+              <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                <p className="flex items-center gap-2 text-sm font-semibold text-amber-900">
+                  <Icon name="clock" size={16} className="shrink-0" />
+                  Your bank confirmed the payment — we&apos;re still verifying it
+                </p>
+                <p className="mt-1.5 text-xs leading-relaxed text-amber-900/90">
+                  Payments occasionally take a few minutes to reach us. <span className="font-semibold">Do not pay
+                  again</span> — you would be charged twice. We check with the bank ourselves, and this page updates
+                  the moment it clears. Your order is held in the meantime.
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button type="button" onClick={() => setRecheck((n) => n + 1)} disabled={checking}
+                    className="inline-flex h-10 items-center rounded-full bg-white px-4 text-xs font-semibold text-elfia-deep ring-1 ring-amber-300 disabled:opacity-50">
+                    {checking ? "Checking…" : "Check again"}
+                  </button>
+                  <a className="inline-flex h-10 items-center rounded-full bg-[#25D366] px-4 text-xs font-semibold text-white" rel="noopener"
+                    href={`https://wa.me/${order.config.whatsapp_digits}?text=${waText}`}>
+                    Send us the receipt
+                  </a>
+                </div>
+              </div>
+            )}
+
+            {/* No payment happened. Cancelling at the bank is ordinary, so
+                this is not styled as an error — but it must be UNAMBIGUOUS,
+                and it must say the words "you have not been charged". */}
+            {outcome === "declined" && (
+              <div className="mb-4 rounded-2xl border border-elfia-line bg-white p-4">
+                <p className="text-sm font-semibold text-elfia-ink">That payment didn&apos;t go through</p>
+                <p className="mt-1.5 text-xs leading-relaxed text-elfia-body">
+                  <span className="font-semibold text-elfia-ink">You have not been charged.</span> The payment was
+                  cancelled or your bank turned it down — it happens, and nothing is wrong with your order.
+                  {order.expires_at && timeLeft(order.expires_at)
+                    ? <> Your pieces are still held for <span className="font-semibold">{timeLeft(order.expires_at)}</span>.</>
+                    : null}
+                </p>
+                <p className="mt-2.5 text-xs font-medium text-elfia-body">Try again below, or pay by bank transfer instead — both work.</p>
+                <button type="button" onClick={() => setRecheck((n) => n + 1)} disabled={checking}
+                  className="mt-3 text-xs font-semibold text-elfia-deep underline underline-offset-2 disabled:opacity-50">
+                  {checking ? "Checking…" : "I did pay — check again"}
+                </button>
+              </div>
             )}
 
             {/* order summary — the CEO's payment screen leads with the money */}
@@ -348,10 +479,33 @@ function OrderInner() {
                 <MethodRow id="fpx" checked={method === "fpx"} onSelect={() => setMethod("fpx")}
                   title="Online banking (FPX)" badge="Instant"
                   note="Maybank2u, CIMB Clicks, Bank Islam, RHB and the rest — secured by Billplz. Your order confirms itself the moment the bank replies.">
-                  <button type="button" onClick={() => void payOnline()} disabled={paying}
+                  {/* v1.14.0 — Pay is UNAVAILABLE while a payment might
+                      already have been made. Two cases:
+                        checking — the poll is still running, and a tap here
+                                   creates a second bill for an order that
+                                   may be about to confirm.
+                        slow     — the bank has said paid. The panel above
+                                   tells this customer not to pay again;
+                                   leaving a live Pay button under that
+                                   sentence is an invitation to be charged
+                                   twice, and the sentence is only worth as
+                                   much as the button agrees with it.
+                      Bank transfer stays available in both cases, which is
+                      the escape hatch if something really has gone wrong. */}
+                  <button type="button" onClick={() => void payOnline()}
+                    disabled={paying || checking || outcome === "slow"}
                     className="inline-flex h-12 w-full items-center justify-center rounded-full bg-elfia-deep px-6 text-sm font-semibold text-white hover:bg-elfia-deeper disabled:opacity-50">
-                    {paying ? "Opening secure payment…" : `Pay ${fmtRM(order.total_cents)} now`}
+                    {checking ? "Confirming your last payment…"
+                      : outcome === "slow" ? "Payment already received — confirming"
+                      : paying ? "Opening secure payment…"
+                      : outcome === "declined" ? `Try again — pay ${fmtRM(order.total_cents)}`
+                      : `Pay ${fmtRM(order.total_cents)} now`}
                   </button>
+                  {payMsg && (
+                    <p className="mt-2.5 rounded-xl bg-elfia-veil px-3 py-2 text-xs leading-relaxed font-medium text-elfia-deep">
+                      {payMsg}
+                    </p>
+                  )}
                   <p className="mt-2 flex items-center justify-center gap-1.5 text-center text-[11px] text-elfia-muted">
                     <Icon name="shield" size={13} className="text-elfia-rose" />
                     You leave for Billplz&apos;s secure page and come straight back here.

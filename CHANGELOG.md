@@ -1,3 +1,104 @@
+# ELFIA OFFICIAL STORE — v1.14.0 (26-08-2026)
+
+## The journey back from the bank
+
+The CEO asked for the Billplz interface. The way OUT was already built and
+tested — bill creation, X-Signature verification, an authenticated re-query
+before any order is marked paid. The way BACK was not, and that is where the
+holes were.
+
+The old page polled for eighteen seconds after a customer returned from
+Billplz and then went quiet, whatever the answer. So **"it worked", "it
+failed" and "the bank is slow" were all rendered as silence** — a customer
+who cancelled at their bank landed on a page identical to the one they left:
+same Pay button, no acknowledgement, no explanation. They are three different
+situations and they need three different things.
+
+### "That payment didn't go through"
+
+Not styled as an error, because cancelling at your bank is an ordinary thing
+to do. But unambiguous, and it says the sentence that matters:
+
+> **You have not been charged.** The payment was cancelled or your bank turned
+> it down — it happens, and nothing is wrong with your order. Your pieces are
+> still held for 11 hours 59 minutes.
+
+Both ways forward are offered — try again, or bank transfer — plus an
+"I did pay — check again" for the customer who disagrees with us.
+
+### "Your bank confirmed the payment — we're still verifying it"
+
+The dangerous one. Billplz's redirect says paid; our own authenticated read
+has not agreed yet. Telling that customer to try again is how somebody gets
+**charged twice**, so this screen says *do not pay again* — and the Pay
+button beneath it is **disabled**, with a label saying why.
+
+A warning sentence is only worth as much as the button underneath it agrees
+with. Bank transfer stays open, because locking every route would strand
+someone who really does have a problem.
+
+### While it is deciding
+
+A proper panel with a spinner, not a thin grey line, and Pay is unavailable
+throughout — a tap during those seconds creates a SECOND bill for an order
+that may be about to confirm.
+
+## Smaller things that were wrong
+
+- **The poll gave up too early.** Ten tries at 3s instead of six, because a
+  slow bank on a busy evening takes longer than eighteen seconds, and giving
+  up early made a successful payment look like a failed one.
+- **It also polled when there was nothing to poll for.** `verify-payment` now
+  answers `bill: false` when no bill was ever created, and the page settles
+  at once instead of waiting half a minute to say so.
+- **Gateway errors appeared in the wrong place.** A failed "Pay now" wrote
+  its message into the RECEIPT UPLOAD area — at the bottom of the bank
+  transfer section, far from where the customer was looking. It has its own
+  message inside the FPX row now.
+- **The order link is cleaned up.** `billplz[...]` parameters are stripped
+  from the address bar once read, so a reload an hour later does not replay
+  a stale outcome, and the link stays shareable.
+- **403 is a credential problem, not a hiccup.** `billplzCheck` filed it
+  under "try again in a moment", which is advice that never comes good.
+  Billplz answers 403 for a key it knows but will not accept here — an
+  account not fully activated, or access withdrawn.
+
+## Proving the keys before a customer does
+
+`GET /api/v1/bridge/payment-check`, behind the bridge key.
+
+`billplzCheck()` already existed but only `/admin` could reach it, and
+ADMIN_KEY is not set on this shop — so **the first person to discover a
+mistyped API key would have been a customer, halfway through paying.** This
+is the same read-only check on a route that is actually reachable: it reads
+one collection with the secret key, creates nothing, charges nothing, moves
+no money, and returns no key material.
+
+It also names the one combination that looks fine in testing and fails in
+front of a customer: live money against a sandbox key.
+
+## The rig
+
+`scratch/payment-return-check.mjs` — 21 checks, walking all three outcomes in
+a real browser and reading what is actually on the screen, including that the
+Pay button is *disabled* and not merely discouraged.
+
+It needs the gateway switched on locally, which is fake values in
+`worker/.dev.vars` (`BILLPLZ_SECRET`, `BILLPLZ_COLLECTION`, `BILLPLZ_XSIGN`).
+No bill is created and no real Billplz account is touched — `billplzConfigured()`
+only checks both are non-empty. **The live keys are Wrangler secrets, set from
+the CEO's own machine. They are not in this repo and never will be**;
+`tests/no-secrets.mjs` fails the build if that stops being true.
+
+## Deploy
+
+**No migration.** Engine + website.
+
+Online payment stays invisible to customers until `BILLPLZ_SECRET` and
+`BILLPLZ_COLLECTION` are set as secrets — `store-config` reports
+`gateway:false` and the FPX row is not drawn. Nothing here can go live by
+accident.
+
 # ELFIA OFFICIAL STORE — v1.13.0 (26-08-2026)
 
 ## Delivery pricing belongs to the CEO now

@@ -74,7 +74,7 @@ export interface Env {
   STORE_ORIGIN?: string;     // override for local testing
 }
 
-const VERSION = "1.13.0";
+const VERSION = "1.14.0";
 const STATUSES = ["pending_payment", "payment_review", "paid", "shipped", "completed", "cancelled"] as const;
 type Status = (typeof STATUSES)[number];
 
@@ -848,6 +848,36 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
       return applyOrderAction(env, ctx, o, action, body);
     }
 
+    /* v1.14.0 — prove the gateway credentials WITHOUT taking a payment.
+     *
+     * billplzCheck() already existed but only /admin could reach it, and
+     * ADMIN_KEY is not set on this shop — so the first person to discover a
+     * mistyped API key would have been a customer, halfway through paying.
+     * This is the same read-only check behind the bridge key, which IS set.
+     * It reads one collection with the secret key: it creates nothing,
+     * charges nothing and moves no money.
+     *
+     * The response deliberately carries no key material — only whether the
+     * key works, which account mode it is in, and a sentence saying what to
+     * fix if it does not. */
+    if (path === "/bridge/payment-check" && method === "GET") {
+      if (!env.BRIDGE_KEY) return err("not_configured", "Set the BRIDGE_KEY secret first", 501);
+      const givenPc = request.headers.get("X-Bridge-Key") ?? "";
+      if (!timingSafeEqual(givenPc, env.BRIDGE_KEY)) return err("unauthorized", "Bad key", 401);
+      const check = await billplzCheck(env);
+      return json({
+        ...check,
+        signature_key_set: billplzSignatureConfigured(env),
+        /* Live money and a sandbox key is the one combination that looks
+           fine in testing and fails in front of a customer. */
+        warning: check.ok && check.sandbox
+          ? "This shop is pointed at the Billplz SANDBOX. Real customers cannot pay. Remove BILLPLZ_SANDBOX from wrangler.toml and redeploy."
+          : check.ok && !billplzSignatureConfigured(env)
+            ? "Working, but BILLPLZ_XSIGN is not set — callbacks are accepted on the authenticated re-query alone. Set it."
+            : null,
+      });
+    }
+
     if (path === "/bridge/sync-now" && method === "POST") {
       if (!env.BRIDGE_KEY) return err("not_configured", "Set the BRIDGE_KEY secret first", 501);
       const given = request.headers.get("X-Bridge-Key") ?? "";
@@ -1221,7 +1251,11 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
       if (o.status !== "pending_payment" && o.status !== "payment_review") {
         return json({ status: o.status, paid: o.status !== "cancelled" });
       }
-      if (!billplzConfigured(env) || !o.bill_id) return json({ status: o.status, paid: false });
+      /* v1.14.0 — `bill` tells the page whether there is anything to wait
+         FOR. No bill was ever created for this order, so no payment can be
+         in flight, and polling for thirty seconds would only delay telling
+         the customer the truth. */
+      if (!billplzConfigured(env) || !o.bill_id) return json({ status: o.status, paid: false, bill: false });
       if (await billplzVerifyPaid(env, o.bill_id)) {
         await env.DB.prepare(
           `UPDATE orders SET status = 'paid', payment_method = 'fpx', updated_at = datetime('now')
@@ -1230,7 +1264,10 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
         await recordOrderEvent(env, o.id, "paid", "Paid online (FPX) — confirmed with the bank");
         return json({ status: "paid", paid: true });
       }
-      return json({ status: o.status, paid: false });
+      /* A bill exists and Billplz has not (yet) said it is paid. The page
+         keeps polling on this answer, because this is the one case where
+         waiting is the right thing to do. */
+      return json({ status: o.status, paid: false, bill: true });
     }
 
     if (path === "/payments/billplz/callback" && (method === "POST" || method === "GET")) {
