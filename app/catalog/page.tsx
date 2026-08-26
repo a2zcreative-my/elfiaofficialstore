@@ -53,11 +53,16 @@ import {
 
 import { Icon, useDataRefresh } from "../ui";
 
-/** The cover of the printed catalog. It carries no prices, so it cannot go
-    stale — the only page image this file still uses. */
-const COVER = "/lookbook/page-1.jpg";
-/** Built fresh on every request from the live prices — never a stored file. */
-const PDF = "/api/v1/catalog.pdf";
+/** The catalog's cover, from the stable route: the CEO's uploaded cover
+    when one exists (v1.21.0), the shipped one otherwise. It carries no
+    prices, so it cannot go stale. */
+const COVER = "/api/v1/catalog-cover";
+/** Built fresh on every request from the live prices — never a stored file.
+    v1.22.0 — the PUBLIC address (a wrangler route hands this exact path to
+    the engine): what a customer opens, copies or shares from here carries
+    no /api/ in it, per the CEO. The engine serves the same document at both
+    addresses, so nothing already shared breaks. */
+const PDF = "/catalog.pdf";
 
 /** One shade, drawn the way the printed lookbook draws it: a photo in a
     circle, the name, the price. The price is the live one. */

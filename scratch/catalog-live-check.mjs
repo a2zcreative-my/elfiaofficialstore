@@ -99,7 +99,11 @@ try {
       [...document.querySelectorAll("main img")].map((i) => new URL(i.src, location.href).pathname));
     const priced = imgs.filter((s) => /\/lookbook\/page-[2-9]\.jpg$/.test(s));
     ok("the priced page scans are gone", priced.length === 0, priced.join(", "));
-    ok("the cover is still used", imgs.some((s) => s.endsWith("/lookbook/page-1.jpg")), imgs.join(", "));
+    /* v1.21.0 moved the cover to the STABLE route (the CEO's uploaded cover
+       when one exists, the shipped page-1 scan otherwise) so a new upload
+       changes the preview with no site rebuild. Either address is the
+       cover; both carry no prices. */
+    ok("the cover is still used", imgs.some((s) => s.endsWith("/lookbook/page-1.jpg") || s.endsWith("/api/v1/catalog-cover")), imgs.join(", "));
   }
 
   step("the PDF is offered, and described honestly");
@@ -109,8 +113,11 @@ try {
        about is that the PAGE points at the generated route and does not
        promise anything a customer would later find untrue. */
     const text = await page.locator("main").innerText();
-    ok("the page links the generated PDF",
-       (await page.locator('main a[href="/api/v1/catalog.pdf"]').count()) >= 1);
+    /* v1.22.0 — the link is the PUBLIC address now (CEO: "should not
+       appear as API"); a wrangler route hands that exact path to the same
+       engine, so it is still the generated document. */
+    ok("the page links the generated PDF at its public address",
+       (await page.locator('main a[href="/catalog.pdf"]').count()) >= 1);
     ok("it does not link a stored file that cannot update",
        (await page.locator('main a[href$="/lookbook/elfia-catalog.pdf"]').count()) === 0);
     ok("and it says the PDF is built fresh", /built fresh/i.test(text), text.slice(0, 240));

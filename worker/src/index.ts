@@ -73,9 +73,13 @@ export interface Env {
   BRIDGE_PUSH_URL?: string;
   BRIDGE_KEY?: string;
   STORE_ORIGIN?: string;     // override for local testing
+  /** v1.22.0 — what the downloaded catalog file is CALLED ("Catalog ELFIA
+      v1"); ".pdf" is appended in code. Set in wrangler.toml so a new
+      catalog version is a one-line edit, never a code change. */
+  CATALOG_FILENAME?: string;
 }
 
-const VERSION = "1.21.0";
+const VERSION = "1.22.0";
 const STATUSES = ["pending_payment", "payment_review", "paid", "shipped", "completed", "cancelled"] as const;
 type Status = (typeof STATUSES)[number];
 
@@ -456,9 +460,19 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
      * changed. Nothing here is private — it is the products and prices
      * /api/v1/products already serves to anyone. */
     if (path === "/catalog.pdf" && (method === "GET" || method === "HEAD")) {
+      /* v1.22.0 — the document's NAME (CEO: "Catalog PDF will be name as
+         Catalog ELFIA v1"). Whoever downloads, saves or forwards this file
+         gets that name — on the pretty link and on the old /api/v1/ one
+         alike, so copies already shared benefit too. Sanitised because a
+         header value must stay a single clean line whatever the toml says. */
+      const catalogName = `${(env.CATALOG_FILENAME || "Catalog ELFIA v1").replace(/["\\\r\n]/g, "").trim() || "ELFIA Catalog"}.pdf`;
       if (method === "HEAD") {
         return new Response(null, {
-          headers: { "Content-Type": "application/pdf", "Cache-Control": "public, max-age=60" },
+          headers: {
+            "Content-Type": "application/pdf",
+            "Content-Disposition": `inline; filename="${catalogName}"`,
+            "Cache-Control": "public, max-age=60",
+          },
         });
       }
       const { results: rows } = await env.DB.prepare(
@@ -499,7 +513,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
         return new Response(r.bytes, {
           headers: {
             "Content-Type": "application/pdf",
-            "Content-Disposition": 'inline; filename="ELFIA-Catalog.pdf"',
+            "Content-Disposition": `inline; filename="${catalogName}"`,
             "Cache-Control": "public, max-age=60",
             "X-Content-Type-Options": "nosniff",
             /* Which printed prices could not be matched to a live product,

@@ -1,3 +1,35 @@
+# ELFIA OFFICIAL STORE — v1.22.0 (26-08-2026)
+
+## The catalog's own address, and its own name
+
+The CEO, sharing the catalog on WhatsApp: "Catalog PDF will be name as
+Catalog ELFIA v1. The slug url should make something nice which should not
+appear as API."
+
+- **The link customers see is `elfiaofficialstore.my/catalog.pdf`** — no
+  `/api/` in it. Two new wrangler routes hand that ONE exact path to the
+  engine, which serves the same live-priced document there. The address is
+  deliberately versionless: the whole point of the live-priced catalog is a
+  permanent link that never goes stale — v2 replaces the file, the link
+  never changes, every copy already shared keeps working.
+- **The downloaded file is named `Catalog ELFIA v1.pdf`** — set as
+  `CATALOG_FILENAME` in `worker/wrangler.toml`, so when catalog v2 ships the
+  name is a one-line edit and a deploy, never a code change. Both the pretty
+  link AND the old `/api/v1/catalog.pdf` link send the name, so copies of
+  the old link already in chats download correctly too.
+- The `/catalog` page's "Open the PDF" button now uses the public address.
+  The old route stays (the desktop embed and anything already shared).
+- `scratch/serve-local.mjs` mirrors the new production route so the rigs
+  exercise exactly what customers get; `catalog-pdf-check.mjs` gained a
+  5-check "THE LINK SHE SHARES" claim (37 total) and `catalog-live-check`
+  was brought up to the v1.21 stable-cover route it had drifted behind.
+
+## Deploy
+
+**No migration.** Engine + website (the routes ride the engine deploy; the
+page's button is the website half). After PUSH.bat, the pretty link is live
+immediately.
+
 # ELFIA OFFICIAL STORE — v1.21.0 (26-08-2026)
 
 ## A catalog uploaded in the portal prices itself

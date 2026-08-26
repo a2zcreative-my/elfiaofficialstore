@@ -12,6 +12,8 @@ WHATSAPP_DIGITS = "60123456789"
 SHIPPING_CENTS = "1000"        # RM 10 flat
 FREE_ABOVE_CENTS = "15000"     # free delivery from RM 150
 STORE_ORIGIN = "http://127.0.0.1:8100"
+# v1.22.0 — same name the production toml sets, so the rig proves the header.
+CATALOG_FILENAME = "Catalog ELFIA v1"
 # Stock sync with the agency portal — paste the two bridge endpoints here.
 # Both live on the portal; see PORTAL-BRIDGE-SPEC.md for the contract.
 #   BRIDGE_URL       GET  — the portal's live inventory feed  (portal -> store)

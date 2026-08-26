@@ -251,6 +251,37 @@ step("tidy up — this rig leaves nothing behind");
   ok("its product is retired from the shop", !gone);
 }
 
+
+/* ---- THE LINK SHE SHARES (v1.22.0) ----
+   The CEO: "Catalog PDF will be name as Catalog ELFIA v1. The slug url
+   should make something nice which should not appear as API." In production
+   a wrangler route hands elfiaofficialstore.my/catalog.pdf to this same
+   worker; locally every path already reaches it, so the rig can prove the
+   pretty path and the named download here. */
+console.log("\nTHE LINK SHE SHARES: a clean address and a named file");
+{
+  const ROOT = API.replace(/\/api\/v1$/, "");
+  const pretty = await fetch(`${ROOT}/catalog.pdf?t=share`);
+  ok("the pretty path serves the catalog (no /api/ in the address)",
+     pretty.ok && (pretty.headers.get("content-type") ?? "").includes("application/pdf"), String(pretty.status));
+  ok("the downloaded file is named after her catalog",
+     pretty.headers.get("content-disposition") === 'inline; filename="Catalog ELFIA v1.pdf"',
+     pretty.headers.get("content-disposition") ?? "(none)");
+  const api = await fetch(`${API}/catalog.pdf?t=share2`);
+  ok("the old /api/v1 link gets the same name (already-shared copies benefit)",
+     api.headers.get("content-disposition") === 'inline; filename="Catalog ELFIA v1.pdf"',
+     api.headers.get("content-disposition") ?? "(none)");
+  const prettyBytes = Buffer.from(await pretty.arrayBuffer());
+  const apiBytes = Buffer.from(await api.arrayBuffer());
+  ok("both addresses serve the same document (same pages, same size class)",
+     Math.abs(prettyBytes.length - apiBytes.length) < 4096,
+     `${prettyBytes.length} vs ${apiBytes.length}`);
+  const head = await fetch(`${ROOT}/catalog.pdf`, { method: "HEAD" });
+  ok("a HEAD probe names the file too (WhatsApp checks before it fetches)",
+     head.headers.get("content-disposition") === 'inline; filename="Catalog ELFIA v1.pdf"',
+     head.headers.get("content-disposition") ?? "(none)");
+}
+
 console.log(fail === 0
   ? `\nPASS - ${pass} checks: her catalog, her pages, live prices.`
   : `\n${fail} of ${pass + fail} checks failed.`);
