@@ -851,6 +851,19 @@ step("a shared product link previews THAT product (v1.9.0)");
   ok("an unknown id still answers", missing.status === 200, `${missing.status}`);
   const mh = await missing.text();
   ok("with the shop's own preview", /og:url" content="[^"]*\/shop"/.test(mh));
+
+  /* v1.24.0 — the CEO: "Check all the url to ensure that there is no API
+     such like this .../api/v1/share/24". The link the share button hands
+     out is now /share/<id> on the domain root (a wrangler route in
+     production; locally every path reaches the worker), and it serves the
+     very same preview. The old address keeps answering for links already
+     sitting in chats. */
+  const pretty = await (await fetch(`${API.replace(/\/api\/v1$/, "")}/share/${withPhoto.id}`)).text();
+  const pog = (prop) => (pretty.match(new RegExp(`property="og:${prop}" content="([^"]*)"`)) ?? [])[1];
+  ok("the PUBLIC /share address serves the same product preview",
+     (pog("title") ?? "").includes(withPhoto.name) && pog("image") === og("image"),
+     `${pog("title")} / ${pog("image")}`);
+  ok("and it forwards to the same product page", (pog("url") ?? "").includes(`/p?id=${withPhoto.id}`));
 }
 
 step("the portal names its own collections (v1.10.0)");

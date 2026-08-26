@@ -16,10 +16,11 @@ const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/cs
 
 http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://localhost');
-  /* v1.22.0 — production hands ONE extra exact path to the worker (the
-     wrangler route for the catalog's public address); this harness mirrors
-     that routing so the rigs exercise what customers get. */
-  if (u.pathname.startsWith('/api/') || u.pathname === '/catalog.pdf') {
+  /* v1.22.0/v1.24.0 — production hands a few extra paths to the worker (the
+     wrangler routes for the catalog's and the share links' public
+     addresses); this harness mirrors that routing so the rigs exercise what
+     customers get. */
+  if (u.pathname.startsWith('/api/') || u.pathname === '/catalog.pdf' || u.pathname.startsWith('/share/')) {
     const chunks = [];
     for await (const c of req) chunks.push(c);
     const headers = { ...req.headers };

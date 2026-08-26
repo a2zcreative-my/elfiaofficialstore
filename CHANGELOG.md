@@ -1,3 +1,48 @@
+# ELFIA OFFICIAL STORE — v1.24.0 (26-08-2026)
+
+## No /api/ in anything a customer sees — the full audit
+
+The CEO: "Check all the url to ensure that there is no API such like this
+https://elfiaofficialstore.my/api/v1/share/24"
+
+Every URL a customer can see, copy or share was audited. ONE still carried
+`/api/v1/`: the product share link (the Share / WhatsApp / Copy-link row on
+every product page). Fixed the same way as the catalog:
+
+- **The share link is now `elfiaofficialstore.my/share/24`.** A wrangler
+  route (`/share/*`, both hosts) hands the path to the engine, which serves
+  the same per-product preview page — the product's own photo, name and
+  price as the card, then straight on to the product page. The old
+  `/api/v1/share/…` address keeps answering, so every link already sitting
+  in a chat keeps working.
+
+**The audit, in full — what a customer can see and what it reads as:**
+
+| Surface | URL the customer sees | Verdict |
+| --- | --- | --- |
+| Product share row (Share / WhatsApp / Copy) | `/share/<id>` | fixed this release |
+| Catalog PDF link | `/catalog.pdf` | clean (v1.22.0) |
+| Product pages | `/p?id=<id>` | clean |
+| Shop, cart, checkout, wishlist, account | `/shop`, `/cart`, … | clean |
+| Order tracking link (in WhatsApp updates, receipts, Billplz return) | `/order?t=…` | clean |
+| WhatsApp message texts (order updates, restock notes) | `/order?t=…` or no URL | clean |
+| Share/preview cards' og:url and redirects | `/p?id=…`, `/catalog.pdf`, `/shop` | clean |
+
+What deliberately KEEPS `/api/v1/` — addresses no customer ever reads:
+photo/cover URLs inside `<img>` tags and og:image tags (fetched by browsers
+and crawlers, never displayed), the traffic beacon, every in-page data
+fetch, and the Billplz `callback_url` (Billplz's server calls it; the
+customer-facing `redirect_url` is `/order?t=…` and always was).
+
+The sync rig's share claim grew 2 checks (165): the public `/share` address
+serves the identical product preview, and forwards to the same product
+page. `scratch/serve-local.mjs` mirrors the new route.
+
+## Deploy
+
+**No migration.** Engine + website (routes ride the engine; the share row's
+new link is the website half).
+
 # ELFIA OFFICIAL STORE — v1.23.0 (26-08-2026)
 
 ## The shared catalog link shows its cover

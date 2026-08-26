@@ -21,7 +21,11 @@ import { Icon, ProductCard, SectionHeader, WishHeart, useDataRefresh } from "./.
     WhatsApp hand-off and a copy button everywhere else. */
 function ShareProduct({ product }: { product: Product }) {
   const [copied, setCopied] = useState(false);
-  const url = `${STORE.url}/api/v1/share/${product.id}`;
+  /* v1.24.0 — the PUBLIC address (a wrangler route hands /share/* to the
+     engine): the link a customer copies or shares carries no /api/ in it,
+     per the CEO. The old /api/v1/share/... address still answers, so links
+     already shared keep working. */
+  const url = `${STORE.url}/share/${product.id}`;
   const text = `${splitName(product.name).shade} — ${fmtRM(product.price_cents)}`;
 
   return (
@@ -264,8 +268,9 @@ function ProductInner() {
             {/* v1.9.0 — the CEO: "thumbnail also should take the actual photo
                 of based on the product that customer want to share on the
                 WhatsApp or any social platform". The link shared is
-                /api/v1/share/<id>, which serves THIS product's photo, name
-                and price as the preview tags and then forwards the person to
+                /share/<id> (v1.24.0: the public address — no /api/ in what a
+                customer sees), which serves THIS product's photo, name and
+                price as the preview tags and then forwards the person to
                 this page. Sharing /p?id= directly would show the campaign
                 shot for every product — one static page, one set of tags. */}
             <ShareProduct product={p} />

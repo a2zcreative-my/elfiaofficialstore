@@ -15,6 +15,14 @@ routes = [
   # The /catalog PAGE is a different path and stays with the website.
   { pattern = "elfiaofficialstore.my/catalog.pdf", zone_name = "elfiaofficialstore.my" },
   { pattern = "www.elfiaofficialstore.my/catalog.pdf", zone_name = "elfiaofficialstore.my" },
+  # v1.24.0 — the product share link's public address (CEO: "Check all the
+  # url to ensure that there is no API such like this
+  # https://elfiaofficialstore.my/api/v1/share/24"). Same engine route that
+  # serves the per-product preview page; the link a customer shares now
+  # reads elfiaofficialstore.my/share/24. The old /api/v1/share/... address
+  # keeps answering, so links already sitting in chats keep working.
+  { pattern = "elfiaofficialstore.my/share/*", zone_name = "elfiaofficialstore.my" },
+  { pattern = "www.elfiaofficialstore.my/share/*", zone_name = "elfiaofficialstore.my" },
 ]
 
 # ---- store facts (public, safe in this file) ----
