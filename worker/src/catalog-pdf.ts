@@ -368,7 +368,10 @@ export interface UploadedSite {
 export interface UploadedPriceSite {
   page: number;
   x0: number; y0: number; x1: number; y1: number;
-  bg?: [number, number, number]; // 0-255; absent → house cream
+  bg?: [number, number, number];  // 0-255; absent → house cream
+  /** The PRINTED price's own ink, sampled from its glyphs — the live price
+      is written in the same colour, so white stays white on his pill. */
+  ink?: [number, number, number];
 }
 
 export interface UploadedMap {
@@ -394,10 +397,10 @@ export function parseUploadedMap(raw: string): UploadedMap | null {
     if (!m.sites.every(okSite)) return null;
     if (m.price_sites !== undefined) {
       if (!Array.isArray(m.price_sites) || m.price_sites.length > 300) return null;
-      const okPrice = (s: UploadedPriceSite) =>
-        okRect(s) && (s.bg === undefined ||
-          (Array.isArray(s.bg) && s.bg.length === 3 &&
-           s.bg.every((v) => Number.isFinite(v) && v >= 0 && v <= 255)));
+      const okRGB = (c: unknown) => c === undefined ||
+        (Array.isArray(c) && c.length === 3 &&
+         (c as unknown[]).every((v) => typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 255));
+      const okPrice = (s: UploadedPriceSite) => okRect(s) && okRGB(s.bg) && okRGB(s.ink);
       if (!m.price_sites.every(okPrice)) return null;
     }
     return m;
@@ -412,6 +415,10 @@ export async function patchUploadedCatalog(
 ): Promise<PatchResult> {
   const doc = await PDFDocument.load(source);
   const serif = await doc.embedFont(StandardFonts.TimesRoman);
+  /* The override text is SANS — the CEO: "Price should the font like
+     Saiz". His designer sets pill values in a clean sans face; a serif
+     number in that pill read as someone else's handwriting. */
+  const sansUp = await doc.embedFont(StandardFonts.Helvetica);
   const pages = doc.getPages();
 
   const patched: string[] = [];
@@ -526,24 +533,34 @@ export async function patchUploadedCatalog(
          white on a rose pill. */
       const w = printed.x1 - printed.x0;
       const h = printed.y1 - printed.y0;
-      const padX = Math.max(2, h * 0.35);
-      const padY = Math.max(1.5, h * 0.22);
+      /* The patch hugs the printed glyphs — the CEO: "the box should not
+         height like this to cover the static price there". A tall flat
+         patch showed as a box over his pill's gradient; the slimmest cover
+         that hides the old number is invisible. */
+      const padX = Math.max(1.5, h * 0.18);
+      const padY = Math.max(1, h * 0.1);
       const bg = printed.bg
         ? rgb(printed.bg[0] / 255, printed.bg[1] / 255, printed.bg[2] / 255) : CREAM;
       page.drawRectangle({
         x: printed.x0 - padX, y: H - printed.y1 - padY,
         width: w + padX * 2, height: h + padY * 2, color: bg,
       });
+      /* Ink: the printed number's own colour (sampled from its glyphs at
+         upload) — white stays white on his pill, dark stays dark on cream.
+         Fallback: contrast against the sampled ground. */
       const lum = printed.bg
         ? (0.2126 * printed.bg[0] + 0.7152 * printed.bg[1] + 0.0722 * printed.bg[2]) / 255 : 1;
-      const ink = lum > 0.55 ? GRID_INK : rgb(1, 1, 1);
-      const softInk = lum > 0.55 ? MUTED : rgb(0.94, 0.9, 0.92);
+      const ink = printed.ink
+        ? rgb(printed.ink[0] / 255, printed.ink[1] / 255, printed.ink[2] / 255)
+        : (lum > 0.55 ? GRID_INK : rgb(1, 1, 1));
+      const softInk = !printed.ink && lum > 0.55 ? MUTED : ink;
+      const softOpacity = printed.ink ? 0.75 : 1;
 
       let pSize = Math.max(7, h * 0.8);
       let wasOn = was;
       const widthAt = (sz: number) =>
-        serif.widthOfTextAtSize(price, sz)
-        + (wasOn ? sz * 0.45 + serif.widthOfTextAtSize(wasOn, sz * 0.82) : 0);
+        sansUp.widthOfTextAtSize(price, sz)
+        + (wasOn ? sz * 0.45 + sansUp.widthOfTextAtSize(wasOn, sz * 0.82) : 0);
       const maxW = w + padX * 1.6;
       if (widthAt(pSize) > maxW) pSize = Math.max(h * 0.5, pSize * (maxW / widthAt(pSize)));
       if (widthAt(pSize) > maxW) wasOn = null; // the sale pair will not fit — the live price alone, legibly
@@ -551,16 +568,16 @@ export async function patchUploadedCatalog(
       const pcx = (printed.x0 + printed.x1) / 2;
       const startPX = pcx - total / 2;
       const pBase = H - printed.y1 + h / 2 - pSize * 0.36;
-      page.drawText(price, { x: startPX, y: pBase, size: pSize, font: serif, color: ink });
+      page.drawText(price, { x: startPX, y: pBase, size: pSize, font: sansUp, color: ink });
       if (wasOn) {
         const wasSz = pSize * 0.82;
-        const wasX = startPX + serif.widthOfTextAtSize(price, pSize) + pSize * 0.45;
-        const wasW = serif.widthOfTextAtSize(wasOn, wasSz);
-        page.drawText(wasOn, { x: wasX, y: pBase, size: wasSz, font: serif, color: softInk });
+        const wasX = startPX + sansUp.widthOfTextAtSize(price, pSize) + pSize * 0.45;
+        const wasW = sansUp.widthOfTextAtSize(wasOn, wasSz);
+        page.drawText(wasOn, { x: wasX, y: pBase, size: wasSz, font: sansUp, color: softInk, opacity: softOpacity });
         page.drawLine({
           start: { x: wasX - 0.5, y: pBase + wasSz * 0.28 },
           end: { x: wasX + wasW + 0.5, y: pBase + wasSz * 0.28 },
-          thickness: Math.max(0.5, wasSz * 0.06), color: softInk,
+          thickness: Math.max(0.5, wasSz * 0.06), color: softInk, opacity: softOpacity,
         });
       }
       patched.push(site.label);

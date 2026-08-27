@@ -1,3 +1,25 @@
+# ELFIA OFFICIAL STORE — v1.28.0 (27-08-2026)
+
+## The overriding price is indistinguishable from the designer's
+
+The CEO, on the first override output: "Price should the font like Saiz and
+also the box should not height like this to cover the static price there!"
+
+- **Same face**: the replacement price is set in the sans face his designer
+  uses for pill values ("Saiz", "170 cm X 65 cm"), not the serif the
+  insert-mode chip uses.
+- **Same ink**: the portal now samples the printed number's own colour from
+  its glyphs (median of the far-from-background pixels, so a sliver of
+  photograph at the box's edge cannot fool it) and the store writes the
+  live price in that exact colour — white stays white on his rose pill,
+  maroon stays maroon on the cream grid.
+- **No visible box**: the cover patch hugs the printed glyphs (pad 0.18/0.1
+  of the text height, was 0.35/0.22) — the tall flat patch that showed over
+  the pill's gradient is gone.
+
+Verified on his own Catalog Final Harga: both Price pills and a grid row
+rendered and inspected. Portal v1.58.0 carries the ink sampling.
+
 # ELFIA OFFICIAL STORE — v1.27.0 (27-08-2026)
 
 ## An uploaded catalog WITH printed prices: the system's price overrides it
