@@ -181,8 +181,11 @@ try {
       } finally { try { unlinkSync(f); } catch { /* gone */ } }
     };
     const detailTxt = perPage(3);
-    ok("a lone product's Price pill is filled with ITS price",
-       (detailTxt.match(new RegExp(rm(6150).replace(".", "\\."), "g")) ?? []).length === 2, detailTxt.slice(0, 120));
+    /* v1.29.0 — ONE price per product per page (the CEO: "the price become
+       duplicated!"): the Price heading wins, the name label keeps only its
+       tap link. So the page carries the price exactly once. */
+    ok("a lone product's Price heading is filled with ITS price, exactly once",
+       (detailTxt.match(new RegExp(rm(6150).replace(".", "\\."), "g")) ?? []).length === 1, detailTxt.slice(0, 120));
     const twoUpTxt = perPage(4);
     ok("a two-product page's Price heading stays empty — never a guess",
        twoUpTxt.includes(rm(6150)) && twoUpTxt.includes(rm(7350))

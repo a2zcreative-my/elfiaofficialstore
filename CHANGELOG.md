@@ -1,3 +1,38 @@
+# ELFIA OFFICIAL STORE — v1.29.0 (27-08-2026)
+
+## Price-less catalogs, finished: inside the pill, once, and snug
+
+The CEO, on the price-less upload: "no automatically price tagging there!
+… price tag below of the Bawal name too gap … the price become duplicated!
+… not properly price tagging inside the Pills by refer to the font style!"
+
+- **The empty Price pill is filled INSIDE, in its own style.** The portal
+  now finds the designer's empty pill by its pixels — a bounded blob of
+  uniform colour under the "Price" heading, three properties no photograph
+  shares — and ships it as a price site with the pill's colour and white
+  ink. The store then writes the live price inside the pill, sans face,
+  white on rose, exactly as the designer would have (portal v1.58.0).
+- **One price per product per page.** On a price-less detail page both the
+  name pill and the Price heading resolved to the same product and BOTH
+  drew. The Price heading wins; every other label of that product keeps
+  its tap link only.
+- **The inserted chip sits snug under its label** (gap cut from 0.3 to
+  0.05 of the text size — the extracted label box already carries descent
+  room).
+
+The other two screenshots were the already-fixed-awaiting-deploy pair:
+Mahogany matching (fused kerning) and the vanished bottom shawl row — both
+land with this deploy + a re-choose of the PDF in the portal.
+
+Proven on a constructed price-less catalog in his cut-out style, uploaded
+through the REAL panel: pill found (372..558 × 665..698, rose, white ink),
+filled once, grid chips tight; upload rig now asserts exactly-once (24).
+
+## Deploy
+
+**No migration.** Engine + portal, then RE-CHOOSE the PDF in the portal
+(pill detection happens at choose time).
+
 # ELFIA OFFICIAL STORE — v1.28.0 (27-08-2026)
 
 ## The overriding price is indistinguishable from the designer's

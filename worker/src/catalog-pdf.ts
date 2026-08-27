@@ -488,6 +488,25 @@ export async function patchUploadedCatalog(
      with no printed price under it gets its tap link and nothing else. */
   const pagesWithPrinted = new Set((map.price_sites ?? []).map((p) => p.page));
 
+  /* v1.29.0 — ONE price per product per page in insert mode. On a
+     price-less detail page both the name pill AND the Price heading resolve
+     to the same product, and both drew — "the price become duplicated!"
+     (the CEO, with the screenshot). The Price heading is the designer's
+     chosen spot, so it wins; without one, the top-most label of the product
+     draws and the rest keep only their tap links. */
+  const insertWinner = new Map<string, UploadedSite>(); // `${page}:${productId}` -> site
+  for (const pl of placed) {
+    const pageSet0 = productsOfPage.get(pl.site.page);
+    const prod = pl.heading
+      ? (pageSet0 && pageSet0.size === 1 ? [...pageSet0][0]! : null)
+      : pl.product;
+    if (!prod) continue;
+    const key = `${pl.site.page}:${prod.id}`;
+    const held = insertWinner.get(key);
+    const heldIsHeading = held ? isPriceHeading(held.label) : false;
+    if (!held || (pl.heading && !heldIsHeading)) insertWinner.set(key, pl.site);
+  }
+
   for (const { site, product: matched, heading } of placed) {
     const page = pages[site.page]!;
     const H = page.getHeight();
@@ -586,6 +605,7 @@ export async function patchUploadedCatalog(
 
     /* ---- INSERT (v1.21/1.25): no printed price under this label ---- */
     if (pagesWithPrinted.has(site.page)) continue; // her page, her price spots
+    if (insertWinner.get(`${site.page}:${product.id}`) !== site) continue; // one price per product per page
     const wasSize = size * 0.82;
     const gap = size * 0.45;
     const priceW = serif.widthOfTextAtSize(price, size);
@@ -600,7 +620,10 @@ export async function patchUploadedCatalog(
     const chipH = size * 1.5;
     const chipPad = size * 0.6;
     const chipW = totalW + chipPad * 2;
-    const chipTop = H - site.y1 - size * 0.3;    // PDF coords: just under the label
+    /* Snug under the label — "the price tagging flow too lower" (the CEO):
+       the extracted label box already carries descent room, so almost no
+       extra gap is wanted. */
+    const chipTop = H - site.y1 - size * 0.05;   // PDF coords: just under the label
     const chipBottom = chipTop - chipH;
     const chipX = cx - chipW / 2;
     const r = chipH / 2;
