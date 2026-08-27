@@ -524,15 +524,35 @@ export async function patchUploadedCatalog(
 
     if (heading && !product) continue; // a Price heading on a page it cannot read — leave the pill as the designer left it
 
-    /* Tap area, matched or not: the label block plus the price chip below.
-       Modest on purpose — in a layout this worker has never seen, a
-       generous rectangle could claim a neighbouring product. */
-    const tapTop = site.y0 - 6;
+    /* Tap area — THE MODEL'S PHOTO, not just the caption (the CEO:
+       "CLICKABLE should be based on the model photo like previous we
+       done"). The photo stands ABOVE its label, so the rectangle reaches
+       up to it: as far as 240pt, stopped early by whatever label sits
+       above, and sideways to halfway toward the nearest same-row label —
+       so no tap can ever claim a neighbouring product. Headings keep a
+       modest reach. */
+    let tapTop = site.y0 - 6;
+    let halfW = Math.max((site.x1 - site.x0) / 2 + 25, 86);
+    if (!heading) {
+      let upBound = -Infinity;
+      let sideGap = Infinity;
+      for (const other of placed) {
+        if (other.site === site || other.site.page !== site.page) continue;
+        const o = other.site;
+        const xOverlap = Math.min(site.x1, o.x1) - Math.max(site.x0, o.x0);
+        if (xOverlap > -20 && o.y1 <= site.y0 + 2) upBound = Math.max(upBound, o.y1);
+        const sameRow = Math.abs(((o.y0 + o.y1) - (site.y0 + site.y1)) / 2) < 40;
+        if (sameRow) sideGap = Math.min(sideGap, Math.abs(((o.x0 + o.x1) / 2) - cx) / 2 - 8);
+      }
+      tapTop = Math.max(site.y0 - 240, upBound === -Infinity ? site.y0 - 240 : upBound + 8);
+      if (Number.isFinite(sideGap)) halfW = Math.min(Math.max(halfW, sideGap), Math.max(halfW, 86));
+      if (Number.isFinite(sideGap) && sideGap > 0) halfW = Math.min(Math.max((site.x1 - site.x0) / 2 + 25, sideGap), 160);
+    }
     const tapBottom = site.y1 + size * 2.5;
     const href = product
       ? `${opts.linkBase}/p?id=${product.id}`
       : `${opts.linkBase}/shop?c=${collectionOfLabel(site.label)}`;
-    addLink(doc, page, site.x0 - 25, H - tapBottom, (site.x1 - site.x0) + 50, tapBottom - tapTop, href);
+    addLink(doc, page, cx - halfW, H - tapBottom, halfW * 2, tapBottom - tapTop, href);
     links += 1;
 
     if (!product) { unmatched.push({ label: site.label, why: "no live product matches" }); continue; }
@@ -619,7 +639,10 @@ export async function patchUploadedCatalog(
     const gap = tSize * 0.45;
     const priceW = sansUp.widthOfTextAtSize(price, tSize);
     const totalW = priceW + (was ? gap + sansUp.widthOfTextAtSize(was, wasSize) : 0);
-    const baseline = H - site.y1 - tSize * 0.45;
+    /* A visible breath between the name and its price — the CEO: "the
+       price tag should have at least a bit gap" (v1.30's 0.45 sat on the
+       descenders). */
+    const baseline = H - site.y1 - tSize * 0.8;
     const startX = cx - totalW / 2;
     page.drawText(price, { x: startX, y: baseline, size: tSize, font: sansUp, color: GRID_INK });
     if (was) {

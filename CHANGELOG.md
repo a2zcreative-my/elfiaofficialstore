@@ -1,3 +1,41 @@
+# ELFIA OFFICIAL STORE — v1.31.0 (27-08-2026)
+
+## The whole model is the tap target, breathing room, and a pill that cannot miss
+
+The CEO, live screenshots in hand: "CLICKABLE should be based on the model
+photo like previous we done! … the price tag should have at least a bit
+gap … price why not inside the PILL!"
+
+- **Tap targets cover the model's photo**, not just the caption: each
+  label's rectangle reaches up to the photo above it (as far as 240pt,
+  stopped by whatever sits above) and sideways to halfway toward the
+  nearest same-row label — so a tap can never claim a neighbouring
+  product. Verified: grid tiles 174×287pt, detail name pill 174×295pt.
+- **A visible breath between name and price** (gap 0.8× text size — the
+  v1.30 spacing sat on the descenders).
+- **The Price section can no longer come out empty** (portal v1.60.0):
+  when the pixel search doesn't find a pill under a "Price" heading, a
+  guaranteed spot directly under the heading is used instead, coloured
+  from its own pixels — pill-coloured on a pill, fabric-coloured on
+  fabric, price always drawn, always legible.
+
+**NOT code — data, and it needs the CEO** (the same list since the first
+upload): Bawal lumi Dusty Olive, Champagne Sand; Shawl Chiffon Black,
+Dark Purple have no PUBLISHED product with those names, and "Champange"
+is a typo in the PDF. The shop never guesses a price. Publish/rename them
+in the ELFIA tab and the prices appear on the next download — no
+re-upload needed. The upload preview lists these names before anything
+uploads.
+
+**ALSO NOT code — the stale tab**: the portal reads the PDF in the
+browser; a portal tab left open across a deploy keeps the OLD reader (the
+likely cause of this round's empty pill). After PUSH.bat: close the
+portal tab, open it fresh, then choose the PDF.
+
+## Deploy
+
+**No migration.** Engine + portal, fresh portal tab, re-choose the PDF.
+
 # ELFIA OFFICIAL STORE — v1.30.0 (27-08-2026)
 
 ## Plain price text, the pill truly filled, and the ELFIA hover
