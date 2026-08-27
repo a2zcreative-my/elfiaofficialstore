@@ -1,3 +1,53 @@
+# ELFIA OFFICIAL STORE — v1.27.0 (27-08-2026)
+
+## An uploaded catalog WITH printed prices: the system's price overrides it
+
+The CEO, with his designer's "Catalog Final Harga" (6 pages, prices
+printed): "when I upload into the portal it should sync … and the price
+from system automatically override the price in PDF which is we done it
+before."
+
+Done as before, now for ANY uploaded file:
+
+- **The map carries printed prices too** (`price_sites`: place + the page
+  colour sampled around each one by the portal's browser at upload — this
+  worker has no eyes). Each printed price is covered in its own background
+  colour — cream stays cream, his rose Price pill stays a rose pill — and
+  the live price is written in the same spot, sized like the designer's own
+  number, dark ink on light grounds and white on dark ones. Sale pairs
+  (live + struck old) draw when they fit the spot; the live price alone
+  when they don't.
+- **Whose price goes where**: each printed price pairs with the label
+  directly above it in its own column; the label's matched product decides.
+  A printed price whose label matches no live product is left EXACTLY as
+  printed — the same honesty rule as v1.19.
+- **On a designer-priced page, prices live only where she printed them**:
+  no inserted chips on those pages (an inserted chip was covering the "By
+  Elfia" line inside his name pill). Price-less pages keep insert mode
+  unchanged, so both kinds of catalog work.
+- **The matcher sees through display-face kerning** — his file reads
+  "Bawal lumiMahogany" as one word, which is WHY Mahogany had no price in
+  the live catalog. A product token (3+ chars) now also matches inside the
+  label with its spaces removed; the two-products-tie rule still referees.
+- **Extraction fixes from his real file**: labels on one printed row can
+  differ by hundredths of a point in baseline — the sort now quantises to
+  half a point, and a line may only continue within a narrow band of the
+  previous run (the unbounded backwards merge was folding his bottom shawl
+  row into an inside-out rectangle and dropping all three labels).
+
+Proven ON HIS FILE: all 6 pages, 23 labels priced live (RM 36 over printed
+RM 39, RM 11 with struck RM 14), the Price pills on both detail pages
+filled in place, covers invisible, "Shawl Chiffon Champange" honestly left
+printed (the typo — fix it or rename the product and it prices itself).
+Rigs: upload 24, extract 32 (portal), portal e2e 27, catalog-pdf 43,
+live-page 16 — all twice.
+
+## Deploy
+
+**No migration.** Engine (store) + portal — both PUSH.bat halves. Then
+re-choose the PDF in the portal and upload: the new map with printed-price
+places is built at that moment.
+
 # ELFIA OFFICIAL STORE — v1.26.0 (27-08-2026)
 
 ## The /catalog page is the tile grid again — full stop

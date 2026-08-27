@@ -111,13 +111,23 @@ const tokens = (s: string): string[] =>
 
 export function matchProduct(label: string, products: CatalogProduct[]): CatalogProduct | null {
   const labelSet = new Set(tokens(label));
+  /* v1.27.0 — the designer's display faces sometimes kern words together so
+     tightly that extraction reads "Bawal lumiMahogany" as one word, and the
+     token test misses a product plainly printed on the page (the CEO's
+     missing Mahogany price, diagnosed from his own file). So each token may
+     also match INSIDE the label with its spaces removed — 3+ characters
+     only, so a short token cannot fish a match out of an unrelated word.
+     The ambiguity rule below still referees: two products claiming one
+     label means nobody gets it. */
+  const squashed = label.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]/g, "");
+  const hasToken = (t: string) => labelSet.has(t) || (t.length >= 3 && squashed.includes(t));
   let best: CatalogProduct | null = null;
   let bestScore = 0;
   let tied = false;
   for (const p of products) {
     const distinctive = tokens(p.name).filter((t) => !GENERIC.has(t));
     if (distinctive.length === 0) continue;
-    if (!distinctive.every((t) => labelSet.has(t))) continue;
+    if (!distinctive.every(hasToken)) continue;
     if (distinctive.length > bestScore) { best = p; bestScore = distinctive.length; tied = false; }
     else if (distinctive.length === bestScore) tied = best !== null && best.id !== p.id;
   }
@@ -349,10 +359,24 @@ export interface UploadedSite {
   x0: number; y0: number; x1: number; y1: number; // the label's own rect
 }
 
+/** v1.27.0 — a PRINTED price in the uploaded file. The CEO's designer
+    ships catalogs WITH prices now ("the price from system automatically
+    override the price in PDF which is we done it before"): each one is
+    covered in its own background colour — sampled by the portal's browser
+    at upload, since this worker has no canvas — and the live price is
+    written in the same spot, the v1.19 treatment driven by the map. */
+export interface UploadedPriceSite {
+  page: number;
+  x0: number; y0: number; x1: number; y1: number;
+  bg?: [number, number, number]; // 0-255; absent → house cream
+}
+
 export interface UploadedMap {
   version: number;
   pages: { w: number; h: number }[];
   sites: UploadedSite[];
+  /** Absent = a price-less catalog: insert mode alone. */
+  price_sites?: UploadedPriceSite[];
 }
 
 /** Shape-check a map that travelled the bridge. A malformed map must fall
@@ -362,11 +386,21 @@ export function parseUploadedMap(raw: string): UploadedMap | null {
     const m = JSON.parse(raw) as UploadedMap;
     if (m.version !== 1 || !Array.isArray(m.pages) || !Array.isArray(m.sites)) return null;
     if (m.sites.length === 0 || m.sites.length > 300) return null;
-    const okSite = (s: UploadedSite) =>
+    const okRect = (s: { page: number; x0: number; y0: number; x1: number; y1: number }) =>
       Number.isInteger(s.page) && s.page >= 0 && s.page < m.pages.length &&
-      typeof s.label === "string" && s.label.length > 0 && s.label.length <= 120 &&
       [s.x0, s.y0, s.x1, s.y1].every(Number.isFinite) && s.x1 > s.x0 && s.y1 > s.y0;
-    return m.sites.every(okSite) ? m : null;
+    const okSite = (s: UploadedSite) =>
+      okRect(s) && typeof s.label === "string" && s.label.length > 0 && s.label.length <= 120;
+    if (!m.sites.every(okSite)) return null;
+    if (m.price_sites !== undefined) {
+      if (!Array.isArray(m.price_sites) || m.price_sites.length > 300) return null;
+      const okPrice = (s: UploadedPriceSite) =>
+        okRect(s) && (s.bg === undefined ||
+          (Array.isArray(s.bg) && s.bg.length === 3 &&
+           s.bg.every((v) => Number.isFinite(v) && v >= 0 && v <= 255)));
+      if (!m.price_sites.every(okPrice)) return null;
+    }
+    return m;
   } catch {
     return null;
   }
@@ -419,6 +453,34 @@ export async function patchUploadedCatalog(
     placed.push({ site, product, heading });
   }
 
+  /* v1.27.0 — printed prices in the file. The CEO: "the price from system
+     automatically override the price in PDF which is we done it before."
+     Each printed price is paired with the label directly above it (same
+     column, a designer's caption-then-price stack); the pairing decides
+     WHOSE live price replaces it. A printed price whose label matches no
+     live product is left exactly as printed — same honesty rule as the
+     shipped catalog since v1.19. */
+  const pricePaired = new Map<UploadedSite, UploadedPriceSite>();
+  for (const ps of map.price_sites ?? []) {
+    if (!pages[ps.page]) continue;
+    const pcx = (ps.x0 + ps.x1) / 2;
+    let best: { pl: Placed; gap: number } | null = null;
+    for (const pl of placed) {
+      if (pl.site.page !== ps.page || pricePaired.has(pl.site)) continue;
+      const lcx = (pl.site.x0 + pl.site.x1) / 2;
+      if (Math.abs(lcx - pcx) > 80) continue;          // a different column
+      const gap = ps.y0 - pl.site.y1;                  // label sits above its price
+      if (gap < -6 || gap > 60) continue;
+      if (!best || gap < best.gap) best = { pl, gap };
+    }
+    if (best) pricePaired.set(best.pl.site, ps);
+  }
+  /* A page that CARRIES printed prices was priced by the designer: every
+     price on it lives where she printed one. Inserting extra chips there
+     put a price on top of her "By Elfia" line. So on those pages, a label
+     with no printed price under it gets its tap link and nothing else. */
+  const pagesWithPrinted = new Set((map.price_sites ?? []).map((p) => p.page));
+
   for (const { site, product: matched, heading } of placed) {
     const page = pages[site.page]!;
     const H = page.getHeight();
@@ -453,6 +515,60 @@ export async function patchUploadedCatalog(
     const was = typeof product.compare_price_cents === "number"
       && product.compare_price_cents > product.price_cents
       ? rm(product.compare_price_cents) : null;
+
+    const printed = pricePaired.get(site);
+    if (printed) {
+      /* ---- OVERRIDE (v1.27.0): the file has a printed price here ----
+         Cover it in its own background colour (sampled by the portal at
+         upload; house cream when no sample travelled) and write the live
+         price in the same spot, sized like the designer's own number. Ink
+         flips to white on a dark ground — his detail pages print prices in
+         white on a rose pill. */
+      const w = printed.x1 - printed.x0;
+      const h = printed.y1 - printed.y0;
+      const padX = Math.max(2, h * 0.35);
+      const padY = Math.max(1.5, h * 0.22);
+      const bg = printed.bg
+        ? rgb(printed.bg[0] / 255, printed.bg[1] / 255, printed.bg[2] / 255) : CREAM;
+      page.drawRectangle({
+        x: printed.x0 - padX, y: H - printed.y1 - padY,
+        width: w + padX * 2, height: h + padY * 2, color: bg,
+      });
+      const lum = printed.bg
+        ? (0.2126 * printed.bg[0] + 0.7152 * printed.bg[1] + 0.0722 * printed.bg[2]) / 255 : 1;
+      const ink = lum > 0.55 ? GRID_INK : rgb(1, 1, 1);
+      const softInk = lum > 0.55 ? MUTED : rgb(0.94, 0.9, 0.92);
+
+      let pSize = Math.max(7, h * 0.8);
+      let wasOn = was;
+      const widthAt = (sz: number) =>
+        serif.widthOfTextAtSize(price, sz)
+        + (wasOn ? sz * 0.45 + serif.widthOfTextAtSize(wasOn, sz * 0.82) : 0);
+      const maxW = w + padX * 1.6;
+      if (widthAt(pSize) > maxW) pSize = Math.max(h * 0.5, pSize * (maxW / widthAt(pSize)));
+      if (widthAt(pSize) > maxW) wasOn = null; // the sale pair will not fit — the live price alone, legibly
+      const total = widthAt(pSize);
+      const pcx = (printed.x0 + printed.x1) / 2;
+      const startPX = pcx - total / 2;
+      const pBase = H - printed.y1 + h / 2 - pSize * 0.36;
+      page.drawText(price, { x: startPX, y: pBase, size: pSize, font: serif, color: ink });
+      if (wasOn) {
+        const wasSz = pSize * 0.82;
+        const wasX = startPX + serif.widthOfTextAtSize(price, pSize) + pSize * 0.45;
+        const wasW = serif.widthOfTextAtSize(wasOn, wasSz);
+        page.drawText(wasOn, { x: wasX, y: pBase, size: wasSz, font: serif, color: softInk });
+        page.drawLine({
+          start: { x: wasX - 0.5, y: pBase + wasSz * 0.28 },
+          end: { x: wasX + wasW + 0.5, y: pBase + wasSz * 0.28 },
+          thickness: Math.max(0.5, wasSz * 0.06), color: softInk,
+        });
+      }
+      patched.push(site.label);
+      continue;
+    }
+
+    /* ---- INSERT (v1.21/1.25): no printed price under this label ---- */
+    if (pagesWithPrinted.has(site.page)) continue; // her page, her price spots
     const wasSize = size * 0.82;
     const gap = size * 0.45;
     const priceW = serif.widthOfTextAtSize(price, size);

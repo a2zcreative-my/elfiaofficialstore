@@ -114,9 +114,24 @@ async function buildNewCatalog() {
   put3("Bawal lumi Uplan", 150, 300, 3, twoUp);
   put3("Bawal lumi Duska", 440, 300, 3, twoUp);
   put3("Price", 300, 600, 3, twoUp);
+  /* Page 5 — the designer PRINTS prices now (v1.27.0): a label with
+     "RM 99.00" under it, on a dark pill. The shop must cover the printed
+     number in the pill's own colour and write the live price there — and
+     must NOT also insert a chip under the second label (a printed page's
+     prices live where the designer printed them). */
+  const printed = doc.addPage([595.28, 841.89]);
+  printed.drawRectangle({ x: 0, y: 0, width: 595.28, height: 841.89, color: rgb(0.98, 0.96, 0.94) });
+  printed.drawRectangle({ x: 100, y: 841.89 - 460, width: 200, height: 60, color: rgb(0.35, 0.18, 0.25) });
+  put3("Bawal lumi Uplan", 200, 400, 4, printed);
+  const oldPrice = "RM 99.00";
+  const opW = serif.widthOfTextAtSize(oldPrice, 14);
+  printed.drawText(oldPrice, { x: 200 - opW / 2, y: 841.89 - 430 - 14, size: 14, font: serif, color: rgb(1, 1, 1) });
+  const price_sites = [{ page: 4, x0: 200 - opW / 2, y0: 430, x1: 200 + opW / 2, y1: 448, bg: [89, 46, 64] }];
+  put3("Bawal lumi Duska", 450, 400, 4, printed); // no printed price under it
+
   const bytes = await doc.save();
   const pg = { w: 595.28, h: 841.89 };
-  return { bytes: Buffer.from(bytes), map: { version: 1, pages: [pg, pg, pg, pg], sites } };
+  return { bytes: Buffer.from(bytes), map: { version: 1, pages: [pg, pg, pg, pg, pg], sites, price_sites } };
 }
 
 try {
@@ -172,6 +187,16 @@ try {
     ok("a two-product page's Price heading stays empty — never a guess",
        twoUpTxt.includes(rm(6150)) && twoUpTxt.includes(rm(7350))
        && (twoUpTxt.match(/RM \d/g) ?? []).length === 2, twoUpTxt.slice(0, 140));
+
+    /* v1.27.0 — the CEO: "the price from system automatically override the
+       price in PDF which is we done it before." A page with PRINTED prices:
+       the printed number is covered and the live price written in its
+       place, and no extra chips are inserted on that page. */
+    const printedTxt = perPage(5);
+    ok("the live price overrides the printed one, in its spot",
+       printedTxt.includes(rm(6150)), printedTxt.slice(0, 140));
+    ok("no extra chip is inserted on a designer-priced page",
+       !printedTxt.includes(rm(7350)), printedTxt.slice(0, 140));
 
     const skuId = (await (await fetch(`${API}/products`)).json()).products
       .find((p) => (p.sku ?? "").replace(/\s+/g, "").toUpperCase() === SKU)?.id;
