@@ -1,3 +1,39 @@
+# ELFIA OFFICIAL STORE — v1.30.0 (27-08-2026)
+
+## Plain price text, the pill truly filled, and the ELFIA hover
+
+The CEO, with the live price-less catalog: "THE PRICE STILL NOT APPEAR WHEN
+THERE IS A PRICE PILL WHICH IS EMPTY! … DONT INTRODUCE PILL for the PRICE
+… the FONT style should be same as the font of SAIZ … just a text is
+enough! this will cause an overlapped on the background."
+
+- **Why his pill stayed empty**: the panel HAD found it, but his pill
+  stretches far left of its "Price" heading — the site centred itself out
+  of the store's pairing reach, and having "printed prices" on the page
+  also suppressed the fallback text. Fixed on both ends: the panel clips
+  the pill site around the heading's centre (search widened to ±260pt,
+  still demanding two real pill edges), and the store's pairing reach grew
+  to 100pt. The price now sits INSIDE his pill, white, sans.
+- **Inserted prices are PLAIN TEXT now** — the v1.25 cream chip is gone
+  (it read as a pasted box on his fabric backgrounds). Sans face (the
+  "Saiz" style), the house maroon, struck old price alongside.
+- **One size across the catalog**: an inserted price never inherits a
+  display heading's scale — text under a 22pt "Price" matches the text
+  under an 11pt grid caption (clamped 7.5–10pt).
+- **/catalog hover** (his OPAI reference): each tile carries the ELFIA
+  studio backdrop — synthesised from a campaign photo, model removed,
+  wordmark kept (public/collection/elfia-backdrop.jpg) — which fades in
+  behind the cut-out model on cursor. Touch screens keep the still tile;
+  an opaque photo simply never shows the layer.
+
+Proven on a wide-pill price-less catalog uploaded through the REAL panel,
+and on the real /catalog page (hover screenshot with a genuine cut-out).
+Rigs: upload 24, catalog-pdf 43, live 16, extract 32 — all green.
+
+## Deploy
+
+**No migration.** Engine + website + portal, then RE-CHOOSE the PDF.
+
 # ELFIA OFFICIAL STORE — v1.29.0 (27-08-2026)
 
 ## Price-less catalogs, finished: inside the pill, once, and snug

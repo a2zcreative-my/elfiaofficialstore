@@ -475,7 +475,7 @@ export async function patchUploadedCatalog(
     for (const pl of placed) {
       if (pl.site.page !== ps.page || pricePaired.has(pl.site)) continue;
       const lcx = (pl.site.x0 + pl.site.x1) / 2;
-      if (Math.abs(lcx - pcx) > 80) continue;          // a different column
+      if (Math.abs(lcx - pcx) > 100) continue;         // a different column
       const gap = ps.y0 - pl.site.y1;                  // label sits above its price
       if (gap < -6 || gap > 60) continue;
       if (!best || gap < best.gap) best = { pl, gap };
@@ -603,41 +603,29 @@ export async function patchUploadedCatalog(
       continue;
     }
 
-    /* ---- INSERT (v1.21/1.25): no printed price under this label ---- */
+    /* ---- INSERT (v1.21, plain since v1.30): no printed price here ---- */
     if (pagesWithPrinted.has(site.page)) continue; // her page, her price spots
     if (insertWinner.get(`${site.page}:${product.id}`) !== site) continue; // one price per product per page
-    const wasSize = size * 0.82;
-    const gap = size * 0.45;
-    const priceW = serif.widthOfTextAtSize(price, size);
-    const totalW = priceW + (was ? gap + serif.widthOfTextAtSize(was, wasSize) : 0);
 
-    /* v1.25.0 — the price sits in a CREAM CHIP, a capsule in the house
-       paper colour. The CEO: "I see the price overlapping on the photo a
-       bit" — her new pages put labels on photographs, and bare rose text on
-       a photograph reads as a mistake. On the cream page the chip vanishes
-       into the background; on a photo it is a clean little plate. Same ink,
-       same sizes, nothing else moves. */
-    const chipH = size * 1.5;
-    const chipPad = size * 0.6;
-    const chipW = totalW + chipPad * 2;
-    /* Snug under the label — "the price tagging flow too lower" (the CEO):
-       the extracted label box already carries descent room, so almost no
-       extra gap is wanted. */
-    const chipTop = H - site.y1 - size * 0.05;   // PDF coords: just under the label
-    const chipBottom = chipTop - chipH;
-    const chipX = cx - chipW / 2;
-    const r = chipH / 2;
-    page.drawRectangle({ x: chipX + r, y: chipBottom, width: chipW - 2 * r, height: chipH, color: CREAM });
-    page.drawCircle({ x: chipX + r, y: chipBottom + r, size: r, color: CREAM });
-    page.drawCircle({ x: chipX + chipW - r, y: chipBottom + r, size: r, color: CREAM });
-
-    const baseline = chipBottom + chipH / 2 - size * 0.32;
+    /* PLAIN TEXT, nothing else. The CEO: "just a text is enough! this will
+       cause an overlapped on the background" — the cream chip of v1.25 read
+       as a pasted box on his fabric backgrounds. And ONE size across the
+       whole catalog ("should be same size as the Bawal lumi Mahogany price
+       size"): the price never inherits a display heading's scale, so the
+       text under a 22pt "Price" matches the text under an 11pt grid
+       caption. Sans, like his designer's own price lines ("font of SAIZ"). */
+    const tSize = Math.min(10, Math.max(7.5, labelH * 0.85));
+    const wasSize = tSize * 0.82;
+    const gap = tSize * 0.45;
+    const priceW = sansUp.widthOfTextAtSize(price, tSize);
+    const totalW = priceW + (was ? gap + sansUp.widthOfTextAtSize(was, wasSize) : 0);
+    const baseline = H - site.y1 - tSize * 0.45;
     const startX = cx - totalW / 2;
-    page.drawText(price, { x: startX, y: baseline, size, font: serif, color: GRID_INK });
+    page.drawText(price, { x: startX, y: baseline, size: tSize, font: sansUp, color: GRID_INK });
     if (was) {
       const wasX = startX + priceW + gap;
-      const wasW = serif.widthOfTextAtSize(was, wasSize);
-      page.drawText(was, { x: wasX, y: baseline, size: wasSize, font: serif, color: MUTED });
+      const wasW = sansUp.widthOfTextAtSize(was, wasSize);
+      page.drawText(was, { x: wasX, y: baseline, size: wasSize, font: sansUp, color: MUTED });
       page.drawLine({
         start: { x: wasX - 0.5, y: baseline + wasSize * 0.28 },
         end: { x: wasX + wasW + 0.5, y: baseline + wasSize * 0.28 },
