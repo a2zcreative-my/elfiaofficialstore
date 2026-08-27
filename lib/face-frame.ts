@@ -60,11 +60,15 @@ export interface FaceTargets {
   zone: number;
 }
 
-/* The /catalog circles. The face sits a little above the middle, which is
-   where a portrait wants to be in a round frame, and the head zone fills
-   just over half the height — close to what the shop already showed for a
-   typical photo, so nothing jumps when this starts working. */
-export const CIRCLE_TARGETS: FaceTargets = { x: 0.5, y: 0.42, zone: 0.58 };
+/* The /catalog circles.
+   v1.37.0 — the CEO, sent a tile of his own: "I want the photo seat like
+   this instead of zoom which is looks not so nice!!!!" The first pass
+   aimed the head zone at 58% of the tile, which normalised every face to
+   the size of a tight head-and-shoulders shot and blew his wider ones up
+   until the shoulders were cropped away. These three numbers are measured
+   OFF THAT TILE — crown 27%, shoulders 57%, so a head zone of 30%, and the
+   face landing 40% down. The alignment is unchanged; the zoom is his. */
+export const CIRCLE_TARGETS: FaceTargets = { x: 0.5, y: 0.4, zone: 0.3 };
 
 /** Opaque from this value up. Matting leaves soft edges; half is the edge. */
 const ALPHA_ON = 128;
@@ -176,7 +180,11 @@ export function frameFromAlphaGrid(
      of it in percentages of the tile, so it holds at any tile size and
      needs no resize listener. */
   const heightPct = (100 * targets.zone * h) / zone;
-  if (!Number.isFinite(heightPct) || heightPct < 80 || heightPct > 420) return null;
+  /* The floor is low on purpose: a photo shot close in is SHRUNK to sit in
+     the circle like the others rather than filling it, which is the whole
+     of "seat like this instead of zoom". The ceiling still refuses a
+     silhouette so small that matching it would be a soft, cropped mess. */
+  if (!Number.isFinite(heightPct) || heightPct < 40 || heightPct > 300) return null;
   const widthPct = (heightPct * w) / h;
 
   return {
