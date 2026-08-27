@@ -85,6 +85,24 @@ const json = (res, body) => {
 http.createServer((req, res) => {
   const u = new URL(req.url, "http://localhost");
   if (u.pathname === "/api/v1/products") return json(res, { products, slides });
+  /* v1.33.0 — one product, so the PRODUCT PAGE can be driven by a rig too
+     (hover-backdrop-check). The real worker answers the same shape. */
+  const one = u.pathname.match(/^\/api\/v1\/products\/(\d+)$/);
+  if (one) {
+    const p = products.find((x) => String(x.id) === one[1]);
+    if (p) return json(res, { product: p, ...p });
+    res.writeHead(404, { "content-type": "application/json" });
+    return res.end('{"error":{"code":"not_found"}}');
+  }
+  /* v1.33.0 — the hover backdrop's stable URL. The real worker serves the
+     portal's upload here and falls back to this same shipped file. */
+  if (u.pathname === "/api/v1/tile-backdrop") {
+    const file = path.join(PUB, "collection", "elfia-backdrop.jpg");
+    if (fs.existsSync(file)) {
+      res.writeHead(200, { "content-type": "image/jpeg" });
+      return res.end(fs.readFileSync(file));
+    }
+  }
   if (u.pathname === "/api/v1/store-config") {
     return json(res, {
       bank_line: "1234 5678 9012 - Test Payee (fixture)",

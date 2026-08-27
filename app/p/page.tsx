@@ -196,10 +196,19 @@ function ProductInner() {
         <div className="grid gap-7 sm:grid-cols-2 sm:gap-10">
           {/* 3:4 — the shape of the product photography, so the whole shot
               shows here even though the catalogue grid frames it 4:5. */}
-          <div className="relative aspect-[3/4] overflow-hidden rounded-3xl bg-elfia-veil ring-1 ring-elfia-line">
+          <div className="group relative aspect-[3/4] overflow-hidden rounded-3xl bg-elfia-veil ring-1 ring-elfia-line">
+            {/* v1.33.0 — the same hover backdrop the cards and the /catalog
+                tiles use, so a cut-out model stands in the ELFIA studio here
+                too rather than on a flat pad. Seen only through a cut-out
+                photo; an opaque one covers it whole. */}
+            {p.image_key && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src="/api/v1/tile-backdrop" alt="" aria-hidden loading="lazy" decoding="async"
+                className="absolute inset-0 h-full w-full object-cover object-top opacity-0 transition-opacity duration-500 group-hover:opacity-100" />
+            )}
             {p.image_key ? (
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={imageUrl(p.image_key)} alt={p.name} className="h-full w-full object-cover object-top" />
+              <img src={imageUrl(p.image_key)} alt={p.name} className="relative h-full w-full object-cover object-top" />
             ) : (
               <div className="flex h-full items-center justify-center text-3xl font-bold tracking-widest text-elfia-rose/40">ELFIA</div>
             )}

@@ -1,3 +1,22 @@
+# ELFIA OFFICIAL STORE — v1.33.0 (27-08-2026)
+
+## The ELFIA backdrop on every product card, not just /catalog
+
+The CEO, pointing at the shop grid: "for this area also need to have the
+hover!"
+
+- **Every product card** — home rails, Studio picks, the shop grid,
+  collections, the wishlist, "you may also like" — now fades the ELFIA
+  backdrop in behind the photo on hover, exactly like the /catalog
+  tiles. Same single source: /api/v1/tile-backdrop, so the picture is
+  whatever was uploaded in the portal (shipped one until then), and one
+  upload changes every card in the shop at once.
+- **The product page's own photo** got the same hover, so a cut-out
+  model stands in the studio there too instead of on a flat pad.
+- It costs nothing where photos are still opaque: the layer is only ever
+  SEEN through a cut-out photo. Press "Cut out ALL photo backgrounds" in
+  the portal once and the whole shop gains the effect together.
+
 # ELFIA OFFICIAL STORE — v1.32.0 (27-08-2026)
 
 ## The carousel is yours alone, and the hover backdrop is uploadable

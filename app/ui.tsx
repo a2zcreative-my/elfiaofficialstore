@@ -194,10 +194,26 @@ export function ProductCard({ p, compact = false }: { p: Product; compact?: bool
   return (
     <Link href={`/p?id=${p.id}`} className="group block">
       <div className="relative aspect-[4/5] overflow-hidden rounded-2xl bg-elfia-veil ring-1 ring-elfia-line">
+        {/* v1.33.0 (CEO: "for this area also need to have the hover!") — the
+            same ELFIA backdrop the /catalog tiles use, on every product card
+            in the shop: home rails, the grid, collections, the wishlist.
+            One stable worker URL, so the picture is whatever the portal
+            uploaded (or the shipped one when nothing is). It is only ever
+            SEEN through a cut-out photo; an opaque photo covers it whole,
+            which is why it costs nothing to have here. Drawn only when
+            there is a photo — the "ELFIA" placeholder keeps its plain pad. */}
+        {p.image_key && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src="/api/v1/tile-backdrop" alt="" aria-hidden loading="lazy" decoding="async"
+            className="absolute inset-0 h-full w-full object-cover object-top opacity-0 transition-opacity duration-500 group-hover:opacity-100" />
+        )}
         {p.image_key ? (
           // eslint-disable-next-line @next/next/no-img-element
+          /* `relative` is load-bearing: the backdrop above is positioned, and
+             a positioned box paints over a static one whatever the source
+             order — without it the photo would sit UNDER its own backdrop. */
           <img src={imageUrl(p.image_key)} alt={p.name} loading="lazy"
-            className={`h-full w-full object-cover object-top transition-transform duration-500 group-hover:scale-[1.04] ${out ? "opacity-70" : ""}`} />
+            className={`relative h-full w-full object-cover object-top transition-transform duration-500 group-hover:scale-[1.04] ${out ? "opacity-70" : ""}`} />
         ) : (
           <div className="flex h-full items-center justify-center text-2xl font-bold tracking-widest text-elfia-rose/40">ELFIA</div>
         )}
