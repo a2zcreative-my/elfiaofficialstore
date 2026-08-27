@@ -391,12 +391,16 @@ export interface PullResult {
       (PDF + map, cover included) into R2. Read from the sync response by the
       admin surface and the rigs, not from stored state. */
   catalog_synced: boolean;
+  /** v1.32.0 — true when this pull downloaded a newly uploaded /catalog
+      hover backdrop into R2. */
+  backdrop_synced: boolean;
   error?: string;
 }
 
 const EMPTY_PULL: Omit<PullResult, "configured" | "error"> = {
   updated: [], price_updated: [], unchanged: 0, unmatched_portal: [], unmatched_store: [], deferred: [],
   created: [], published: [], stuck_skus: [], photos: 0, photo_errors: [], settings_changed: [], catalog_synced: false,
+  backdrop_synced: false,
 };
 
 /** Refresh piece counts from the portal, by SKU — case- and whitespace-
@@ -433,6 +437,9 @@ export async function pullStock(env: Env): Promise<PullResult> {
      rule every optional field on this feed already follows. */
   let feedSettings: { shipping_cents?: unknown; free_above_cents?: unknown } | undefined;
   let feedCatalog: { url?: string; map_url?: string; cover_url?: string; updated_at?: string } | undefined;
+  /* v1.32.0 — the /catalog hover backdrop, uploaded in the portal. Absent =
+     the store keeps what it has (the shipped ELFIA backdrop included). */
+  let feedBackdrop: { url?: string; updated_at?: string } | undefined;
   try {
     const r = await fetch(env.BRIDGE_URL!, { headers: { "X-Bridge-Key": env.BRIDGE_KEY! } });
     if (!r.ok) throw new Error(`portal answered ${r.status} — check the key matches on both sides`);
@@ -445,11 +452,14 @@ export async function pullStock(env: Env): Promise<PullResult> {
          label map her browser extracted from it, and a cover image. Absent
          means the store keeps what it has — the shipped catalog included. */
       catalog?: { url?: string; map_url?: string; cover_url?: string; updated_at?: string };
+      /* v1.32.0 — the /catalog hover backdrop. */
+      backdrop?: { url?: string; updated_at?: string };
     };
     items = payload.items ?? [];
     feedSlides = Array.isArray(payload.slides) ? payload.slides : undefined;
     feedSettings = payload.settings && typeof payload.settings === "object" ? payload.settings : undefined;
     feedCatalog = payload.catalog && typeof payload.catalog === "object" ? payload.catalog : undefined;
+    feedBackdrop = payload.backdrop && typeof payload.backdrop === "object" ? payload.backdrop : undefined;
   } catch (e) {
     const msg = e instanceof Error ? e.message : "could not reach the portal bridge";
     await setState(env, "last_pull_result", `failed: ${msg}`);
@@ -887,6 +897,35 @@ export async function pullStock(env: Env): Promise<PullResult> {
     }
   }
 
+  /* ---- the /catalog hover backdrop (v1.32.0) ----
+     Downloaded like the catalog: only when the marker changes, into this
+     store's own R2, so /api/v1/tile-backdrop never leans on the portal at
+     request time. One image, whole-or-nothing. */
+  let backdrop_synced = false;
+  if (feedBackdrop?.url && feedBackdrop.updated_at) {
+    const current = await getState(env);
+    if (current.backdrop_marker !== feedBackdrop.updated_at) {
+      try {
+        const bdR = await fetch(feedBackdrop.url);
+        if (bdR.ok) {
+          const ct = (bdR.headers.get("Content-Type") ?? "").split(";")[0]!.trim().toLowerCase();
+          const bytes = await bdR.arrayBuffer();
+          if (["image/jpeg", "image/png", "image/webp"].includes(ct) && bytes.byteLength > 0 && bytes.byteLength <= 6_000_000) {
+            await env.MEDIA.put("catalog/backdrop.img", bytes, { httpMetadata: { contentType: ct } });
+            await setState(env, "backdrop_marker", feedBackdrop.updated_at);
+            backdrop_synced = true;
+          } else {
+            photo_errors.push(`backdrop: refused (${ct || "no type"}, ${bytes.byteLength} bytes)`);
+          }
+        } else {
+          photo_errors.push(`backdrop: portal answered ${bdR.status}`);
+        }
+      } catch (e) {
+        photo_errors.push(`backdrop: ${e instanceof Error ? e.message : "download failed"}`);
+      }
+    }
+  }
+
   /* A row still waiting in the review list came FROM the portal, so calling
      it "unknown there" the moment the feed drops it would be noise. Only
      published products are reconciled against the portal. */
@@ -902,6 +941,7 @@ export async function pullStock(env: Env): Promise<PullResult> {
     `${slides_synced ? `, ${slides_synced} slide${slides_synced === 1 ? "" : "s"}` : ""}` +
     `${settings_changed.length ? `, ${settings_changed.join(", ")}` : ""}` +
     `${catalog_synced ? ", catalog updated" : ""}` +
+    `${backdrop_synced ? ", hover backdrop updated" : ""}` +
     `${deferred.length ? `, ${deferred.length} deferred` : ""}` +
     `${unmatched_portal.length ? `, ${unmatched_portal.length} unknown here` : ""}` +
     `${unmatched_store.length ? `, ${unmatched_store.length} unknown there` : ""}`);
@@ -912,7 +952,7 @@ export async function pullStock(env: Env): Promise<PullResult> {
   return {
     configured: true, updated, price_updated, unchanged,
     unmatched_portal, unmatched_store, deferred, created, published, stuck_skus, photos, photo_errors,
-    settings_changed, catalog_synced,
+    settings_changed, catalog_synced, backdrop_synced,
   };
 }
 

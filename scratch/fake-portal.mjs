@@ -55,6 +55,8 @@ let settings;                // undefined | { shipping_cents?, free_above_cents?
 /* v1.21.0 — the CEO's uploaded catalog: pdf + map + cover travel the feed.
    undefined = never uploaded = the store keeps what it has. */
 let catalog;                 // undefined | { pdf:Buffer, map:object, cover:Buffer, updated_at }
+/* v1.32.0 — the /catalog hover backdrop. undefined = never uploaded. */
+let backdrop;                // undefined | { kind:"png"|"html"|"huge", updated_at }
 
 /* A genuine 1x1 PNG — the store checks the Content-Type and the byte length,
    so the bytes have to be real. */
@@ -139,6 +141,12 @@ http.createServer(async (req, res) => {
   }
   if (url.pathname === "/media/catalog-cover.jpg" && catalog) {
     res.writeHead(200, { "content-type": "image/jpeg" }); return res.end(catalog.cover);
+  }
+  if (url.pathname === "/_backdrop") {
+    const b = await body(req);
+    if (b.clear) { backdrop = undefined; return send(res, 200, { ok: true }); }
+    backdrop = { kind: b.kind ?? "png", updated_at: b.updated_at ?? `bd-${Date.now()}` };
+    return send(res, 200, { ok: true, updated_at: backdrop.updated_at });
   }
   if (url.pathname === "/_settings") {
     const b = await body(req);
@@ -244,6 +252,13 @@ http.createServer(async (req, res) => {
         map_url: "http://127.0.0.1:8200/media/catalog-map.json",
         cover_url: "http://127.0.0.1:8200/media/catalog-cover.jpg",
         updated_at: catalog.updated_at,
+      } } : {}),
+      /* v1.32.0 — the hover backdrop, exactly as serializeBridgeBackdrop
+         emits it: URL + marker, or nothing at all. The kind picks which
+         media file serves it, so the store's refusals get exercised too. */
+      ...(backdrop ? { backdrop: {
+        url: `http://127.0.0.1:8200/media/${backdrop.kind}.png`,
+        updated_at: backdrop.updated_at,
       } } : {}),
     });
   }

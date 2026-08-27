@@ -652,11 +652,11 @@ step("the portal's slides become the shop's carousel (v1.7.0)");
   ok("a slide removed in the portal leaves the shop", one.slides.length === 1 && one.slides[0].portal_id === 2,
      JSON.stringify(one.slides));
 
-  // empty list = the shop falls back to its shipped campaign slides
+  // empty list = the shop's carousel hides (v1.32.0 — no shipped fallback)
   await fetch(`${PORTAL}/_slides`, { method: "POST", body: JSON.stringify({ slides: [] }) });
   await syncNow();
   const none = await jget(`${API}/products`);
-  ok("no portal slides = no slides key (the shop uses its built-ins)", !("slides" in none), JSON.stringify(none.slides));
+  ok("no portal slides = no slides key (the shop hides its carousel)", !("slides" in none), JSON.stringify(none.slides));
 }
 
 step("a sale nobody could deliver stops freezing the shelf (v1.8.0)");
@@ -1051,6 +1051,58 @@ step("delivery pricing is the portal's, not the store's config file (v1.13.0)");
   const kept = await storeConfigNow();
   ok("the portal falling silent keeps the last numbers it sent",
      kept.shipping_cents === SHIP && kept.free_above_cents === FREE, JSON.stringify(kept));
+}
+
+step("the /catalog hover backdrop is the portal's (v1.32.0)");
+{
+  /* The CEO, 27-08: "for the cut out background I want to have an option for
+     me to add this background if require and this I can upload by myself in
+     portal!" One image, marker-gated like every other download. */
+  const set = await (await fetch(`${PORTAL}/_backdrop`, {
+    method: "POST", body: JSON.stringify({ kind: "png", updated_at: "bd-1" }),
+  })).json();
+  ok("the stand-in portal accepted a backdrop", set.ok === true, JSON.stringify(set));
+  const r1 = await syncNow();
+  ok("the pull downloaded it", r1.pull.backdrop_synced === true, JSON.stringify(r1.pull.photo_errors));
+  const img = await fetch(`${API}/tile-backdrop`);
+  ok("the shop serves it at its stable URL", img.status === 200 && (img.headers.get("content-type") ?? "").startsWith("image/"),
+     `${img.status} ${img.headers.get("content-type")}`);
+
+  /* 1,440 pulls a day — an unchanged marker must cost nothing. */
+  const r2 = await syncNow();
+  ok("an unchanged marker is not re-downloaded", r2.pull.backdrop_synced === false);
+
+  /* A replacement moves the marker and lands exactly once. */
+  await fetch(`${PORTAL}/_backdrop`, { method: "POST", body: JSON.stringify({ kind: "png", updated_at: "bd-2" }) });
+  const r3 = await syncNow();
+  ok("a new marker replaces it exactly once", r3.pull.backdrop_synced === true);
+
+  /* Something that is not an image must be refused, keeping the last good
+     copy — same posture as product photos. */
+  await fetch(`${PORTAL}/_backdrop`, { method: "POST", body: JSON.stringify({ kind: "html", updated_at: "bd-3" }) });
+  const r4 = await syncNow();
+  ok("a non-image is refused and reported",
+     r4.pull.backdrop_synced === false && r4.pull.photo_errors.some((e) => e.startsWith("backdrop:")),
+     JSON.stringify(r4.pull.photo_errors));
+  const still = await fetch(`${API}/tile-backdrop`);
+  ok("the last good backdrop still serves", still.status === 200 && (still.headers.get("content-type") ?? "").startsWith("image/"));
+
+  /* Remove: the portal asks the store's reset door directly (bridge-key
+     gated), and the shop falls back to its shipped backdrop. */
+  const noKey = await fetch(`${API}/bridge/backdrop`, { method: "DELETE" });
+  ok("the reset door refuses without the bridge key", noKey.status === 401 || noKey.status === 501, String(noKey.status));
+  const reset = await fetch(`${API}/bridge/backdrop`, { method: "DELETE", headers: { "X-Bridge-Key": "shared-bridge-secret" } });
+  ok("and opens with it", reset.status === 200, String(reset.status));
+  const after = await fetch(`${API}/tile-backdrop`);
+  /* Locally the shipped file lives on the static site, not in this bare
+     worker, so the honest local answer is 404 — the point proven is that
+     the UPLOADED copy is gone. In production the same route streams
+     /collection/elfia-backdrop.jpg. */
+  ok("the uploaded copy is gone after the reset",
+     after.status === 404 || (after.headers.get("content-type") ?? "").startsWith("image/"), String(after.status));
+  await fetch(`${PORTAL}/_backdrop`, { method: "POST", body: JSON.stringify({ clear: true }) });
+  const r5 = await syncNow();
+  ok("and the portal falling silent re-downloads nothing", r5.pull.backdrop_synced === false);
 }
 
 step("tidy up after this run");

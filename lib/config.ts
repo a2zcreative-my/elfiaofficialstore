@@ -142,17 +142,13 @@ export const categoryChips = (products: Product[]): { key: string; label: string
   collectionsOf(products).filter((g) => g.key !== FEATURED_KEY)
     .map((g) => ({ key: g.key, label: g.label }));
 
-/* Hero carousel brand slides — the CEO's campaign shots, shipped with the
-   site. Featured products (admin toggle) are appended after these.
-
-   `position` is the CSS object-position for the slide's crop. The campaign
-   shots are portrait group photos: cropped from the top they would show mostly
-   ceiling, so they sit lower in frame. Product slides keep the default "top",
-   which is where the hijab is. */
-export const BRAND_SLIDES = [
-  { image: "/collection/campaign-studio.jpg", title: "The Bawal Collection", subtitle: "First Sight, Forever Yours", position: "50% 45%" },
-  { image: "/collection/campaign-salon.jpg", title: "Made for every day", subtitle: "Office-ready, live-tested.", position: "50% 38%" },
-] as const;
+/* v1.32.0 — BRAND_SLIDES is gone. The pair of shipped campaign shots that
+   used to carry the hero carousel when the portal had no slides was the last
+   hardcoded content on the homepage, and the CEO asked for it out ("Homepage
+   carousel only appear for my uploaded!"). The carousel now renders portal
+   slides plus Featured products, or nothing at all. The campaign photos
+   themselves stay in public/collection/ — the categories page, the account
+   page, and the share-preview fallback still use them as decoration. */
 
 export interface StoreConfig {
   bank_line: string;

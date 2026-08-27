@@ -1,3 +1,30 @@
+# ELFIA OFFICIAL STORE — v1.32.0 (27-08-2026)
+
+## The carousel is yours alone, and the hover backdrop is uploadable
+
+The CEO: "this should not appear in Homepage carousel, I think this is
+hardcoded. I want Homepage carousel only appear for my uploaded!" and
+"for the cut out background I want to have an option for me to add this
+background if require and this I can upload by myself in portal!"
+
+- **The shipped campaign slides are GONE from the homepage carousel.**
+  The carousel now shows only what the portal uploaded (plus products
+  marked Featured, which are also yours). No portal slides and no
+  Featured products = no carousel at all — nothing hardcoded can appear.
+- **The /catalog hover backdrop is the portal's now.** A new "Catalog
+  hover background" card in the portal's ELFIA tab (portal v1.61.0)
+  takes a JPEG/PNG/WebP; the store downloads it marker-gated like every
+  other asset and serves it at one stable URL (/api/v1/tile-backdrop),
+  so every tile's hover switches with no site rebuild. Nothing uploaded
+  (or Remove pressed) = the shipped ELFIA backdrop, exactly as before.
+- New store plumbing: `backdrop` key on the bridge feed, pull downloads
+  into R2 with type/size checks (refusals reported like photo errors),
+  DELETE /api/v1/bridge/backdrop reset door for the portal's Remove.
+
+**To see it: run PUSH.bat in BOTH folders** (store for the carousel and
+the worker; portal for the upload card), then close and reopen the
+portal tab before uploading.
+
 # ELFIA OFFICIAL STORE — v1.31.0 (27-08-2026)
 
 ## The whole model is the tap target, breathing room, and a pill that cannot miss

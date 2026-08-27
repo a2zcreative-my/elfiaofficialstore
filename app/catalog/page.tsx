@@ -74,14 +74,17 @@ function Tile({ p }: { p: Product }) {
     <Link href={`/p?id=${p.id}`} className="group flex flex-col items-center text-center">
       <span className="relative block aspect-square w-full overflow-hidden rounded-full bg-elfia-blush ring-1 ring-elfia-line">
         {/* v1.30.0 — the CEO: "when I cursor to it, it will appear the
-            background of ELFIA." The brand's studio backdrop (synthesised
-            from a campaign photo — model removed, wordmark kept) sits
-            behind the product photo and fades in on hover. With a cut-out
-            photo the model appears to step back into the ELFIA studio;
-            with an opaque photo the layer is simply never seen. Touch
-            screens have no cursor and keep the still tile. */}
+            background of ELFIA." The backdrop sits behind the product photo
+            and fades in on hover. With a cut-out photo the model appears to
+            step back into the ELFIA studio; with an opaque photo the layer
+            is simply never seen. Touch screens have no cursor and keep the
+            still tile.
+            v1.32.0 — the image itself is the portal's now ("this I can
+            upload by myself in portal!"): one stable worker URL serves the
+            uploaded backdrop when one exists and the shipped ELFIA backdrop
+            otherwise, so this page never knows or cares which. */}
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/collection/elfia-backdrop.jpg" alt="" aria-hidden
+        <img src="/api/v1/tile-backdrop" alt="" aria-hidden
           className="absolute inset-0 h-full w-full object-cover object-top opacity-0 transition-opacity duration-500 group-hover:opacity-100"
           loading="lazy" decoding="async" />
         {p.image_key ? (

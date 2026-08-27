@@ -79,7 +79,7 @@ export interface Env {
   CATALOG_FILENAME?: string;
 }
 
-const VERSION = "1.31.0";
+const VERSION = "1.32.0";
 const STATUSES = ["pending_payment", "payment_review", "paid", "shipped", "completed", "cancelled"] as const;
 type Status = (typeof STATUSES)[number];
 
@@ -615,6 +615,43 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
       await env.MEDIA.delete("catalog/map.json");
       await env.MEDIA.delete("catalog/cover.jpg");
       await setState(env, "catalog_marker", "");
+      return json({ ok: true, source: "shipped" });
+    }
+
+    /* v1.32.0 — the /catalog hover backdrop (CEO: "for the cut out
+       background I want to have an option for me to add this background if
+       require and this I can upload by myself in portal!"). One stable URL,
+       same shape as /catalog-cover: the portal's uploaded image when one
+       exists, the shipped ELFIA backdrop otherwise — so the page never has
+       to know which it is getting, and an upload swaps every tile's hover
+       with no site rebuild. */
+    if (path === "/tile-backdrop" && method === "GET") {
+      const up = await env.MEDIA.get("catalog/backdrop.img");
+      if (up) {
+        return new Response(up.body, {
+          headers: {
+            "Content-Type": up.httpMetadata?.contentType ?? "image/jpeg",
+            "Cache-Control": "public, max-age=300",
+          },
+        });
+      }
+      const shipped = await fetch(`${env.STORE_ORIGIN || url.origin}/collection/elfia-backdrop.jpg`);
+      if (shipped.ok) {
+        return new Response(shipped.body, {
+          headers: { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=300" },
+        });
+      }
+      return err("not_found", "No backdrop available", 404);
+    }
+
+    /* v1.32.0 — remove an uploaded backdrop and return to the shipped one.
+       Bridge-key gated, exactly like /bridge/catalog above. */
+    if (path === "/bridge/backdrop" && method === "DELETE") {
+      if (!env.BRIDGE_KEY) return err("not_configured", "Set the BRIDGE_KEY secret first", 501);
+      const givenBd = request.headers.get("X-Bridge-Key") ?? "";
+      if (!timingSafeEqual(givenBd, env.BRIDGE_KEY)) return err("unauthorized", "Bad key", 401);
+      await env.MEDIA.delete("catalog/backdrop.img");
+      await setState(env, "backdrop_marker", "");
       return json({ ok: true, source: "shipped" });
     }
 

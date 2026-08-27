@@ -8,8 +8,10 @@
  * catalogue. On a phone this is the app's Home tab; on a desktop it is the
  * shop's front page — same markup, two shapes.
  *
- * Carousel (CEO: "make carousel slide automatically on the main"): the brand
- * campaign slides first, then every product an admin marks Featured.
+ * Carousel (CEO: "make carousel slide automatically on the main"): the
+ * portal's uploaded slides first, then every product an admin marks Featured.
+ * Nothing else — since v1.32.0 there are no shipped fallback slides, and with
+ * nothing uploaded the carousel simply does not render.
  * Auto-advances every 5s, pauses while the pointer is over it, arrows + dots
  * for manual control, and a featured slide clicks through to its product.
  *
@@ -21,7 +23,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
 import {
-  BRAND_SLIDES, categoryChips, collectionKey, collectionOf, collectionsOf,
+  categoryChips, collectionKey, collectionOf, collectionsOf,
   cutoutHeadroom, fmtRM, imageUrl, slideFraming, splitName,
   type PortalSlide, type Product,
 } from "@/lib/config";
@@ -246,12 +248,13 @@ export default function Home() {
 
   const all = products ?? [];
 
-  /* v1.7.0 — the carousel is the portal's when the portal has authored one:
-     the slides uploaded in its ELFIA tab replace the shipped campaign
-     shots. No portal slides = the shipped pair, exactly as before. Featured
-     products ride after either set, unchanged. */
-  const heroSlides: Slide[] = portalSlides.length > 0
-    ? portalSlides.map((s) => {
+  /* v1.32.0 (CEO: "I want Homepage carousel only appear for my uploaded!")
+     — the carousel is the portal's, full stop. The shipped campaign pair
+     that used to stand in when the portal had no slides is gone: no portal
+     slides (and no Featured products) = no carousel at all, which is what
+     "only my uploaded" means. Featured products still ride after the portal
+     set, because those are his uploads too. */
+  const heroSlides: Slide[] = portalSlides.map((s) => {
         /* v1.8.0 (CEO: "I want to adjustable the photo … it is look too zoom")
            — the crop is no longer this file's guess. The portal aims it. */
         const f = slideFraming(s);
@@ -268,8 +271,7 @@ export default function Home() {
             cutoutScale: Math.min(160, Math.max(100, Math.round(Number(s.cutout_scale)) || 118)),
           } : {}),
         };
-      })
-    : [...BRAND_SLIDES];
+      });
 
   const slides: Slide[] = [
     ...heroSlides,
