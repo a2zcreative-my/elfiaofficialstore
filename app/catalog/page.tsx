@@ -44,12 +44,13 @@
  * ever left looking at an empty box.
  */
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import {
   STORE, collectionsOf, comparePrice, fmtRM, imageUrl, isSoldOut, splitName,
   type Product,
 } from "@/lib/config";
+import { measureFaceFrame, type FaceFrame } from "@/lib/face-frame";
 
 import { Icon, useDataRefresh } from "../ui";
 
@@ -64,12 +65,47 @@ const COVER = "/api/v1/catalog-cover";
     addresses, so nothing already shared breaks. */
 const PDF = "/catalog.pdf";
 
+/* v1.36.0 — one measurement per PHOTO, not per tile and not per render.
+   The same shade can appear twice on a page and the page re-renders on
+   every price refresh; measuring is cheap but it is not free, and a photo's
+   silhouette does not change between renders. */
+const frames = new Map<string, FaceFrame | null>();
+const measure = (src: string, img: HTMLImageElement): FaceFrame | null => {
+  if (!frames.has(src)) frames.set(src, measureFaceFrame(img));
+  return frames.get(src) ?? null;
+};
+
+/**
+ * Measure when the photo is READY, which is not the same as when it fires
+ * `load`.
+ *
+ * An `onLoad` prop alone loses the race the moment the photo is in cache:
+ * the browser has already finished with it before React attaches the
+ * handler, so the event never comes and the tile keeps the fallback crop —
+ * on a second visit, which is most visits. This attaches through the ref
+ * instead and asks the element whether it is already done.
+ */
+const useFaceFrame = (src: string | null) => {
+  const [frame, setFrame] = useState<FaceFrame | null>(() => (src ? frames.get(src) ?? null : null));
+  const ref = useCallback((el: HTMLImageElement | null) => {
+    if (!el || !src) return;
+    const done = () => setFrame(measure(src, el));
+    if (el.complete && el.naturalWidth > 0) done();
+    else el.addEventListener("load", done, { once: true });
+  }, [src]);
+  return { frame, ref };
+};
+
 /** One shade, drawn the way the printed lookbook draws it: a photo in a
     circle, the name, the price. The price is the live one. */
 function Tile({ p }: { p: Product }) {
   const { shade } = splitName(p.name);
   const was = comparePrice(p);
   const sold = isSoldOut(p);
+  /* Measured from this photo's own silhouette; a photo already measured on
+     this page — the second render, the same shade twice — starts framed
+     instead of jumping. */
+  const { frame, ref } = useFaceFrame(p.image_key ? imageUrl(p.image_key) : null);
   return (
     <Link href={`/p?id=${p.id}`} className="group flex flex-col items-center text-center">
       <span className="relative block aspect-square w-full overflow-hidden rounded-full bg-elfia-blush ring-1 ring-elfia-line">
@@ -89,8 +125,25 @@ function Tile({ p }: { p: Product }) {
           loading="lazy" decoding="async" />
         {p.image_key ? (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={imageUrl(p.image_key)} alt={shade}
-            className="relative h-full w-full object-cover object-top transition-transform duration-300 group-hover:scale-105"
+          /* v1.36.0 — the CEO: "for the face position I want to be at the
+             same circular focus. Which is aligned center nicely."
+             `frame` is measured from THIS photo's own cut-out silhouette
+             (lib/face-frame.ts) and places her face on the same spot at the
+             same size as every other tile. Until it is measured — and for
+             any photo that is not a cut-out — the class list below is the
+             crop the page always had, so nothing shifts under a customer
+             and nothing breaks before the cut-outs are run. */
+          <img ref={ref} src={imageUrl(p.image_key)} alt={shade}
+            className={`transition-transform duration-300 group-hover:scale-105 ${
+              frame ? "absolute" : "relative h-full w-full object-cover object-top"}`}
+            style={frame ? {
+              left: `${frame.left}%`, top: `${frame.top}%`,
+              width: `${frame.width}%`, height: `${frame.height}%`,
+              /* Preflight caps every img at max-width:100%; a framed photo
+                 is deliberately wider than its tile whenever her face needs
+                 the room, and without this it would be silently squashed. */
+              maxWidth: "none",
+            } : undefined}
             loading="lazy" decoding="async" />
         ) : (
           <span className="flex h-full w-full items-center justify-center text-[11px] text-elfia-muted">

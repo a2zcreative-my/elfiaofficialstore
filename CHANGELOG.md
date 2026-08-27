@@ -1,3 +1,36 @@
+# ELFIA OFFICIAL STORE — v1.36.0 (27-08-2026)
+
+## Every face on the same circular focus
+
+The CEO, /catalog open on his phone: "for the face position I want to be
+at the same circular focus. Which is aligned center nicely."
+
+The circles were all the same; the PHOTOS were not. Each shade is shot at
+a slightly different distance and the model does not stand in the same
+place in every frame, so one face sat high and left, the next low and
+right, and a zoomed-out shot's head came out smaller than its
+neighbour's. `object-cover` crops every photo identically, so no CSS
+could fix it — CSS cannot know where a face is.
+
+The cut-outs can. A cut-out carries its subject in its ALPHA, so the
+silhouette is exactly measurable with no face-detection model and nothing
+to download: crown, the head's own plateau, the shoulder flare. The eyes
+sit at 0.42 of that zone — read off a photo with the candidate lines
+drawn on it, not guessed — and each tile is then scaled and offset so
+every face lands on the same spot at the same size.
+
+- **Measured**: crowns within 2% of each other, heads centred within 2%,
+  head sizes within 3% — on six real cut-outs, one of them framed
+  completely differently from the rest.
+- **Nothing else changes**: a photo that is not a cut-out is left on
+  exactly the crop it had, so the shop looks untouched until "Cut out ALL
+  photo backgrounds" has been pressed.
+- No face recognition, no identity, no network call, nothing stored: it
+  is the width of a silhouette per row, in the browser, once per photo.
+- lib/face-frame.ts, with scratch/face-frame-check.mjs (23 checks, real
+  mattes) and scratch/catalog-face-check.mjs (10 checks, real browser,
+  including the cached-reload case that broke the first attempt).
+
 # ELFIA OFFICIAL STORE — v1.35.0 (27-08-2026)
 
 ## The backdrop is a web-view effect — the app view stays plain
