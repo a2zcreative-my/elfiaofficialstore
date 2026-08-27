@@ -1,22 +1,16 @@
-# ELFIA OFFICIAL STORE — v1.37.0 (27-08-2026)
+# ELFIA OFFICIAL STORE — v1.38.0 (27-08-2026)
 
-## She SITS in the circle now — same focus, none of the zoom
+## The face framing is out — /catalog is back to the plain crop
 
-The CEO, with a tile of his own shop: "I want the photo seat like this
-instead of zoom which is looks not so nice!!!!"
+The CEO: "I want like before which is not require to focus! this is
+insane!"
 
-v1.36.0 got the alignment right and the size wrong. It aimed the head
-zone at 58% of the tile — the size of a tight head-and-shoulders shot —
-so his wider photos were blown up until the shoulders were cropped off
-by the circle. Correct, and not nice to look at.
+Everything v1.36.0 and v1.37.0 added is REMOVED, not switched off:
+lib/face-frame.ts, its two rigs and the fixture step are deleted, and the
+/catalog tile is the photo it was before — object-cover, object-top,
+nothing measured, nothing moved.
 
-The three numbers are now MEASURED OFF THE TILE HE SENT: crown 27% down,
-shoulders 57%, so a head zone of 30% and the face landing 40% down.
-Nothing else changed — every face still lands on the same spot, still
-centred, still measured from each photo's own cut-out.
-
-- A photo shot close in is now made SMALLER to sit like the others,
-  instead of everything being made bigger to match it.
-- Verified again on the real mattes and in a real browser, with wide and
-  tight versions of the same photo side by side: they land identically.
+What is untouched: the circular tiles, the live prices, the hover
+backdrop, the cut-out photos themselves. Only the per-photo framing is
+gone.
 
