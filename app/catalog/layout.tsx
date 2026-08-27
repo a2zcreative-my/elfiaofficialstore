@@ -28,7 +28,7 @@ export const metadata: Metadata = {
     description: "Every shade we make, with today's prices. First Sight, Forever Yours.",
     url: `${STORE.url}/catalog`,
     siteName: STORE.name,
-    images: [{ url: `${STORE.url}/lookbook/page-1.jpg`, width: 1100, height: 1556 }],
+    images: [{ url: `${STORE.url}/api/v1/catalog-cover`, width: 1100, height: 1556 }],
     locale: "en_MY",
     type: "website",
   },
@@ -36,7 +36,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "ELFIA Catalog",
     description: "Every shade we make, with today's prices.",
-    images: [`${STORE.url}/lookbook/page-1.jpg`],
+    images: [`${STORE.url}/api/v1/catalog-cover`],
   },
 };
 

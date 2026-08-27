@@ -25,6 +25,16 @@ import { accountDigits, btnClass, fmtRM, fmtWhen, rememberOrder, type OrderEvent
 
 import { Icon, StatusPill } from "./../ui";
 
+/** v1.4.0 (security audit C10) — a link is rendered only if it is really an
+    https:// URL. The courier links are built server-side from a fixed map, so
+    this is belt-and-braces; but an `href` is the one place where a stray
+    `javascript:` value turns a displayed string into executed code, and the
+    check costs nothing. Anything else renders as no link at all. */
+function httpsOnly(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  try { return new URL(raw).protocol === "https:" ? raw : null; } catch { return null; }
+}
+
 /** "3 hours 12 minutes" / "18 minutes" / "" once it has passed. */
 function timeLeft(iso: string | null | undefined): string {
   if (!iso) return "";
@@ -104,10 +114,10 @@ function Progress({ order }: { order: OrderView }) {
                   <p className="mt-1 text-xs">
                     <span className="font-mono font-semibold text-elfia-body">{order.tracking_no}</span>
                     {order.tracking_courier && <span className="text-elfia-muted"> · {order.tracking_courier}</span>}
-                    {order.tracking_url && (
+                    {httpsOnly(order.tracking_url) && (
                       <>
                         {" "}
-                        <a href={order.tracking_url} target="_blank" rel="noopener noreferrer"
+                        <a href={httpsOnly(order.tracking_url)!} target="_blank" rel="noopener noreferrer"
                           className="font-semibold text-elfia-deep underline">track parcel</a>
                       </>
                     )}

@@ -2,9 +2,10 @@
  * Stage B — Billplz FPX integration (the CEO's chosen gateway). INERT UNTIL
  * CONFIGURED.
  *
- * This module does nothing until BOTH secrets exist:
+ * This module does nothing until ALL THREE secrets exist:
  *   wrangler secret put BILLPLZ_SECRET       (API Secret Key from the Billplz dashboard)
  *   wrangler secret put BILLPLZ_COLLECTION   (the Collection ID you create there)
+ *   wrangler secret put BILLPLZ_XSIGN        (the X Signature Key — v1.39.0, see below)
  * Optional var in wrangler.toml:
  *   BILLPLZ_SANDBOX = "1"   -> talks to billplz-sandbox.com for testing
  *                              (sandbox and production are SEPARATE accounts)
@@ -21,18 +22,28 @@
  *     redirect_url, description -> { id, url }.
  *   - GET /api/v3/bills/{id} -> { paid: true|false, state }.
  *
- * SECURITY MODEL — two locks, in this order:
+ * SECURITY MODEL — v1.40.0, THREE locks, in this order:
  *   1. X-SIGNATURE. Billplz signs its callback and redirect with a key only
  *      you and Billplz hold (BILLPLZ_XSIGN). A wrong or missing signature is
  *      rejected before anything else happens. Cheap, and it stops forgeries
- *      without spending a network call.
- *   2. AUTHENTICATED REQUERY. Even a correctly signed message is only a
- *      claim. The bill id is re-read from Billplz's own API with the secret
- *      key, and ONLY `paid:true` from that read marks an order paid. Anyone
- *      can POST to the callback URL; nobody but Billplz can make
- *      GET /bills/{id} say paid.
- * If BILLPLZ_XSIGN is not set the requery still stands alone — the store is
- * safe but noisier, and /admin says the key is missing.
+ *      without spending a network call. REQUIRED — `billplzReady()` below
+ *      makes the key part of being allowed to take money, so a shop that
+ *      cannot verify a callback never offers the card in the first place.
+ *   2. BILLPLZ NAMES THE ORDER. The order is chosen from `reference_1` — but
+ *      the copy that decides is the one GET /bills/{id} returns over our
+ *      secret key, which is the value the shop itself set when it created
+ *      the bill. The request's own parameters are never consulted for it.
+ *      (Until v1.39.0 the callback fell back to the `reference_1` that
+ *      arrived in the REQUEST, which let one genuinely paid RM 1 bill mark
+ *      any other order paid. That fallback is gone; what replaced it reads
+ *      the same field from the authenticated side of the wire.)
+ *   3. THE MONEY. That same authenticated record must say paid, for at least
+ *      this order's total in sen, into our own collection. Anyone can POST
+ *      to the callback URL; nobody but Billplz can make GET /bills/{id} say
+ *      paid — and a paid bill for RM 1 can no longer settle an RM 300 order.
+ *      One fetch answers locks 2 and 3, so the record that chose the order
+ *      is the record that cleared the money: no second read can disagree
+ *      with the first.
  *
  * NOTHING IN THIS FILE IS A SECRET. Keys live in Wrangler secrets, URLs in
  * STORE_URL. tests/no-secrets.mjs fails the build if that ever stops being
@@ -54,7 +65,7 @@ import type { Env } from "./index";
  *
  * This is a GATE, not the source of truth. Even a perfectly signed callback
  * is still re-queried against Billplz's authenticated API before an order is
- * marked paid (billplzVerifyPaid). Signature first, because it is cheap and
+ * marked paid (billplzPaidFor). Signature first, because it is cheap and
  * rejects forgeries without spending a network call; requery second, because
  * only Billplz's own answer decides whether money moved.
  */
@@ -111,8 +122,38 @@ export const storeUrl = (env: Env): string =>
   (env.STORE_URL && !env.STORE_URL.startsWith("REPLACE") ? env.STORE_URL : "https://elfiaofficialstore.my")
     .replace(/\/+$/, "");
 
+/**
+ * v1.39.0 (SECURITY) — the X-Signature key is now part of being configured.
+ *
+ * It used to be optional: with no key set, `billplzSignatureOk` answered
+ * "unconfigured" and the callback carried on with the requery alone. The
+ * comment above called that "safe but noisier". It was neither — see the
+ * callback in index.ts, where the requery proves that A bill was paid while
+ * the order it applied to came from the request. Two facts that are never
+ * tied together are not a second lock.
+ *
+ * So the shop now refuses to take a card at all unless it can verify what
+ * comes back. A missing key means no bill is ever created, `gateway` is
+ * false, and checkout shows bank transfer — which this shop already
+ * supports and already reconciles by receipt. That is the honest failure:
+ * decline the payment, rather than accept money we cannot prove arrived.
+ */
 export function billplzConfigured(env: Env): boolean {
   return Boolean(env.BILLPLZ_SECRET && env.BILLPLZ_COLLECTION);
+}
+
+/**
+ * Ready to take money — configured AND able to verify what comes back.
+ *
+ * The distinction matters: `billplzConfigured` answers "could we call the
+ * API", `billplzReady` answers "should we let a customer pay". Without the
+ * signature key the callback authenticates nobody, so the shop declines the
+ * card entirely and shows bank transfer instead — which it already supports
+ * and already reconciles by receipt. Declining a payment we cannot verify is
+ * the honest failure; accepting money we cannot prove arrived is not.
+ */
+export function billplzReady(env: Env): boolean {
+  return billplzConfigured(env) && Boolean(env.BILLPLZ_XSIGN);
 }
 
 /**
@@ -255,19 +296,99 @@ export async function billplzCheck(env: Env): Promise<{ ok: boolean; status: num
   }
 }
 
-/** Ask Billplz directly (authenticated) whether this bill is paid. */
-export async function billplzVerifyPaid(env: Env, billId: string): Promise<boolean> {
+/**
+ * What Billplz itself says about a bill.
+ *
+ * v1.39.0 — this used to return a bare boolean and throw the rest away,
+ * which meant nothing anywhere compared the money that arrived with the
+ * money that was owed. `paid: true` on its own answers "did SOMEBODY pay
+ * SOMETHING" — not "was this order settled in full into our account".
+ */
+export interface BillFacts {
+  paid: boolean;
+  /** sen the customer was ASKED for */
+  amount: number | null;
+  /** sen Billplz says actually settled — the number that decides */
+  paid_amount: number | null;
+  collection_id: string | null;
+  /** the order number we set when the bill was created */
+  reference_1: string | null;
+}
+
+/** Ask Billplz directly (authenticated) what this bill is. Null = no answer. */
+export async function billplzFetchBill(env: Env, billId: string): Promise<BillFacts | null> {
   // Bill ids are short alphanumerics — refuse anything else before it goes
   // into a URL we sign with our credentials.
-  if (!/^[A-Za-z0-9_-]{4,64}$/.test(billId)) return false;
+  if (!/^[A-Za-z0-9_-]{4,64}$/.test(billId)) return null;
   try {
     const r = await fetch(`${base(env)}/bills/${billId}`, {
       headers: { Authorization: authHeader(env) },
     });
-    if (!r.ok) return false;
-    const j = (await r.json()) as { paid?: boolean };
-    return j.paid === true;
+    if (!r.ok) return null;
+    const j = (await r.json()) as {
+      paid?: boolean; amount?: unknown; paid_amount?: unknown;
+      collection_id?: unknown; reference_1?: unknown;
+    };
+    const num = (v: unknown): number | null => {
+      const n = Math.round(Number(v));
+      return Number.isFinite(n) ? n : null;
+    };
+    /* paid_amount is what settled; amount is what was asked. A paid bill
+       normally reports both, but an older API shape only carries `amount` —
+       falling back to it keeps a genuine payment from being refused, and the
+       caller still compares the figure against the order. */
+    const settled = num(j.paid_amount);
+    return {
+      paid: j.paid === true,
+      amount: num(j.amount),
+      paid_amount: settled ?? (j.paid === true ? num(j.amount) : null),
+      collection_id: typeof j.collection_id === "string" ? j.collection_id : null,
+      reference_1: typeof j.reference_1 === "string" ? j.reference_1 : null,
+    };
   } catch {
-    return false;
+    return null;
   }
+}
+
+/** Is this bill in the collection this shop actually sells from? A paid bill
+    from another collection on the same account is somebody else's money. */
+export function billplzCollectionOk(env: Env, bill: BillFacts): boolean {
+  if (!env.BILLPLZ_COLLECTION || !bill.collection_id) return true;   // cannot tell — the amount check still stands
+  return bill.collection_id === env.BILLPLZ_COLLECTION;
+}
+
+/**
+ * Did THIS bill settle THIS order, in full, into OUR collection?
+ *
+ * v1.39.0 — three questions, all of which have to be yes:
+ *   1. Billplz's own authenticated answer says paid.
+ *   2. The amount equals what the order asks for, to the sen. A bill is
+ *      created server-side at `total_cents`, so a mismatch means the bill
+ *      is not this order's — or something changed underneath it.
+ *   3. The collection is ours. A paid bill from another collection on the
+ *      same account is somebody else's money.
+ * A mismatch returns false and says why, so the caller can log it rather
+ * than fail silently: an order that was paid but not accepted is a customer
+ * ringing up, and whoever answers needs the reason.
+ */
+export async function billplzPaidFor(
+  env: Env, billId: string, expectCents: number,
+): Promise<{ ok: true } | { ok: false; why: string }> {
+  const bill = await billplzFetchBill(env, billId);
+  if (!bill) return { ok: false, why: "billplz gave no answer for this bill" };
+  if (!bill.paid) return { ok: false, why: "not paid" };
+  if (!billplzCollectionOk(env, bill)) return { ok: false, why: "bill belongs to another collection" };
+  if (bill.paid_amount === null || bill.paid_amount < expectCents) {
+    return { ok: false, why: `settled ${bill.paid_amount ?? "?"} < order ${expectCents}` };
+  }
+  return { ok: true };
+}
+
+/**
+ * The old name, kept — with the expected amount now REQUIRED by the type, so
+ * no caller can ever ask the cheap question ("is it paid?") again without
+ * also asking the one that matters ("for how much?").
+ */
+export async function billplzVerifyPaid(env: Env, billId: string, expectCents: number): Promise<boolean> {
+  return (await billplzPaidFor(env, billId, expectCents)).ok;
 }

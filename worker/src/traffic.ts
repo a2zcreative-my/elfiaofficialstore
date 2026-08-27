@@ -37,14 +37,29 @@ export const trafficDay = (daysAgo = 0): string =>
    browser sends one. */
 const BOT_RE = /bot|crawl|spider|slurp|preview|scrape|fetch|curl|wget|monitor|check|probe|headless|lighthouse|pingdom|facebookexternal|whatsapp|telegram|python|node-fetch|axios|go-http/i;
 
-/** Daily-rotating anonymous visitor hash. Keyed with a server-side secret so
-    the hash cannot be recomputed from public facts; ADMIN_KEY always exists
-    on a configured store, with BRIDGE_KEY and a constant as fallbacks so an
-    unconfigured store still counts (it just counts less unlinkably). */
-async function visitorHash(env: Env, ip: string, ua: string, day: string): Promise<string> {
+/** The secret that makes the daily visitor hash unguessable, or null when
+    this store has none.
+
+    v1.4.0 (security audit ST5) — two changes.
+    1. A DEDICATED key is preferred (`wrangler secret put TRAFFIC_HMAC_KEY`).
+       The old code keyed the hash with ADMIN_KEY, which leaks nothing (HMAC
+       is one-way and only 64 truncated bits are stored) but spends the
+       shop's highest-value secret on a second job for no reason.
+    2. The hardcoded `"elfia-traffic"` fallback is GONE. A public constant as
+       the key means anyone can recompute a visitor's daily hash from ip|ua —
+       the anonymity this whole feature promises would have been arithmetic,
+       not a guarantee. With no key at all the store now declines to count
+       rather than counting de-anonymisably. */
+const trafficKey = (env: Env): string | null =>
+  env.TRAFFIC_HMAC_KEY ?? env.ADMIN_KEY ?? env.BRIDGE_KEY ?? null;
+
+/** Daily-rotating anonymous visitor hash. The calendar day is inside the KEY,
+    so the same visitor hashes differently tomorrow: countable within a day,
+    unfollowable across days — by anyone, including us. */
+async function visitorHash(env: Env, secret: string, ip: string, ua: string, day: string): Promise<string> {
   const enc = new TextEncoder();
   const key = await crypto.subtle.importKey(
-    "raw", enc.encode(`${day}|${env.ADMIN_KEY ?? env.BRIDGE_KEY ?? "elfia-traffic"}`),
+    "raw", enc.encode(`${day}|${secret}`),
     { name: "HMAC", hash: "SHA-256" }, false, ["sign"],
   );
   const sig = await crypto.subtle.sign("HMAC", key, enc.encode(`${ip}|${ua}`));
@@ -79,6 +94,10 @@ export async function recordHit(request: Request, env: Env, ownHost: string): Pr
   const done = new Response(null, { status: 204, headers: { "Cache-Control": "no-store" } });
   const ua = request.headers.get("User-Agent") ?? "";
   if (!ua || BOT_RE.test(ua)) return done;
+  /* No hashing secret = no counting. Anonymity is the feature; a store that
+     cannot hash unlinkably records nothing at all (audit ST5). */
+  const secret = trafficKey(env);
+  if (!secret) return done;
 
   const ip = callerIp(request);
   /* One phone reloading in a loop must not flood the table: 60 hits per ten
@@ -96,7 +115,7 @@ export async function recordHit(request: Request, env: Env, ownHost: string): Pr
   const city = (abroad ? cf?.country ?? "" : cf?.city ?? "").slice(0, 60);
 
   const day = trafficDay();
-  const visitor = await visitorHash(env, ip, ua, day);
+  const visitor = await visitorHash(env, secret, ip, ua, day);
   await env.DB.prepare(
     `INSERT INTO traffic_hits (day, visitor, state, city, path, referrer)
      VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,

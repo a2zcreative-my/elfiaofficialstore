@@ -3,7 +3,7 @@ setlocal EnableExtensions EnableDelayedExpansion
 title ELFIA OFFICIAL STORE - deploy
 REM ============================================================
 REM  ELFIA OFFICIAL STORE - full deploy (site + API + database)
-REM  Version 1.3.0
+REM  Version 1.4.0
 REM
 REM  This script NEVER closes without telling you why. Everything it
 REM  prints is also written to deploy-log.txt next to this file.
@@ -66,11 +66,13 @@ popd
 
 REM ---------------------------------------------------------------- gates
 set "STEP=running the safety gates"
-call :say "[6/9] Safety gates - typecheck, brand isolation, no hardcoded keys"
+call :say "[6/9] Safety gates - typecheck, payment integrity, brand isolation, no hardcoded keys"
 call node tests\no-secrets.mjs
 if errorlevel 1 call :die "A credential looks like it is written into the code. Nothing was deployed. See the list above - move each one into: cd worker  then  npx wrangler secret put NAME"
 call node tests\worker-compile-gate.mjs
 if errorlevel 1 call :die "The worker does not compile. Nothing was deployed. See the errors above."
+call node tests\payment-integrity.mjs
+if errorlevel 1 call :die "A payment safety rule is broken - see the list above. Nothing was deployed. These are the checks that stop a paid RM 1 bill being credited to somebody else's order; do not bypass them."
 call node tests\brand-isolation.mjs
 if errorlevel 1 call :die "Another company's identity appears in this repo. Nothing was deployed."
 
@@ -112,7 +114,12 @@ echo     "migrations_current"          the database has every table (if
 echo                                   false, the health line names the fix)
 echo     "admin_key_configured"        you can sign in to /admin
 echo     "bank_line_configured"        customers see your real account
-echo     "gateway_configured"          online payment (Billplz) is on
+echo     "gateway_configured"          online payment is ON and SAFE. v1.4.0:
+echo                                   this needs BILLPLZ_XSIGN as well as the
+echo                                   two Billplz keys. Without the signature
+echo                                   key a callback cannot be authenticated,
+echo                                   so the shop takes bank transfer only
+echo                                   rather than payments it cannot verify.
 echo     "gateway_signature_configured" callbacks are signature-checked
 echo     "bridge_pull_configured"      counts come from the portal
 echo     "bridge_push_configured"      your sales reach the portal
@@ -126,6 +133,10 @@ echo     npx wrangler secret put BILLPLZ_XSIGN
 echo     npx wrangler secret put BRIDGE_KEY
 echo     npx wrangler secret put BRIDGE_URL        (portal inventory feed)
 echo     npx wrangler secret put BRIDGE_PUSH_URL   (portal movements endpoint)
+echo     npx wrangler secret put TRAFFIC_HMAC_KEY  (optional, v1.4.0 - its own
+echo                                               key for the anonymous
+echo                                               visitor hash. Generate with
+echo                                               openssl rand -hex 32)
 echo   (Each asks you to paste the value. It is never written to a file.)
 echo.
 echo   Then open /admin -^> Orders -^> "Test online payment (Billplz)".

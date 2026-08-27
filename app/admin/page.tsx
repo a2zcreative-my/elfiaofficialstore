@@ -1,8 +1,10 @@
 "use client";
 
 /**
- * Store admin — passcode-gated (X-Admin-Key = the ADMIN_KEY secret,
- * held in sessionStorage only). Three tabs:
+ * Store admin — passcode-gated. v1.4.0 (security audit ST3): the passcode is
+ * exchanged ONCE at POST /admin/session for an HttpOnly cookie the browser
+ * cannot read, and is never stored on the device; a refresh stays signed in
+ * because of that cookie, and "Sign out" ends it. Three tabs:
  *   Orders   — confirm payments (view the uploaded receipt), ship with a
  *              tracking number, cancel unpaid orders (restocks itself).
  *   Products — add/edit, price, stock, photo, show/hide, sync stock.
@@ -113,9 +115,11 @@ export default function Admin() {
 
   const hdr = useCallback((k: string) => ({ "X-Admin-Key": k, "Content-Type": "application/json" }), []);
 
-  const load = useCallback(async (k: string) => {
+  /* `quiet` is used by the on-load cookie probe: "not signed in yet" is the
+     normal first visit, not an error worth showing anyone. */
+  const load = useCallback(async (k: string, quiet = false) => {
     const r = await fetch(`/api/v1/admin/orders${filter === "all" ? "" : `?status=${filter}`}`, { headers: { "X-Admin-Key": k } });
-    if (!r.ok) { setError(r.status === 401 ? "Wrong passcode" : `Error ${r.status}`); return false; }
+    if (!r.ok) { if (!quiet) setError(r.status === 401 ? "Wrong passcode" : `Error ${r.status}`); return false; }
     setOrders(((await r.json()) as { orders: AdminOrder[] }).orders);
     const rp = await fetch("/api/v1/admin/products", { headers: { "X-Admin-Key": k } });
     if (rp.ok) setProducts(((await rp.json()) as { products: Product[] }).products);
@@ -128,14 +132,33 @@ export default function Admin() {
     setError(""); return true;
   }, [filter]);
 
+  /* v1.4.0 (security audit ST3) — the passcode is no longer kept in the
+     browser at all. It is exchanged once for an HttpOnly cookie the page
+     cannot read, so an injected script has nothing to steal, and a refresh
+     stays signed in because the cookie (not sessionStorage) carries the
+     session. On load we simply try: if the cookie is still good the data
+     arrives, otherwise the passcode screen shows. */
   useEffect(() => {
-    const saved = sessionStorage.getItem("elfia-admin-key");
-    if (saved) { setKey(saved); void load(saved).then((ok) => setAuthed(ok)); }
+    void load("", true).then((ok) => { if (ok) setAuthed(true); });
   }, [load]);
 
   const login = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (await load(key)) { sessionStorage.setItem("elfia-admin-key", key); setAuthed(true); }
+    const r = await fetch("/api/v1/admin/session", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key }),
+    }).catch(() => null);
+    if (!r?.ok) {
+      const j = (await r?.json().catch(() => null)) as { error?: { message?: string } } | null;
+      setError(j?.error?.message ?? (r ? `Error ${r.status}` : "Network problem — please try again."));
+      return;
+    }
+    setKey("");                       // the cookie is the credential now
+    if (await load("")) setAuthed(true);
+  };
+
+  const logout = async () => {
+    await fetch("/api/v1/admin/logout", { method: "POST" }).catch(() => null);
+    setAuthed(false); setOrders([]); setProducts([]); setWaitlist([]); setSync(null);
   };
 
   const act = async (id: number, action: string, extra: Record<string, unknown> = {}) => {
@@ -284,6 +307,10 @@ export default function Admin() {
             );
           })}
           <button type="button" className="ml-auto text-xs text-stone-500 underline" onClick={() => void load(key)}>Refresh</button>
+          {/* v1.4.0 — ends the admin cookie on this device. Worth having on a
+              shared or shop-counter machine: closing the tab is no longer the
+              only way out. */}
+          <button type="button" className="text-xs text-stone-500 underline" onClick={() => void logout()}>Sign out</button>
         </div>
 
         {tab === "orders" && (

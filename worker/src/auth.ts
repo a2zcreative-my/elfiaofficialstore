@@ -82,16 +82,32 @@ export async function verifyPassword(password: string, hash: string, salt: strin
 export async function hitLimit(
   env: Env, bucket: string, max: number, windowMinutes: number,
 ): Promise<{ allowed: boolean; remaining: number }> {
-  const row = await env.DB.prepare(`SELECT hits, window_start FROM rate_limits WHERE bucket = ?1`)
-    .bind(bucket).first<{ hits: number; window_start: string }>().catch(() => null);
-  const fresh = row && (Date.now() - Date.parse(`${row.window_start.replace(" ", "T")}Z`)) < windowMinutes * 60_000;
-  const hits = (fresh ? row!.hits : 0) + 1;
-  await env.DB.prepare(
+  /* v1.4.0 (security audit C9) — ONE statement decides.
+     The previous version SELECTed, decided in JavaScript, then UPSERTed.
+     Requests that arrived together all read the same count and were all
+     admitted, so a burst of parallel guesses sailed past a limit that looked
+     enforced — the exact failure a limiter exists to prevent. The increment
+     and the decision are now the same atomic statement: the window is reset
+     inside SQL when it has expired, and the count we judge is the one the
+     database actually stored (`RETURNING hits`).
+     `?2` is the window length in seconds, applied by SQLite's own clock so
+     two workers cannot disagree about when the window began. */
+  const row = await env.DB.prepare(
     `INSERT INTO rate_limits (bucket, hits, window_start) VALUES (?1, 1, datetime('now'))
      ON CONFLICT(bucket) DO UPDATE SET
-       hits = CASE WHEN ?2 THEN rate_limits.hits + 1 ELSE 1 END,
-       window_start = CASE WHEN ?2 THEN rate_limits.window_start ELSE datetime('now') END`,
-  ).bind(bucket, fresh ? 1 : 0).run().catch(() => null);
+       hits = CASE
+         WHEN rate_limits.window_start > datetime('now', ?2) THEN rate_limits.hits + 1
+         ELSE 1 END,
+       window_start = CASE
+         WHEN rate_limits.window_start > datetime('now', ?2) THEN rate_limits.window_start
+         ELSE datetime('now') END
+     RETURNING hits`,
+  ).bind(bucket, `-${Math.round(windowMinutes * 60)} seconds`).first<{ hits: number }>().catch(() => null);
+  /* A limiter that cannot read its own table must not become an open door,
+     but it must not lock out a real shop either: fail OPEN only for the
+     first attempt-shaped case (no row at all), which is what a missing
+     table looks like on a pre-0010 database. */
+  const hits = row?.hits ?? 1;
   return { allowed: hits <= max, remaining: Math.max(0, max - hits) };
 }
 

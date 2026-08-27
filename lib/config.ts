@@ -468,38 +468,95 @@ export const sortProducts = (list: Product[], key: SortKey): Product[] => {
    The CEO watched a customer refresh mid-checkout and lose everything. An
    account fixes that across devices; these two fix it on THIS device, for
    everyone, with no sign-up. Both are conveniences only — the server still
-   owns every price, every total and every order. */
+   owns every price, every total and every order.
+
+   v1.40.0 (security audit ST4) — WHERE they are kept changed, and why.
+   An order token is a bearer key: whoever holds it can open that order and
+   read the customer's name, phone and full address. Keeping tokens and a
+   cleartext checkout draft in localStorage meant they survived for ever on
+   the device — readable by any script on the origin, and still there for the
+   next person on a shared or shop-counter phone. Both now live in
+   sessionStorage (gone when the tab closes) and the remembered orders carry
+   an explicit expiry as well, so a token cannot outlive its usefulness.
+   Losing them costs a customer nothing: /track finds any order again from
+   its number and the phone that placed it, and signed-in customers get their
+   real history from the server. */
 
 const DRAFT_KEY = "elfia-checkout-draft";
 const RECENT_KEY = "elfia-recent-orders";
+/** How long a remembered order stays on this device. Long enough to cover
+    paying, checking back and the parcel arriving; short enough that a
+    borrowed phone does not keep somebody's address for ever. */
+const RECENT_TTL_MS = 30 * 24 * 3600 * 1000;
+
+/** sessionStorage, with localStorage swept once so anything written by an
+    older version of the store does not linger for ever on a real customer's
+    phone. Every access is guarded: private mode throws on both. */
+const store = (): Storage | null => {
+  try { return window.sessionStorage; } catch { return null; }
+};
+const forgetLegacy = (key: string): void => {
+  try { window.localStorage.removeItem(key); } catch { /* private mode */ }
+};
 
 export interface CheckoutDraft { name: string; phone: string; address: string; email: string; notes: string }
 
 export const readDraft = (): Partial<CheckoutDraft> => {
-  try { return JSON.parse(localStorage.getItem(DRAFT_KEY) ?? "{}") as Partial<CheckoutDraft>; }
-  catch { return {}; }
+  try {
+    const raw = store()?.getItem(DRAFT_KEY);
+    if (raw) return JSON.parse(raw) as Partial<CheckoutDraft>;
+    /* One-time migration: an older build kept the draft in localStorage.
+       Honour it once so nobody loses a half-typed address on upgrade, then
+       clear it from the persistent store. */
+    const legacy = window.localStorage.getItem(DRAFT_KEY);
+    forgetLegacy(DRAFT_KEY);
+    return legacy ? (JSON.parse(legacy) as Partial<CheckoutDraft>) : {};
+  } catch { return {}; }
 };
 export const writeDraft = (d: Partial<CheckoutDraft>): void => {
-  try { localStorage.setItem(DRAFT_KEY, JSON.stringify(d)); } catch { /* private mode */ }
+  try { store()?.setItem(DRAFT_KEY, JSON.stringify(d)); } catch { /* private mode */ }
 };
 export const clearDraft = (): void => {
-  try { localStorage.removeItem(DRAFT_KEY); } catch { /* private mode */ }
+  try { store()?.removeItem(DRAFT_KEY); } catch { /* private mode */ }
+  forgetLegacy(DRAFT_KEY);
 };
 
 export interface RecentOrder { order_number: string; token: string; at: string }
 
+const freshOrders = (v: unknown): RecentOrder[] => {
+  if (!Array.isArray(v)) return [];
+  const cutoff = Date.now() - RECENT_TTL_MS;
+  return (v as RecentOrder[])
+    .filter((o) => o?.token && o?.order_number)
+    .filter((o) => {
+      const t = Date.parse(o.at ?? "");
+      return !Number.isFinite(t) || t >= cutoff;   // undated (pre-v1.40.0) rows are kept
+    })
+    .slice(0, 10);
+};
+
 export const readRecent = (): RecentOrder[] => {
   try {
-    const v = JSON.parse(localStorage.getItem(RECENT_KEY) ?? "[]") as RecentOrder[];
-    return Array.isArray(v) ? v.filter((o) => o?.token && o?.order_number).slice(0, 10) : [];
+    const raw = store()?.getItem(RECENT_KEY);
+    if (raw) return freshOrders(JSON.parse(raw));
+    const legacy = window.localStorage.getItem(RECENT_KEY);
+    forgetLegacy(RECENT_KEY);   // never leave order tokens in persistent storage
+    const carried = legacy ? freshOrders(JSON.parse(legacy)) : [];
+    if (carried.length) { try { store()?.setItem(RECENT_KEY, JSON.stringify(carried)); } catch { /* private mode */ } }
+    return carried;
   } catch { return []; }
 };
 export const rememberOrder = (order_number: string, token: string): void => {
   try {
     const next = [{ order_number, token, at: new Date().toISOString() },
                   ...readRecent().filter((o) => o.token !== token)].slice(0, 10);
-    localStorage.setItem(RECENT_KEY, JSON.stringify(next));
+    store()?.setItem(RECENT_KEY, JSON.stringify(next));
   } catch { /* private mode */ }
+};
+/** Signing out must not leave the previous person's orders on the device. */
+export const clearRemembered = (): void => {
+  try { store()?.removeItem(RECENT_KEY); } catch { /* private mode */ }
+  forgetLegacy(RECENT_KEY);
 };
 
 /** Product names read "Bawal Premium — Dusty Rose". On a card the series

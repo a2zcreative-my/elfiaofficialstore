@@ -18,38 +18,84 @@
  * this repo but BANK_LINE in worker/wrangler.toml, and a test fixture is not
  * a reason to make a second copy of it.
  *
- * The helper is TypeScript, so reading it needs Node's type stripping. Run it
- * plainly — `node tests/bank-line.mjs` — and it sorts that out itself:
+ * The helper is TypeScript, and getting at it from a plain .mjs test turns
+ * out to depend on the Node version in a way that bit a deploy:
  *
- *   Node 22.18+   strips types with no flag; the import below just works.
- *   Node 22.6-22.17   needs --experimental-strip-types, so this re-runs
- *                     itself once with that flag.
- *   older         cannot read TypeScript at all. It says so, loudly, and
- *                 exits 0 rather than blocking a deploy over a tooling gap.
+ *   Node 22.18-23   strips types and hands back the named export. Works.
+ *   Node 24         the CEO's machine, 27-08-2026. `package.json` has no
+ *                   "type": "module", so a .ts file resolves as CommonJS,
+ *                   the import SUCCEEDS and yet carries no named export —
+ *                   so `accountDigits` was quietly `undefined` and the
+ *                   first call threw `accountDigits is not a function`,
+ *                   mid-deploy, reading like a failed safety check.
+ *   Node < 22.6     cannot read TypeScript at all.
  *
- * v1.12.4 — this used to be invoked WITH the flag from PUSH.bat, which is a
- * trap: an unrecognised flag stops Node before the script runs, so on an
- * older Node the deploy would have died with "bad option" and no explanation
- * of what to do about it.
+ * So this no longer trusts any of it. It tries the native import first
+ * (fast, and correct where it works), and if that does not produce a
+ * FUNCTION it reads the helper out of the source itself and strips the
+ * annotations — a dozen lines of pure string work that behaves the same on
+ * every Node there is. The check therefore RUNS on the CEO's machine
+ * instead of skipping, which matters: this decides what a customer pastes
+ * into their banking app.
+ *
+ * Only if both routes fail does it skip — loudly, and with exit 0, because
+ * a tooling gap must never look like a security failure. That distinction
+ * is the whole lesson of 27-08: the deploy stopped on a crash that had
+ * nothing to do with the shop.
  */
-import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
 
-let accountDigits;
-try {
-  ({ accountDigits } = await import("../lib/config.ts"));
-} catch {
-  const retried = process.env.ELFIA_BANK_LINE_RETRY === "1";
-  if (!retried) {
-    const r = spawnSync(process.execPath,
-      ["--experimental-strip-types", "--no-warnings", fileURLToPath(import.meta.url)],
-      { stdio: "inherit", env: { ...process.env, ELFIA_BANK_LINE_RETRY: "1" } });
-    process.exit(r.status ?? 1);
+const SRC = new URL("../lib/config.ts", import.meta.url);
+
+/** Route 1 — let Node read the TypeScript. */
+async function viaImport() {
+  try {
+    const m = await import("../lib/config.ts");
+    return typeof m.accountDigits === "function" ? m.accountDigits : null;
+  } catch {
+    return null;
   }
-  console.log(`SKIPPED — this Node cannot read TypeScript directly (${process.version}).`);
-  console.log("  Node 22.18 or newer runs this check with no setup.");
-  console.log("  The account-number helper is therefore UNTESTED on this machine;");
-  console.log("  it is tested wherever the code is written. Upgrading Node re-enables it.");
+}
+
+/**
+ * Route 2 — read the function out of the file and strip its annotations.
+ *
+ * Deliberately narrow: it takes the ONE exported arrow function this test is
+ * about, from `export const accountDigits` to the line that closes it, and
+ * removes `: type` annotations. If anyone reshapes the helper past what this
+ * understands, the eleven cases below fail loudly rather than silently
+ * testing nothing.
+ */
+async function viaSource() {
+  try {
+    const text = readFileSync(SRC, "utf8");
+    const start = text.indexOf("export const accountDigits");
+    if (start < 0) return null;
+    const end = text.indexOf("\n};", start);
+    if (end < 0) return null;
+    const fn = text.slice(start, end + 3)
+      .replace(/^export /, "")
+      /* `: string | null`, `: string`, `: number[]` … up to the `=`, `,` or
+         `)` that ends the annotation. Regex and string literals in the body
+         carry no `: identifier`, so they are untouched. */
+      .replace(/:\s*[A-Za-z_][\w.<>\[\]|\s]*?(?=\s*[=,)])/g, "");
+    const mod = `${fn}\nexport { accountDigits };`;
+    const m = await import(`data:text/javascript,${encodeURIComponent(mod)}`);
+    return typeof m.accountDigits === "function" ? m.accountDigits : null;
+  } catch {
+    return null;
+  }
+}
+
+const accountDigits = (process.env.ELFIA_BANK_LINE_FORCE_SOURCE === "1" ? null : await viaImport())
+  ?? await viaSource();
+
+if (typeof accountDigits !== "function") {
+  console.log(`SKIPPED — could not load the account-number helper on ${process.version}.`);
+  console.log("  Neither importing lib/config.ts nor reading it as text worked.");
+  console.log("  The helper is therefore UNTESTED on this machine; it is tested");
+  console.log("  wherever the code is written. This is NOT a security failure —");
+  console.log("  nothing about the shop is wrong, only this machine's tooling.");
   process.exit(0);
 }
 

@@ -24,8 +24,9 @@
  * stays inert until both secrets exist — see that file's header.
  */
 import {
-  billplzCheck, billplzConfigured, billplzCreateBill, billplzFailureHint,
-  billplzSignatureConfigured, billplzSignatureOk, billplzVerifyPaid, storeUrl,
+  billplzCheck, billplzCollectionOk, billplzConfigured, billplzCreateBill,
+  billplzFailureHint, billplzFetchBill, billplzPaidFor, billplzReady,
+  billplzSignatureConfigured, billplzSignatureOk, storeUrl,
 } from "./billplz";
 import {
   callerIp, clearLimit, createSession, currentCustomer, destroySession, hashPassword, hitLimit,
@@ -41,7 +42,12 @@ import { recordHit, rollupTraffic, trafficFeed } from "./traffic";
 export interface Env {
   DB: D1Database;
   MEDIA: R2Bucket;
-  ADMIN_KEY?: string;        // wrangler secret put ADMIN_KEY
+  ADMIN_KEY?: string;
+  /* v1.40.0 (security audit ST5) — a DEDICATED key for the anonymous
+     visitor hash, so the shop's highest-value secret is not spent on a
+     second job. With none set, traffic.ts declines to count rather than
+     counting de-anonymisably. `wrangler secret put TRAFFIC_HMAC_KEY`. */
+  TRAFFIC_HMAC_KEY?: string;        // wrangler secret put ADMIN_KEY
   BANK_LINE?: string;        // wrangler.toml var — "MAYBANK 1234 5678 9012 — ELFIA"
   WHATSAPP_DIGITS?: string;  // wrangler.toml var — "60123456789"
   SHIPPING_CENTS?: string;   // wrangler.toml var — flat rate, e.g. "1000"
@@ -79,14 +85,24 @@ export interface Env {
   CATALOG_FILENAME?: string;
 }
 
-const VERSION = "1.38.0";
+const VERSION = "1.40.0";
 const STATUSES = ["pending_payment", "payment_review", "paid", "shipped", "completed", "cancelled"] as const;
 type Status = (typeof STATUSES)[number];
 
 /** Origins allowed to POST. STORE_URL (and its www. twin) is the real one;
     the rest are for local work. STORE_ORIGIN adds one more for a test rig. */
-function originAllowed(origin: string | null, env: Env): boolean {
-  if (!origin) return true;                       // server-to-server, curl
+function originAllowed(request: Request, env: Env): boolean {
+  const origin = request.headers.get("Origin");
+  /* v1.40.0 (security audit C4) — no Origin is only innocent when the
+     request carries no session.
+     A missing Origin header used to be waved through as "server-to-server,
+     curl". Browsers omit Origin on a plain form POST and on some
+     same-site navigations too — but they still attach our cookie. That is
+     precisely the shape of a cross-site request forgery: a hidden form on
+     any page could POST to the API and the caller's own session would
+     authorise it. Server-to-server callers (the portal bridge, curl, the
+     Billplz callback) send no cookie and are unaffected. */
+  if (!origin) return !request.headers.get("Cookie");
   const store = storeUrl(env);
   const host = new URL(store).host;
   const allowed = new Set([
@@ -131,6 +147,70 @@ async function keyOk(request: Request, env: Env): Promise<boolean> {
 }
 
 /**
+ * v1.40.0 (security audit ST2) — the bridge key, checked at a cost.
+ *
+ * Every /bridge/* route used to compare the header against BRIDGE_KEY in
+ * constant time and nothing else. Constant time stops a TIMING attack; it
+ * does nothing at all about a GUESSING one, and the bridge key opens every
+ * order in the shop — names, phone numbers, addresses. An attacker with a
+ * script could try it as fast as the Worker would answer, forever, and
+ * leave no mark anywhere.
+ *
+ * One gate now: same hashed constant-time compare, plus the same counted
+ * window the admin passcode has had since v1.0.0. Twenty wrong keys from an
+ * address in fifteen minutes and that address is refused until the window
+ * passes; a correct key clears the count, so the portal — which is always
+ * right — never meets the limiter.
+ *
+ * Returns the Response to send when the caller is refused, or null when it
+ * may proceed. Callers read it as: `const bad = await bridgeAuth(request,
+ * env); if (bad) return bad;`
+ */
+async function bridgeAuth(request: Request, env: Env): Promise<Response | null> {
+  if (!env.BRIDGE_KEY) return err("not_configured", "Set the BRIDGE_KEY secret first", 501);
+  const ip = callerIp(request);
+  const given = request.headers.get("X-Bridge-Key") ?? "";
+  /* Hash both sides before comparing: the compare is then over two
+     fixed-length digests, so neither the key's length nor its first
+     differing byte can be read off the clock. */
+  const enc = new TextEncoder();
+  const [a, b] = await Promise.all([
+    crypto.subtle.digest("SHA-256", enc.encode(given)),
+    crypto.subtle.digest("SHA-256", enc.encode(env.BRIDGE_KEY)),
+  ]);
+  const va = new Uint8Array(a), vb = new Uint8Array(b);
+  let diff = given.length === 0 ? 1 : 0;
+  for (let i = 0; i < va.length; i++) diff |= (va[i] ?? 0) ^ (vb[i] ?? 0);
+  if (diff === 0) {
+    await clearLimit(env, `bridge:${ip}`);
+    return null;
+  }
+  const gate = await hitLimit(env, `bridge:${ip}`, 20, 15);
+  return gate.allowed
+    ? err("unauthorized", "Bad key", 401)
+    : err("too_many", "Too many attempts — wait fifteen minutes.", 429);
+}
+
+/**
+ * v1.40.0 (security audit P1/P3) — a refused payment is written DOWN.
+ *
+ * The one failure mode worse than refusing a genuine payment is refusing it
+ * silently: the customer's money has left their account, the order still
+ * says "awaiting payment", and nobody in the shop can see that the two facts
+ * are connected. `console.error` reaches the Worker tail and nowhere a human
+ * looks later, so the reason also goes into sync_state, which the portal's
+ * ELFIA tab already reads.
+ */
+async function logPaymentRefusal(env: Env, billId: string, why: string): Promise<void> {
+  const line = `${new Date().toISOString()} · bill ${billId} · ${why}`;
+  console.error(`billplz refused: ${line}`);
+  await setState(env, "last_payment_refusal", line).catch(() => null);
+}
+
+/** v1.40.0 (security audit ST1) — 5 MB, counted on the bytes we received. */
+const RECEIPT_MAX = 5 * 1024 * 1024;
+
+/**
  * v1.13.0 — the delivery numbers are the PORTAL's to set.
  *
  * The CEO, 26-08-2026: "I want to have the authority to update the shipping
@@ -172,7 +252,7 @@ async function storeConfig(env: Env) {
     whatsapp_digits: env.WHATSAPP_DIGITS ?? "60000000000",
     shipping_cents: pick("shipping_cents", intVar(env.SHIPPING_CENTS, 1000)),
     free_above_cents: pick("free_above_cents", intVar(env.FREE_ABOVE_CENTS, 4500)),
-    gateway: billplzConfigured(env),
+    gateway: billplzReady(env),
     hold_hours: intVar(env.ORDER_HOLD_HOURS, 12),
     /** Which of the two answered — so /admin and the health probe can tell
         "the portal set this" apart from "nobody has set it yet". */
@@ -224,7 +304,28 @@ async function releaseExpiredOrders(env: Env): Promise<number> {
      LIMIT 50`,
   ).all<{ id: number; order_number: string; items: string }>().catch(() => ({ results: [] as { id: number; order_number: string; items: string }[] }));
 
+  let released = 0;
   for (const o of due) {
+    /* v1.39.0 (SECURITY) — CLAIM THE CANCELLATION FIRST, then put the stock
+       back. This UPDATE used to run at the END of the loop with no status
+       predicate, and the gap between the SELECT above and that write is a
+       minute wide on a cron that fires every minute. A Billplz callback
+       landing inside it — which is exactly what a late FPX redirect at the
+       twelve-hour boundary looks like — marked the order paid, and this then
+       overwrote it to cancelled, returned the goods to the shelf and told
+       the portal to restock. The customer's money had moved; the shop said
+       cancelled; verify-payment answered "not paid" forever after.
+
+       Now the transition is the claim: only the run that actually moves the
+       row out of pending gets to restock, and an order that became paid in
+       the meantime is left exactly as it is. */
+    const claim = await env.DB.prepare(
+      `UPDATE orders SET status = 'cancelled', updated_at = datetime('now')
+       WHERE id = ?1 AND status IN ('pending_payment', 'payment_review')`,
+    ).bind(o.id).run().catch(() => null);
+    if (!claim || claim.meta.changes === 0) continue;   // paid or cancelled underneath us
+    released++;
+
     const items = JSON.parse(o.items) as { product_id: number; qty: number }[];
     for (const it of items) {
       await env.DB.prepare(`UPDATE products SET stock = stock + ?1 WHERE id = ?2 AND track_stock = 1`)
@@ -239,12 +340,9 @@ async function releaseExpiredOrders(env: Env): Promise<number> {
       items.map((it) => ({ sku: skus.find((p) => p.id === it.product_id)?.sku, qty: it.qty })),
       "cancel", o.order_number,
     );
-    await env.DB.prepare(
-      `UPDATE orders SET status = 'cancelled', updated_at = datetime('now') WHERE id = ?1`,
-    ).bind(o.id).run();
     await recordOrderEvent(env, o.id, "cancelled", "Released — payment was not received in time. You are welcome to order again.");
   }
-  return due.length;
+  return released;
 }
 
 /** Malaysian couriers the shop actually uses, so "Shipped" carries a working
@@ -592,15 +690,21 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
       const up = await env.MEDIA.get("catalog/cover.jpg");
       if (up) {
         return new Response(up.body, {
-          headers: { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=300" },
+          headers: { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=300", "X-Content-Type-Options": "nosniff" },
         });
       }
-      const shipped = await fetch(`${env.STORE_ORIGIN || url.origin}/lookbook/page-1.jpg`);
-      if (shipped.ok) {
-        return new Response(shipped.body, {
-          headers: { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=300" },
-        });
-      }
+      /* v1.39.0 — the shipped fallback is a NETWORK call, and a network call
+         can fail. Unwrapped, a Pages deploy mid-flight (or a local bench
+         with the site half up) turned "no cover" into a 500 and a logged
+         exception on a route customers hit. A missing picture is a 404. */
+      try {
+        const shipped = await fetch(`${storeUrl(env)}/lookbook/page-1.jpg`);
+        if (shipped.ok) {
+          return new Response(shipped.body, {
+            headers: { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=300", "X-Content-Type-Options": "nosniff" },
+          });
+        }
+      } catch { /* fall through to the 404 below */ }
       return err("not_found", "No cover available", 404);
     }
 
@@ -608,9 +712,8 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
        Bridge-key gated: the portal (and the test rig) may do this; the
        public may not. */
     if (path === "/bridge/catalog" && method === "DELETE") {
-      if (!env.BRIDGE_KEY) return err("not_configured", "Set the BRIDGE_KEY secret first", 501);
-      const givenCat = request.headers.get("X-Bridge-Key") ?? "";
-      if (!timingSafeEqual(givenCat, env.BRIDGE_KEY)) return err("unauthorized", "Bad key", 401);
+      const bad = await bridgeAuth(request, env);
+      if (bad) return bad;
       await env.MEDIA.delete("catalog/source.pdf");
       await env.MEDIA.delete("catalog/map.json");
       await env.MEDIA.delete("catalog/cover.jpg");
@@ -632,24 +735,30 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
           headers: {
             "Content-Type": up.httpMetadata?.contentType ?? "image/jpeg",
             "Cache-Control": "public, max-age=300",
+            "X-Content-Type-Options": "nosniff",
           },
         });
       }
-      const shipped = await fetch(`${env.STORE_ORIGIN || url.origin}/collection/elfia-backdrop.jpg`);
-      if (shipped.ok) {
-        return new Response(shipped.body, {
-          headers: { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=300" },
-        });
-      }
+      /* v1.39.0 — same as /catalog-cover above: a failed fetch of the
+         shipped file is a 404, not a 500. And `storeUrl(env)` rather than
+         the request's own Host, so the URL this worker fetches can never be
+         chosen by whoever is calling it. */
+      try {
+        const shipped = await fetch(`${storeUrl(env)}/collection/elfia-backdrop.jpg`);
+        if (shipped.ok) {
+          return new Response(shipped.body, {
+            headers: { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=300", "X-Content-Type-Options": "nosniff" },
+          });
+        }
+      } catch { /* fall through to the 404 below */ }
       return err("not_found", "No backdrop available", 404);
     }
 
     /* v1.32.0 — remove an uploaded backdrop and return to the shipped one.
        Bridge-key gated, exactly like /bridge/catalog above. */
     if (path === "/bridge/backdrop" && method === "DELETE") {
-      if (!env.BRIDGE_KEY) return err("not_configured", "Set the BRIDGE_KEY secret first", 501);
-      const givenBd = request.headers.get("X-Bridge-Key") ?? "";
-      if (!timingSafeEqual(givenBd, env.BRIDGE_KEY)) return err("unauthorized", "Bad key", 401);
+      const bad = await bridgeAuth(request, env);
+      if (bad) return bad;
       await env.MEDIA.delete("catalog/backdrop.img");
       await setState(env, "backdrop_marker", "");
       return json({ ok: true, source: "shipped" });
@@ -659,7 +768,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
        no IP stored, daily-rotating hash, no cookie); always 204, because the
        storefront must never wait on, or surface, analytics. */
     if (path === "/t" && method === "POST") {
-      if (!originAllowed(request.headers.get("Origin"), env)) return new Response(null, { status: 204 });
+      if (!originAllowed(request, env)) return new Response(null, { status: 204 });
       return recordHit(request, env, new URL(storeUrl(env)).host);
     }
 
@@ -762,7 +871,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
        list. Nothing is ever sent from here — the shop messages people by
        hand from /admin, which is also why no email address is collected. */
     if (path === "/notify" && method === "POST") {
-      if (!originAllowed(request.headers.get("Origin"), env)) return err("forbidden", "Bad origin", 403);
+      if (!originAllowed(request, env)) return err("forbidden", "Bad origin", 403);
       let body: Record<string, unknown>;
       try { body = (await request.json()) as Record<string, unknown>; } catch { return err("invalid_input", "JSON body required", 400); }
       if (str(body.website, 500)) return json({ ok: true }); // honeypot
@@ -784,7 +893,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
 
     /* ---- place an order ---- */
     if (path === "/orders" && method === "POST") {
-      if (!originAllowed(request.headers.get("Origin"), env)) return err("forbidden", "Bad origin", 403);
+      if (!originAllowed(request, env)) return err("forbidden", "Bad origin", 403);
       let body: { customer?: Record<string, unknown>; items?: { id?: unknown; qty?: unknown }[] };
       try { body = (await request.json()) as typeof body; } catch { return err("invalid_input", "JSON body required", 400); }
       if (str(body.customer?.website, 500)) return json({ ok: true }); // honeypot
@@ -1052,9 +1161,8 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
        human types, rather than by the store's internal row id. */
     const bridgeOrder = path.match(/^\/bridge\/orders\/([A-Za-z0-9-]{1,40})$/);
     if (bridgeOrder && method === "POST") {
-      if (!env.BRIDGE_KEY) return err("not_configured", "Set the BRIDGE_KEY secret first", 501);
-      const given = request.headers.get("X-Bridge-Key") ?? "";
-      if (!timingSafeEqual(given, env.BRIDGE_KEY)) return err("unauthorized", "Bad key", 401);
+      const bad = await bridgeAuth(request, env);
+      if (bad) return bad;
       const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
       const action = str(body?.action, 20) ?? "";
       const o = await env.DB.prepare(`SELECT * FROM orders WHERE order_number = ?1`)
@@ -1077,9 +1185,8 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
      * key works, which account mode it is in, and a sentence saying what to
      * fix if it does not. */
     if (path === "/bridge/payment-check" && method === "GET") {
-      if (!env.BRIDGE_KEY) return err("not_configured", "Set the BRIDGE_KEY secret first", 501);
-      const givenPc = request.headers.get("X-Bridge-Key") ?? "";
-      if (!timingSafeEqual(givenPc, env.BRIDGE_KEY)) return err("unauthorized", "Bad key", 401);
+      const bad = await bridgeAuth(request, env);
+      if (bad) return bad;
       const check = await billplzCheck(env);
       /* v1.14.1 — the last real failure, in Billplz's own words, plus the
          sentence that names the fix. "The key works" is not the same claim
@@ -1102,9 +1209,8 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
     }
 
     if (path === "/bridge/sync-now" && method === "POST") {
-      if (!env.BRIDGE_KEY) return err("not_configured", "Set the BRIDGE_KEY secret first", 501);
-      const given = request.headers.get("X-Bridge-Key") ?? "";
-      if (!timingSafeEqual(given, env.BRIDGE_KEY)) return err("unauthorized", "Bad key", 401);
+      const bad = await bridgeAuth(request, env);
+      if (bad) return bad;
       const r = await syncNow(env);
       return json({
         ok: !r.pull.error,
@@ -1117,9 +1223,8 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
     }
 
     if (path === "/bridge/orders" && method === "GET") {
-      if (!env.BRIDGE_KEY) return err("not_configured", "Set the BRIDGE_KEY secret first", 501);
-      const given = request.headers.get("X-Bridge-Key") ?? "";
-      if (!timingSafeEqual(given, env.BRIDGE_KEY)) return err("unauthorized", "Bad key", 401);
+      const bad = await bridgeAuth(request, env);
+      if (bad) return bad;
 
       const since = str(url.searchParams.get("since"), 40);
       /* v1.3.0: marketing_consent rides along so the portal's marketing
@@ -1167,9 +1272,8 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
        total — the portal must overwrite its copy of any day it receives,
        never add to it, and advance its cursor only to `final_through`. */
     if (path === "/bridge/traffic" && method === "GET") {
-      if (!env.BRIDGE_KEY) return err("not_configured", "Set the BRIDGE_KEY secret first", 501);
-      const given = request.headers.get("X-Bridge-Key") ?? "";
-      if (!timingSafeEqual(given, env.BRIDGE_KEY)) return err("unauthorized", "Bad key", 401);
+      const bad = await bridgeAuth(request, env);
+      if (bad) return bad;
       const since = str(url.searchParams.get("since"), 10);
       return json(await trafficFeed(env, since && /^\d{4}-\d{2}-\d{2}$/.test(since) ? since : null));
     }
@@ -1180,7 +1284,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
        phone, and so a half-finished checkout is not lost on refresh. */
 
     if (path === "/auth/signup" && method === "POST") {
-      if (!originAllowed(request.headers.get("Origin"), env)) return err("forbidden", "Bad origin", 403);
+      if (!originAllowed(request, env)) return err("forbidden", "Bad origin", 403);
       const gate = await hitLimit(env, `signup:${callerIp(request)}`, 5, 60);
       if (!gate.allowed) return err("too_many", "Too many sign-ups from here. Try again later.", 429);
 
@@ -1235,7 +1339,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
     }
 
     if (path === "/auth/login" && method === "POST") {
-      if (!originAllowed(request.headers.get("Origin"), env)) return err("forbidden", "Bad origin", 403);
+      if (!originAllowed(request, env)) return err("forbidden", "Bad origin", 403);
       const ip = callerIp(request);
       /* Counts every attempt, not just the failures: a limit that forgives a
          correct guess is not a limit. */
@@ -1287,7 +1391,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
     }
 
     if (path === "/auth/me" && method === "PUT") {
-      if (!originAllowed(request.headers.get("Origin"), env)) return err("forbidden", "Bad origin", 403);
+      if (!originAllowed(request, env)) return err("forbidden", "Bad origin", 403);
       const me = await currentCustomer(env, request);
       if (!me) return err("unauthorized", "Not signed in", 401);
       const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
@@ -1349,7 +1453,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
        are never auto-claimed by matching a phone number, because that hands
        one customer another customer's history. */
     if (path === "/auth/claim" && method === "POST") {
-      if (!originAllowed(request.headers.get("Origin"), env)) return err("forbidden", "Bad origin", 403);
+      if (!originAllowed(request, env)) return err("forbidden", "Bad origin", 403);
       const me = await currentCustomer(env, request);
       if (!me) return err("unauthorized", "Not signed in", 401);
       const ip = callerIp(request);
@@ -1382,7 +1486,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
            so nobody can use it to learn how many orders the shop has;
          * eight misses in fifteen minutes and that IP is turned away. */
     if (path === "/orders/lookup" && method === "POST") {
-      if (!originAllowed(request.headers.get("Origin"), env)) return err("forbidden", "Bad origin", 403);
+      if (!originAllowed(request, env)) return err("forbidden", "Bad origin", 403);
       const ip = callerIp(request);
       const gate = await hitLimit(env, `lookup:${ip}`, 8, 15);
       if (!gate.allowed) {
@@ -1424,13 +1528,25 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
         "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "application/pdf": "pdf",
       };
       if (!okTypes[ct]) return err("invalid_input", "Only JPEG/PNG/WEBP images or PDF are accepted", 400);
-      const len = Number(request.headers.get("Content-Length") ?? "0");
-      if (len > 5 * 1024 * 1024) return err("invalid_input", "Maximum 5 MB", 400);
       if (!request.body) return err("invalid_input", "File body required", 400);
+      /* v1.40.0 (security audit ST1) — MEASURE, do not ask.
+       *
+       * The cap used to read Content-Length and then stream `request.body`
+       * straight into R2. A chunked upload sends no Content-Length at all,
+       * so `len` was 0, the cap passed, and an unbounded stream went into
+       * the bucket — storage the shop pays for, uploaded by anyone holding
+       * an order token. A header the caller writes cannot police the caller.
+       *
+       * The bytes are read into memory first and the real length decides.
+       * Five megabytes is small enough to hold and is already the promise
+       * made to the customer on the upload button. */
+      const fileBytes = await request.arrayBuffer();
+      if (fileBytes.byteLength > RECEIPT_MAX) return err("invalid_input", "Maximum 5 MB", 400);
+      if (fileBytes.byteLength === 0) return err("invalid_input", "File body required", 400);
       // receipts/ prefix: NEVER served by the public /media route — only the
       // admin endpoint below can read it back.
       const key = `receipts/${o.id}-${Date.now()}.${okTypes[ct]}`;
-      await env.MEDIA.put(key, request.body, { httpMetadata: { contentType: ct } });
+      await env.MEDIA.put(key, fileBytes, { httpMetadata: { contentType: ct } });
       await env.DB.prepare(
         `UPDATE orders SET receipt_key = ?1, status = 'payment_review', updated_at = datetime('now') WHERE id = ?2`,
       ).bind(key, o.id).run();
@@ -1441,7 +1557,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
     /* ---- Stage B: pay online (inert until secrets exist) ---- */
     const payMatch = path.match(/^\/orders\/([a-f0-9]{32})\/pay$/);
     if (payMatch && method === "POST") {
-      if (!billplzConfigured(env)) return err("not_configured", "Online payment is not enabled yet", 501);
+      if (!billplzReady(env)) return err("not_configured", "Online payment is not enabled yet", 501);
       const o = await env.DB.prepare(`SELECT * FROM orders WHERE token = ?1`).bind(payMatch[1]).first<OrderRow>();
       if (!o) return err("not_found", "Order not found", 404);
       if (o.status !== "pending_payment" && o.status !== "payment_review") {
@@ -1499,14 +1615,22 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
          in flight, and polling for thirty seconds would only delay telling
          the customer the truth. */
       if (!billplzConfigured(env) || !o.bill_id) return json({ status: o.status, paid: false, bill: false });
-      if (await billplzVerifyPaid(env, o.bill_id)) {
-        await env.DB.prepare(
+      /* v1.39.0 — the same three questions the callback asks: paid, for THIS
+         order's exact amount, into our own collection. The bill id comes
+         from the order row here, so it is already bound to the order; the
+         amount check is what stops a bill that was edited or reused. */
+      const settledNow = await billplzPaidFor(env, o.bill_id, o.total_cents);
+      if (settledNow.ok) {
+        const upd = await env.DB.prepare(
           `UPDATE orders SET status = 'paid', payment_method = 'fpx', updated_at = datetime('now')
            WHERE id = ?1 AND status IN ('pending_payment', 'payment_review')`,
         ).bind(o.id).run();
-        await recordOrderEvent(env, o.id, "paid", "Paid online (FPX) — confirmed with the bank");
+        if (upd.meta.changes > 0) {
+          await recordOrderEvent(env, o.id, "paid", "Paid online (FPX) — confirmed with the bank");
+        }
         return json({ status: "paid", paid: true });
       }
+      if (settledNow.why !== "not paid") console.error(`verify-payment refused bill ${o.bill_id}: ${settledNow.why}`);
       /* A bill exists and Billplz has not (yet) said it is paid. The page
          keeps polling on this answer, because this is the one case where
          waiting is the right thing to do. */
@@ -1514,7 +1638,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
     }
 
     if (path === "/payments/billplz/callback" && (method === "POST" || method === "GET")) {
-      if (!billplzConfigured(env)) return err("not_configured", "Not enabled", 501);
+      if (!billplzReady(env)) return err("not_configured", "Not enabled", 501);
       /* NEVER trust callback parameters. Billplz POSTs billplz[id],
          billplz[paid], billplz[x_signature] — we take only the bill ID and
          then ask Billplz's authenticated API whether that bill is truly
@@ -1524,37 +1648,82 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
 
       /* LOCK 1 — X-Signature. A GET here is the browser redirect (parameters
          arrive as billplz[id]); a POST is Billplz's server callback (flat
-         parameters). Either way a bad signature is thrown out before we spend
-         a network call on it. With no key configured we fall through to the
-         requery alone, which is still safe — just noisier. */
+         parameters).
+
+         v1.39.0 (SECURITY) — a signature is now REQUIRED, not preferred.
+         This used to reject only `sig === false`, so an unset key answered
+         "unconfigured" and every forged callback walked straight through to
+         the requery. billplzConfigured() now includes the key, so an
+         unsigned shop never creates a bill in the first place and this line
+         can be absolute. */
       const sig = await billplzSignatureOk(env, params, method === "GET");
-      if (sig === false) return err("forbidden", "Bad signature", 403);
+      if (sig !== true) return err("forbidden", "Bad signature", 403);
 
       const billId = params.get("billplz[id]") ?? params.get("id") ?? "";
-      /* LOCK 2 — only Billplz's own authenticated answer marks an order paid. */
-      if (billId && (await billplzVerifyPaid(env, billId))) {
-        const res = await env.DB.prepare(
-          `UPDATE orders SET status = 'paid', payment_method = 'fpx', updated_at = datetime('now')
-           WHERE bill_id = ?1 AND status IN ('pending_payment', 'payment_review')`,
-        ).bind(billId).run().catch(() => null);
-        if (res && res.meta.changes > 0) {
-          const paidRow = await env.DB.prepare(`SELECT id FROM orders WHERE bill_id = ?1`).bind(billId).first<{ id: number }>();
-          if (paidRow) await recordOrderEvent(env, paidRow.id, "paid", "Paid online (FPX) — confirmed with the bank");
-        }
-        if (!res || res.meta.changes === 0) {
-          /* pre-0003 schema or bill created before the column existed: fall
-             back to the order number Billplz echoes back in reference_1 —
-             still safe, because the PAID fact came from the requery. */
-          const ref = params.get("billplz[reference_1]") ?? params.get("reference_1") ?? "";
-          if (/^ELF-\d{6}-\d+$/.test(ref)) {
-            await env.DB.prepare(
-              `UPDATE orders SET status = 'paid', payment_method = 'fpx', updated_at = datetime('now')
-               WHERE order_number = ?1 AND status IN ('pending_payment', 'payment_review')`,
-            ).bind(ref).run();
-            const refRow = await env.DB.prepare(`SELECT id FROM orders WHERE order_number = ?1`).bind(ref).first<{ id: number }>();
-            if (refRow) await recordOrderEvent(env, refRow.id, "paid", "Paid online (FPX) — confirmed with the bank");
-          }
-        }
+      if (!billId) return json({ ok: true });
+
+      /* LOCK 2 — BILLPLZ decides which order, and one authenticated read
+         answers every remaining question at once.
+
+         v1.39.0 found the hole: when the bill id matched no waiting order,
+         the code fell back to the order number echoed in `reference_1` —
+         which arrives in the REQUEST. The paid fact came from Billplz; the
+         order it was applied to came from the caller; the two were never
+         tied together, so anyone holding one genuinely paid bill id could
+         mark any other order paid, and order numbers are sequential by
+         design.
+
+         v1.40.0 closes it without losing the fallback's only real virtue.
+         `reference_1` is still what names the order — but the copy we read
+         is the one Billplz itself returns from GET /bills/{id}, over our
+         secret key, and we set it ourselves when the bill was created. The
+         caller's parameters are never consulted for it. A forged callback
+         can therefore name any bill id it likes and still only ever move
+         the order that bill was raised for.
+
+         Matching on bill_id OR the bill's own reference_1 also repairs the
+         pre-0003 case, where the bill id could not be written back to the
+         order row (see /pay). */
+      const bill = await billplzFetchBill(env, billId);
+      if (!bill) {
+        await logPaymentRefusal(env, billId, "billplz gave no answer for this bill");
+        return json({ ok: true });
+      }
+      const o = await env.DB.prepare(
+        `SELECT id, order_number, total_cents, status FROM orders
+          WHERE bill_id = ?1 OR (?2 IS NOT NULL AND order_number = ?2)`,
+      ).bind(billId, bill.reference_1)
+        .first<{ id: number; order_number: string; total_cents: number; status: string }>()
+        .catch(() => null);
+      if (!o) {
+        await logPaymentRefusal(env, billId, `no order for reference_1 ${bill.reference_1 ?? "(none)"}`);
+        return json({ ok: true });
+      }
+      if (o.status !== "pending_payment" && o.status !== "payment_review") return json({ ok: true });
+
+      /* LOCK 3 — the money. Paid, in full, into our own collection. Read off
+         the SAME bill record LOCK 2 used, so no second fetch can disagree
+         with the one that chose the order. */
+      if (!bill.paid) return json({ ok: true });
+      if (!billplzCollectionOk(env, bill)) {
+        await logPaymentRefusal(env, billId, `bill belongs to another collection (order ${o.order_number})`);
+        return json({ ok: true });
+      }
+      if (bill.paid_amount === null || bill.paid_amount < o.total_cents) {
+        /* Not an error to Billplz — it retries on non-2xx, and a retry
+           cannot change any of these answers. Written down, because an order
+           that was paid and NOT accepted is a customer on the phone. */
+        await logPaymentRefusal(env, billId,
+          `settled ${bill.paid_amount ?? "?"} < order ${o.order_number} total ${o.total_cents}`);
+        return json({ ok: true });
+      }
+
+      const res = await env.DB.prepare(
+        `UPDATE orders SET status = 'paid', payment_method = 'fpx', updated_at = datetime('now')
+         WHERE id = ?1 AND status IN ('pending_payment', 'payment_review')`,
+      ).bind(o.id).run().catch(() => null);
+      if (res && res.meta.changes > 0) {
+        await recordOrderEvent(env, o.id, "paid", "Paid online (FPX) — confirmed with the bank");
       }
       return json({ ok: true });
     }
