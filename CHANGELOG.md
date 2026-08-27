@@ -1,3 +1,50 @@
+# ELFIA OFFICIAL STORE — v1.25.0 (27-08-2026)
+
+## The uploaded catalog, finished: prices everywhere they belong, and ON the page
+
+The CEO, after uploading his designer's new cut-out catalog: "missing
+prices tag and also I see the price overlapping on the photo a bit,
+elfiaofficialstore.my/catalog should reflect to the pdf that uploaded."
+
+Three fixes, one release:
+
+- **The empty Price pill on a Product Detail page is filled.** His
+  designer's detail pages say "Price" over a pill left deliberately blank —
+  the number is ours to write. A bare "Price"/"Harga" heading now takes the
+  page's price **when the page has exactly ONE matched product**; with two
+  products on a page it stays empty rather than guess. Page furniture
+  ("Saiz", "Details", "Material", "Product Detail" …) is recognised by its
+  whole text and no longer gets shelf links or a place in the unmatched
+  list — that list is now purely the labels that truly found no product.
+  *The other missing prices are DATA, not code: a label that matches no
+  published product (a typo like "Champange", or a shade not yet
+  published/renamed in the portal) prints without a price on purpose — the
+  portal now names those labels at upload (portal v1.56.0), and
+  `curl -sI …/catalog.pdf | grep -i unmatched` lists them for the live file.*
+- **The price sits in a cream chip.** His new pages put labels on
+  photographs; bare rose text on a photo read as overlap. The price (and
+  the struck-through old price) now sit in a small capsule in the house
+  paper colour — invisible on the cream page, a clean plate on a photo.
+- **`/catalog` shows the uploaded document itself.** When the shop is
+  serving a portal upload, the page draws every page of THAT file inline —
+  phone and desktop — with tap targets read from the PDF's own link
+  annotations, laid over the artwork. The tile grid stands down (the
+  document already shows every shade, priced, in his layout) and returns
+  the moment the upload is removed, or on any browser pdf.js cannot run.
+  The HEAD probe on /catalog.pdf now names its source (two R2 head calls,
+  no document built) so the page decides without downloading megabytes.
+
+Rigs: upload rig grew to 22 checks (Price-pill rule both ways, furniture
+silence); the live-page rig to 18 (uploaded document takes the page over,
+tap overlays present, tiles return on remove). The harness now forwards all
+response headers and serves .mjs correctly — two ways it was blinder than
+production.
+
+## Deploy
+
+**No migration.** Engine + website (chip + Price rule in the engine; the
+inline document view is the website half). `npm install` picks up pdf.js.
+
 # ELFIA OFFICIAL STORE — v1.24.0 (26-08-2026)
 
 ## No /api/ in anything a customer sees — the full audit

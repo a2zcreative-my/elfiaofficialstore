@@ -79,7 +79,7 @@ export interface Env {
   CATALOG_FILENAME?: string;
 }
 
-const VERSION = "1.24.0";
+const VERSION = "1.25.0";
 const STATUSES = ["pending_payment", "payment_review", "paid", "shipped", "completed", "cancelled"] as const;
 type Status = (typeof STATUSES)[number];
 
@@ -511,11 +511,19 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
       }
 
       if (method === "HEAD") {
+        /* v1.25.0 — a HEAD probe names the SOURCE too (two cheap R2 head
+           calls, no document built): the /catalog page asks this before
+           deciding whether to draw the CEO's uploaded pages inline or its
+           own tile grid, and must not download megabytes to find out. */
+        const [hSrc, hMap] = await Promise.all([
+          env.MEDIA.head("catalog/source.pdf"), env.MEDIA.head("catalog/map.json"),
+        ]);
         return new Response(null, {
           headers: {
             "Content-Type": "application/pdf",
             "Content-Disposition": `inline; filename="${catalogName}"`,
             "Cache-Control": "public, max-age=60",
+            "X-Catalog-Source": hSrc && hMap ? "portal" : "shipped",
           },
         });
       }

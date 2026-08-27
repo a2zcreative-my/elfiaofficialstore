@@ -35,6 +35,7 @@ const admin = (p, init = {}) => fetch(`${API}${p}`, {
 const portalPost = (path, body) => fetch(`${PORTAL}${path}`, { method: "POST", body: JSON.stringify(body) });
 const syncNow = () => admin("/admin/sync-stock", { method: "POST" }).then((r) => r.json());
 const rm = (c) => `RM ${(c / 100).toFixed(2)}`;
+const BRIDGE = process.env.BRIDGE_KEY ?? "shared-bridge-secret";
 
 const all = (await (await fetch(`${API}/products`)).json()).products;
 const target = all.find((p) => (p.sku ?? "").replace(/\s+/g, "").toUpperCase() === SKU && p.active === 1);
@@ -123,7 +124,49 @@ try {
     ok("and it says the PDF is built fresh", /built fresh/i.test(text), text.slice(0, 240));
   }
 
+  step("an uploaded catalog takes over the PAGE itself (v1.25.0)");
+  {
+    /* The CEO: "https://elfiaofficialstore.my/catalog should reflect to the
+       pdf that uploaded with update in the portal." With her upload live,
+       the page draws the document's own pages (pdf.js), tap targets
+       included, and the tile grid stands down. */
+    const { PDFDocument, StandardFonts, rgb } = (await import("node:module"))
+      .createRequire(import.meta.url)("../worker/node_modules/pdf-lib");
+    const doc = await PDFDocument.create();
+    const serif = await doc.embedFont(StandardFonts.TimesRomanBold);
+    const pg = doc.addPage([595.28, 841.89]);
+    pg.drawRectangle({ x: 0, y: 0, width: 595.28, height: 841.89, color: rgb(0.98, 0.96, 0.94) });
+    pg.drawText("Raya Pages", { x: 200, y: 500, size: 24, font: serif, color: rgb(0.3, 0.12, 0.17) });
+    const sites = [{ page: 0, label: "Raya Pages", x0: 200, y0: 320, x1: 380, y1: 350 }];
+    await portalPost("/_catalog", {
+      pdf_b64: Buffer.from(await doc.save()).toString("base64"),
+      map: { version: 1, pages: [{ w: 595.28, h: 841.89 }], sites },
+      updated_at: `live-${Date.now()}`,
+    });
+    await syncNow();
+
+    /* domcontentloaded, not networkidle: pdf.js streams the document with
+       range requests and the page legitimately keeps the wire busy. */
+    await page.goto(`${SITE}/catalog`, { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(6000);
+    const canvases = await page.locator("main canvas").count();
+    ok("the page draws the uploaded document's pages", canvases >= 1, `${canvases} canvases`);
+    const overlays = await page.locator("main canvas + a, main div > a[aria-label='Open in the shop']").count();
+    ok("with tap targets laid over the artwork", overlays >= 1, `${overlays} overlays`);
+    const tiles = await page.locator('main a[href^="/p?id="] img').count();
+    ok("and the tile grid stands down (the document IS the catalog)", tiles === 0, `${tiles} tiles`);
+
+    await portalPost("/_catalog", { clear: true });
+    await fetch(`${API}/bridge/catalog`, { method: "DELETE", headers: { "X-Bridge-Key": BRIDGE } });
+    await page.goto(`${SITE}/catalog`, { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(2500);
+    ok("removing the upload brings the tile grid back",
+       (await page.locator('main a[href^="/p?id="]').count()) >= 1);
+  }
+
 } finally {
+  await portalPost("/_catalog", { clear: true }).catch(() => null);
+  await fetch(`${API}/bridge/catalog`, { method: "DELETE", headers: { "X-Bridge-Key": BRIDGE } }).catch(() => null);
   await portalPost("/_discount", { sku: SKU, discount_cents: null }).catch(() => null);
   await portalPost("/_price", { sku: SKU, price_cents: ORIGINAL }).catch(() => null);
   await syncNow().catch(() => null);

@@ -34,7 +34,8 @@ const API = process.env.ELFIA_API ?? "http://127.0.0.1:8787/api/v1";
 const PORTAL = process.env.PORTAL ?? "http://127.0.0.1:8200";
 const KEY = process.env.ELFIA_ADMIN_KEY ?? "test-passcode-123";
 const BRIDGE = process.env.BRIDGE_KEY ?? "shared-bridge-secret";
-const SKU = "LUMIUPL7"; // this rig's own product, never another rig's
+const SKU = "LUMIUPL7";  // this rig's own products, never another rig's
+const SKU2 = "LUMIDSK8";
 
 let pass = 0, fail = 0;
 const ok = (label, cond, extra = "") => {
@@ -91,8 +92,31 @@ async function buildNewCatalog() {
   };
   put("Bawal lumi Uplan", 150, 300);   // will match this rig's product
   put("Bawal lumi Nobody", 440, 300);  // will match nothing, on purpose
+
+  /* Page 3 — a Product Detail page the way her designer builds them: ONE
+     product, headings, and an empty Price pill (v1.25.0). */
+  const detail = doc.addPage([595.28, 841.89]);
+  detail.drawRectangle({ x: 0, y: 0, width: 595.28, height: 841.89, color: rgb(0.98, 0.96, 0.94) });
+  const put3 = (label, cx, yTop, pg, pageRef) => {
+    const size = 12;
+    const w = serif.widthOfTextAtSize(label, size);
+    pageRef.drawText(label, { x: cx - w / 2, y: 841.89 - yTop - size, size, font: serif, color: rgb(0.3, 0.12, 0.17) });
+    sites.push({ page: pg, label, x0: cx - w / 2, y0: yTop, x1: cx + w / 2, y1: yTop + size });
+  };
+  put3("Bawal lumi Uplan By Elfia", 200, 400, 2, detail);
+  put3("Details", 400, 200, 2, detail);       // furniture: no link, no price, no complaint
+  put3("Price", 400, 600, 2, detail);         // the empty pill's heading — OURS to fill
+
+  /* Page 4 — TWO matched products and a Price heading: the heading must
+     stay empty rather than guess which product it means. */
+  const twoUp = doc.addPage([595.28, 841.89]);
+  twoUp.drawRectangle({ x: 0, y: 0, width: 595.28, height: 841.89, color: rgb(0.98, 0.96, 0.94) });
+  put3("Bawal lumi Uplan", 150, 300, 3, twoUp);
+  put3("Bawal lumi Duska", 440, 300, 3, twoUp);
+  put3("Price", 300, 600, 3, twoUp);
   const bytes = await doc.save();
-  return { bytes: Buffer.from(bytes), map: { version: 1, pages: [{ w: 595.28, h: 841.89 }, { w: 595.28, h: 841.89 }], sites } };
+  const pg = { w: 595.28, h: 841.89 };
+  return { bytes: Buffer.from(bytes), map: { version: 1, pages: [pg, pg, pg, pg], sites } };
 }
 
 try {
@@ -106,6 +130,7 @@ try {
   step("her new file travels the bridge and takes over");
   {
     await portalPost("/_add", { sku: SKU, stock: 5, price_cents: 6150, name: "LUMI UPLAN", category: "bawal" });
+    await portalPost("/_add", { sku: SKU2, stock: 5, price_cents: 7350, name: "LUMI DUSKA", category: "bawal" });
     const built = await buildNewCatalog();
     await portalPost("/_catalog", {
       pdf_b64: built.bytes.toString("base64"),
@@ -125,6 +150,28 @@ try {
     ok("the label with no product gets NO invented price", unmatched.includes("Bawal lumi Nobody"), unmatched);
     ok("and the page says when its prices were true",
        t.includes(`Prices as at ${new Date().toISOString().slice(0, 10)}`));
+
+    /* v1.25.0 — the CEO: "missing prices tag" on her detail pages, whose
+       designer leaves an empty Price pill. A page with exactly ONE matched
+       product fills its bare Price heading; a page with two leaves it
+       empty; page furniture ("Details") is neither linked nor reported. */
+    ok("page furniture is not reported as a failure", !unmatched.includes("Details"), unmatched);
+    ok("nor is the Price heading itself", !unmatched.includes("Price"), unmatched);
+    const perPage = (n) => {
+      const f = `/tmp/catup-pg-${Date.now()}.pdf`;
+      writeFileSync(f, bytes);
+      try {
+        return execFileSync("pdftotext", ["-raw", "-f", String(n), "-l", String(n), f, "-"],
+          { encoding: "utf8", maxBuffer: 20e6 });
+      } finally { try { unlinkSync(f); } catch { /* gone */ } }
+    };
+    const detailTxt = perPage(3);
+    ok("a lone product's Price pill is filled with ITS price",
+       (detailTxt.match(new RegExp(rm(6150).replace(".", "\\."), "g")) ?? []).length === 2, detailTxt.slice(0, 120));
+    const twoUpTxt = perPage(4);
+    ok("a two-product page's Price heading stays empty — never a guess",
+       twoUpTxt.includes(rm(6150)) && twoUpTxt.includes(rm(7350))
+       && (twoUpTxt.match(/RM \d/g) ?? []).length === 2, twoUpTxt.slice(0, 140));
 
     const skuId = (await (await fetch(`${API}/products`)).json()).products
       .find((p) => (p.sku ?? "").replace(/\s+/g, "").toUpperCase() === SKU)?.id;
@@ -176,9 +223,12 @@ try {
   await portalPost("/_catalog", { clear: true }).catch(() => null);
   await fetch(`${API}/bridge/catalog`, { method: "DELETE", headers: { "X-Bridge-Key": BRIDGE } }).catch(() => null);
   await portalPost("/_remove", { sku: SKU }).catch(() => null);
+  await portalPost("/_remove", { sku: SKU2 }).catch(() => null);
   const products = (await (await fetch(`${API}/products`)).json()).products;
-  const mine = products.find((p) => (p.sku ?? "").replace(/\s+/g, "").toUpperCase() === SKU);
-  if (mine) await admin(`/admin/products/${mine.id}`, { method: "PUT", body: JSON.stringify({ active: false }) });
+  for (const sk of [SKU, SKU2]) {
+    const mine = products.find((p) => (p.sku ?? "").replace(/\s+/g, "").toUpperCase() === sk);
+    if (mine) await admin(`/admin/products/${mine.id}`, { method: "PUT", body: JSON.stringify({ active: false }) });
+  }
   await syncNow().catch(() => null);
 }
 

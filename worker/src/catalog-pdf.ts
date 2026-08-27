@@ -385,9 +385,42 @@ export async function patchUploadedCatalog(
   const sitePages = new Set(map.sites.map((s) => s.page));
   let links = 0;
 
+  /* v1.25.0 — PAGE FURNITURE. A designer's page carries headings that are
+     not products: "Saiz", "Details", "Material", "Product Detail", and the
+     empty "Price" pill the CEO flagged. They used to get shelf links and a
+     place in the unmatched list — noise on both counts. They are recognised
+     by their whole (normalised) text, never by substring, so a product that
+     legitimately contains one of these words is untouched. */
+  const normal = (s: string) => s.toLowerCase().normalize("NFKD").replace(/[^a-z]/g, "");
+  const FURNITURE = new Set([
+    "price", "harga", "saiz", "size", "sizes", "details", "detail",
+    "material", "materials", "productdetail", "byelfia", "elfia",
+  ]);
+  const isPriceHeading = (s: string) => ["price", "harga"].includes(normal(s));
+
+  /* The CEO's detail pages say "Price" with an empty pill the designer left
+     blank on purpose — the number is OURS to write. A bare "Price" heading
+     names no product, so it takes the page's price only when the page has
+     exactly ONE matched product; two products on a page and the heading
+     stays empty rather than guessing. Matched first, drawn second, because
+     this rule needs the whole page read before anything is written. */
+  type Placed = { site: UploadedSite; product: CatalogProduct | null; heading: boolean };
+  const placed: Placed[] = [];
+  const productsOfPage = new Map<number, Set<CatalogProduct>>();
   for (const site of map.sites) {
-    const page = pages[site.page];
-    if (!page) { unmatched.push({ label: site.label, why: "page missing" }); continue; }
+    if (!pages[site.page]) { unmatched.push({ label: site.label, why: "page missing" }); continue; }
+    const heading = isPriceHeading(site.label);
+    if (!heading && FURNITURE.has(normal(site.label))) continue; // silent: not a product, not a failure
+    const product = heading ? null : matchProduct(site.label, products);
+    if (product) {
+      if (!productsOfPage.has(site.page)) productsOfPage.set(site.page, new Set());
+      productsOfPage.get(site.page)!.add(product);
+    }
+    placed.push({ site, product, heading });
+  }
+
+  for (const { site, product: matched, heading } of placed) {
+    const page = pages[site.page]!;
     const H = page.getHeight();
     const cx = (site.x0 + site.x1) / 2;
     const labelH = site.y1 - site.y0;
@@ -396,13 +429,18 @@ export async function patchUploadedCatalog(
        display-sized price. */
     const size = Math.min(14, Math.max(7.5, labelH * 0.85));
 
-    const product = matchProduct(site.label, products);
+    const pageSet = productsOfPage.get(site.page);
+    const product = heading
+      ? (pageSet && pageSet.size === 1 ? [...pageSet][0]! : null)
+      : matched;
 
-    /* Tap area first, matched or not: the label block plus the price line
-       below it. Modest on purpose — in a layout this worker has never seen,
-       a generous rectangle could claim a neighbouring product. */
+    if (heading && !product) continue; // a Price heading on a page it cannot read — leave the pill as the designer left it
+
+    /* Tap area, matched or not: the label block plus the price chip below.
+       Modest on purpose — in a layout this worker has never seen, a
+       generous rectangle could claim a neighbouring product. */
     const tapTop = site.y0 - 6;
-    const tapBottom = site.y1 + size * 2.2;
+    const tapBottom = site.y1 + size * 2.5;
     const href = product
       ? `${opts.linkBase}/p?id=${product.id}`
       : `${opts.linkBase}/shop?c=${collectionOfLabel(site.label)}`;
@@ -417,14 +455,31 @@ export async function patchUploadedCatalog(
       ? rm(product.compare_price_cents) : null;
     const wasSize = size * 0.82;
     const gap = size * 0.45;
-    const totalW = serif.widthOfTextAtSize(price, size)
-      + (was ? gap + serif.widthOfTextAtSize(was, wasSize) : 0);
+    const priceW = serif.widthOfTextAtSize(price, size);
+    const totalW = priceW + (was ? gap + serif.widthOfTextAtSize(was, wasSize) : 0);
 
-    const baseline = H - site.y1 - size * 1.1;
+    /* v1.25.0 — the price sits in a CREAM CHIP, a capsule in the house
+       paper colour. The CEO: "I see the price overlapping on the photo a
+       bit" — her new pages put labels on photographs, and bare rose text on
+       a photograph reads as a mistake. On the cream page the chip vanishes
+       into the background; on a photo it is a clean little plate. Same ink,
+       same sizes, nothing else moves. */
+    const chipH = size * 1.5;
+    const chipPad = size * 0.6;
+    const chipW = totalW + chipPad * 2;
+    const chipTop = H - site.y1 - size * 0.3;    // PDF coords: just under the label
+    const chipBottom = chipTop - chipH;
+    const chipX = cx - chipW / 2;
+    const r = chipH / 2;
+    page.drawRectangle({ x: chipX + r, y: chipBottom, width: chipW - 2 * r, height: chipH, color: CREAM });
+    page.drawCircle({ x: chipX + r, y: chipBottom + r, size: r, color: CREAM });
+    page.drawCircle({ x: chipX + chipW - r, y: chipBottom + r, size: r, color: CREAM });
+
+    const baseline = chipBottom + chipH / 2 - size * 0.32;
     const startX = cx - totalW / 2;
     page.drawText(price, { x: startX, y: baseline, size, font: serif, color: GRID_INK });
     if (was) {
-      const wasX = startX + serif.widthOfTextAtSize(price, size) + gap;
+      const wasX = startX + priceW + gap;
       const wasW = serif.widthOfTextAtSize(was, wasSize);
       page.drawText(was, { x: wasX, y: baseline, size: wasSize, font: serif, color: MUTED });
       page.drawLine({

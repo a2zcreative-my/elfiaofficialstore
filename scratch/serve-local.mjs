@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const ROOT = new URL('../out', import.meta.url).pathname;
-const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.txt': 'text/plain', '.woff2': 'font/woff2' };
+const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.txt': 'text/plain', '.woff2': 'font/woff2', '.mjs': 'text/javascript', '.pdf': 'application/pdf' };
 
 http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://localhost');
@@ -33,7 +33,15 @@ http.createServer(async (req, res) => {
     // Forward Set-Cookie too — the session cookie lives there, and dropping
     // it made the local rig look like a broken sign-in when the product was
     // fine. getSetCookie() keeps multiple cookies separate.
+    // v1.25.0 — forward ALL response headers (minus the hop-by-hop and
+    // length ones fetch already consumed): the /catalog page reads
+    // X-Catalog-Source off a HEAD probe, and a harness that strips it made
+    // the rig blind to the uploaded-catalog view production shows.
     const out = { 'content-type': r.headers.get('content-type') ?? 'application/json' };
+    for (const [k, v] of r.headers.entries()) {
+      if (['content-encoding', 'content-length', 'transfer-encoding', 'connection', 'set-cookie'].includes(k)) continue;
+      out[k] = v;
+    }
     const cookies = typeof r.headers.getSetCookie === 'function'
       ? r.headers.getSetCookie()
       : (r.headers.get('set-cookie') ? [r.headers.get('set-cookie')] : []);
