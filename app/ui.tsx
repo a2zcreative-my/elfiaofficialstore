@@ -202,12 +202,14 @@ export function ProductCard({ p, compact = false }: { p: Product; compact?: bool
             SEEN through a cut-out photo; an opaque photo covers it whole,
             which is why it costs nothing to have here. Drawn only when
             there is a photo — the "ELFIA" placeholder keeps its plain pad.
-            v1.34.0 — `touch:opacity-100`: a phone has no cursor, so on the
-            app view the backdrop is simply always there (see globals.css). */}
+            v1.35.0 — a WEB-VIEW effect only, by the CEO's call. v1.34 made
+            it always-on where no cursor exists (a phone cannot hover); he
+            looked at it and asked for the app view left plain. So there is
+            no `touch:` rule here on purpose: no cursor, no backdrop. */}
         {p.image_key && (
           // eslint-disable-next-line @next/next/no-img-element
           <img src="/api/v1/tile-backdrop" alt="" aria-hidden loading="lazy" decoding="async"
-            className="absolute inset-0 h-full w-full object-cover object-top opacity-0 transition-opacity duration-500 group-hover:opacity-100 touch:opacity-100" />
+            className="absolute inset-0 h-full w-full object-cover object-top opacity-0 transition-opacity duration-500 group-hover:opacity-100" />
         )}
         {p.image_key ? (
           // eslint-disable-next-line @next/next/no-img-element

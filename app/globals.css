@@ -39,21 +39,6 @@
   --elfia-fab: 2.75rem;
 }
 
-/* v1.34.0 — `touch:` = a device with NO cursor (phones, tablets, the app
-   view). The CEO: "I want mobile apps view also can see this hover!" — and
-   a phone cannot hover, ever: there is nothing to move over a card, and a
-   tap opens the product instead. So the reveal has a second half. Where a
-   cursor exists the ELFIA backdrop fades in under it; where none exists it
-   is simply THERE, behind every cut-out photo, all the time. Same picture,
-   same layer, same upload — only the trigger differs, because the input
-   differs.
-
-   `hover: none` is the browser's own answer to "can this pointer hover",
-   which is the honest question to ask. Guessing from screen width would put
-   the always-on look on a narrow desktop window and leave a big tablet
-   without it. */
-@custom-variant touch (@media (hover: none));
-
 /* The app shell sits on cream; the desktop shop keeps the same ground so the
    two views never look like two different shops. */
 body {

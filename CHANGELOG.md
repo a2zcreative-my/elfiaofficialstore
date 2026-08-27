@@ -1,3 +1,22 @@
+# ELFIA OFFICIAL STORE — v1.35.0 (27-08-2026)
+
+## The backdrop is a web-view effect — the app view stays plain
+
+The CEO, having seen v1.34.0 on a phone: "I dont want the hover in the
+mobile apps view, let it on the web view instead."
+
+- **v1.34.0's always-on rule is removed.** The `touch:` variant and its
+  three uses are gone from the code, not just switched off — nothing
+  reveals the backdrop where there is no cursor.
+- **On a desktop nothing changes**: the ELFIA backdrop still fades in
+  behind a cut-out photo when the cursor arrives, on product cards, the
+  product page and /catalog.
+- **On a phone or tablet the cards are exactly as they were** — the
+  plain blush pad, no backdrop, whatever the photo.
+- The rig keeps a phone section, now proving the opposite: every laid-out
+  layer stays at opacity 0 in a touch emulation. Turning it back on by
+  accident would fail a check.
+
 # ELFIA OFFICIAL STORE — v1.34.0 (27-08-2026)
 
 ## The app view sees it too — where nothing can hover, it is always on
