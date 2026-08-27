@@ -124,12 +124,13 @@ try {
     ok("and it says the PDF is built fresh", /built fresh/i.test(text), text.slice(0, 240));
   }
 
-  step("an uploaded catalog takes over the PAGE itself (v1.25.0)");
+  step("the page stays the tile grid, whatever document is uploaded (v1.26.0)");
   {
-    /* The CEO: "https://elfiaofficialstore.my/catalog should reflect to the
-       pdf that uploaded with update in the portal." With her upload live,
-       the page draws the document's own pages (pdf.js), tap targets
-       included, and the tile grid stands down. */
+    /* v1.25.0 drew the uploaded PDF on this page; the CEO: "I want like the
+       previous which is correctly with the prices tag!" The tile grid IS
+       the catalog page — every product, live price tags, always. An upload
+       changes only the downloadable document and the cover, never this
+       page's layout. */
     const { PDFDocument, StandardFonts, rgb } = (await import("node:module"))
       .createRequire(import.meta.url)("../worker/node_modules/pdf-lib");
     const doc = await PDFDocument.create();
@@ -145,23 +146,14 @@ try {
     });
     await syncNow();
 
-    /* domcontentloaded, not networkidle: pdf.js streams the document with
-       range requests and the page legitimately keeps the wire busy. */
     await page.goto(`${SITE}/catalog`, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(6000);
-    const canvases = await page.locator("main canvas").count();
-    ok("the page draws the uploaded document's pages", canvases >= 1, `${canvases} canvases`);
-    const overlays = await page.locator("main canvas + a, main div > a[aria-label='Open in the shop']").count();
-    ok("with tap targets laid over the artwork", overlays >= 1, `${overlays} overlays`);
-    const tiles = await page.locator('main a[href^="/p?id="] img').count();
-    ok("and the tile grid stands down (the document IS the catalog)", tiles === 0, `${tiles} tiles`);
+    await page.waitForTimeout(2500);
+    ok("the tile grid is still the page, prices and all",
+       (await page.locator('main a[href^="/p?id="]').count()) >= 1);
+    ok("no document canvases replace it", (await page.locator("main canvas").count()) === 0);
 
     await portalPost("/_catalog", { clear: true });
     await fetch(`${API}/bridge/catalog`, { method: "DELETE", headers: { "X-Bridge-Key": BRIDGE } });
-    await page.goto(`${SITE}/catalog`, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(2500);
-    ok("removing the upload brings the tile grid back",
-       (await page.locator('main a[href^="/p?id="]').count()) >= 1);
   }
 
 } finally {

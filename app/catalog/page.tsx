@@ -44,7 +44,7 @@
  * ever left looking at an empty box.
  */
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   STORE, collectionsOf, comparePrice, fmtRM, imageUrl, isSoldOut, splitName,
@@ -105,103 +105,11 @@ function Tile({ p }: { p: Product }) {
   );
 }
 
-/* ==== v1.25.0 — the CEO's uploaded catalog, drawn ON the page ====
-   The CEO: "https://elfiaofficialstore.my/catalog should reflect to the pdf
-   that uploaded with update in the portal." When the shop is serving her
-   uploaded file, this page shows THAT document — every page rendered
-   inline, phone and desktop alike — instead of the tile grid the page used
-   to build for phones. The document arrives from /catalog.pdf already
-   live-priced, and its tap targets are read out of the PDF's own link
-   annotations and laid over each page, so a product is one tap away here
-   exactly as it is in the file.
-
-   Rendered once per visit, not on the 90-second refresh tick: the document
-   is megabytes, and it is rebuilt with today's prices every time it is
-   fetched — opening the page IS the refresh. If pdf.js fails on an old
-   browser, onFallback flips the page back to the tile grid: never a blank
-   catalog. */
-function UploadedPages({ onFallback }: { onFallback: () => void }) {
-  const holderRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    let dead = false;
-    void (async () => {
-      try {
-        const pdfjs = await import("pdfjs-dist");
-        pdfjs.GlobalWorkerOptions.workerSrc = "/vendor/pdf.worker.min.mjs";
-        const doc = await pdfjs.getDocument(PDF).promise;
-        const holder = holderRef.current;
-        if (dead || !holder) return;
-        holder.innerHTML = "";
-        const cssW = Math.min(holder.clientWidth || 360, 896);
-        const dpr = Math.min(window.devicePixelRatio || 1, 2);
-        for (let n = 1; n <= doc.numPages; n++) {
-          const page = await doc.getPage(n);
-          if (dead) return;
-          const vp1 = page.getViewport({ scale: 1 });
-          const scale = cssW / vp1.width;
-          const vp = page.getViewport({ scale: scale * dpr });
-          const canvas = document.createElement("canvas");
-          canvas.width = Math.round(vp.width);
-          canvas.height = Math.round(vp.height);
-          canvas.style.width = "100%";
-          canvas.style.height = "auto";
-          canvas.style.display = "block";
-          const wrap = document.createElement("div");
-          wrap.style.position = "relative";
-          wrap.className = `overflow-hidden rounded-2xl bg-white ring-1 ring-elfia-line${n > 1 ? " mt-4" : ""}`;
-          wrap.appendChild(canvas);
-          holder.appendChild(wrap);
-          const ctx = canvas.getContext("2d");
-          if (!ctx) throw new Error("no canvas");
-          await page.render({ canvasContext: ctx, viewport: vp }).promise;
-          /* The tap targets, from the document's own annotations — the same
-             rectangles a PDF viewer would honour. Percent-positioned so
-             they stay glued to the artwork at any screen width. */
-          const vpCss = page.getViewport({ scale });
-          const cssH = vpCss.height;
-          const annots = (await page.getAnnotations()) as { subtype?: string; url?: string; rect: number[] }[];
-          for (const a of annots) {
-            if (a.subtype !== "Link" || !a.url) continue;
-            const [ax1, ay1, ax2, ay2] = vpCss.convertToViewportRectangle(a.rect) as [number, number, number, number];
-            const el = document.createElement("a");
-            el.href = a.url;
-            el.setAttribute("aria-label", "Open in the shop");
-            el.style.cssText =
-              `position:absolute;left:${(Math.min(ax1, ax2) / cssW) * 100}%;top:${(Math.min(ay1, ay2) / cssH) * 100}%;` +
-              `width:${(Math.abs(ax2 - ax1) / cssW) * 100}%;height:${(Math.abs(ay2 - ay1) / cssH) * 100}%;`;
-            wrap.appendChild(el);
-          }
-        }
-      } catch {
-        if (!dead) onFallback();
-      }
-    })();
-    return () => { dead = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- render once per visit, see the comment above
-  }, []);
-  return <div ref={holderRef} className="mt-8" />;
-}
-
 export default function Catalog() {
   const [products, setProducts] = useState<Product[] | null>(null);
-  /* v1.25.0 — whose document is serving. "unknown" until the HEAD probe
-     answers (one request, no body); "portal" switches the page to drawing
-     the uploaded PDF itself. A probe failure means "shipped", which is the
-     page as it always was. */
-  const [source, setSource] = useState<"unknown" | "portal" | "shipped">("unknown");
-  const [pdfFailed, setPdfFailed] = useState(false);
   /* Same refresh signal as every other page: come back to the tab and the
      catalog is priced correctly, without a reload. */
   const refresh = useDataRefresh();
-
-  useEffect(() => {
-    /* no-store: the PDF responses are cached a minute (rightly), but this
-       probe must see a portal remove the moment the page is opened — a
-       cached "portal" answer would draw a document that is gone. */
-    void fetch(PDF, { method: "HEAD", cache: "no-store" })
-      .then((r) => setSource(r.headers.get("x-catalog-source") === "portal" ? "portal" : "shipped"))
-      .catch(() => setSource("shipped"));
-  }, []);
 
   useEffect(() => {
     void fetch("/api/v1/products")
@@ -209,8 +117,6 @@ export default function Catalog() {
       .then((j: { products: Product[] }) => setProducts(j.products))
       .catch(() => setProducts([]));
   }, [refresh]);
-
-  const showUploaded = source === "portal" && !pdfFailed;
 
   const all = products ?? [];
   /* Grouped exactly the way the shop groups: the portal names the
@@ -228,16 +134,12 @@ export default function Catalog() {
             shade, which is the opposite of what a catalog is for. The
             wordmark sits in the middle of the artwork, so cropping from the
             centre keeps it. */}
-        {/* v1.25.0 — hidden while the uploaded document draws below: its
-            first page IS this cover, and showing both is showing it twice. */}
-        {!showUploaded && (
-          <div className="overflow-hidden rounded-2xl ring-1 ring-elfia-line">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={COVER} alt="ELFIA Catalog"
-              className="h-[42vh] w-full object-cover object-center sm:h-auto sm:max-h-[60vh]"
-              loading="eager" />
-          </div>
-        )}
+        <div className="overflow-hidden rounded-2xl ring-1 ring-elfia-line">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={COVER} alt="ELFIA Catalog"
+            className="h-[42vh] w-full object-cover object-center sm:h-auto sm:max-h-[60vh]"
+            loading="eager" />
+        </div>
 
         <div className="mt-6 text-center">
           <p className="text-[11px] font-semibold tracking-[0.28em] text-elfia-rose uppercase">The lookbook</p>
@@ -264,11 +166,6 @@ export default function Catalog() {
           The PDF is built fresh each time you open it, so its prices are always today&apos;s.
         </p>
 
-        {/* ---- the uploaded catalog, page by page (v1.25.0) ----
-            The document itself, live-priced, every product tappable —
-            phone and desktop alike. */}
-        {showUploaded && <UploadedPages onFallback={() => setPdfFailed(true)} />}
-
         {/* ---- the PDF itself ----
             Only where a browser will actually draw one. `lg:` rather than a
             user-agent sniff: the sizes that render PDFs inline are the sizes
@@ -276,7 +173,7 @@ export default function Catalog() {
             wrong about what a browser IS the way a sniff can. A phone gets
             the tiles below instead — same products, same live prices — and
             the button above. */}
-        {!showUploaded && <div className="mt-8 hidden lg:block">
+        <div className="mt-8 hidden lg:block">
           <object data={PDF} type="application/pdf"
             className="h-[80vh] w-full rounded-2xl ring-1 ring-elfia-line"
             aria-label="ELFIA Catalog">
@@ -293,25 +190,20 @@ export default function Catalog() {
               </a>
             </div>
           </object>
-        </div>}
+        </div>
 
-        {/* ---- the shades, by collection ----
-            v1.25.0: the page's OWN tile grid — the whole catalog when the
-            shop serves its built-in document, the fallback when a browser
-            cannot draw the uploaded one. While the uploaded document is on
-            screen, the grid stays out: the document already shows every
-            shade, priced and tappable, in the CEO's own layout. */}
-        {!showUploaded && products === null && (
+        {/* ---- the shades, by collection ---- */}
+        {products === null && (
           <p className="mt-12 text-center text-sm text-elfia-muted">Loading the collection…</p>
         )}
 
-        {!showUploaded && products !== null && groups.length === 0 && (
+        {products !== null && groups.length === 0 && (
           <p className="mt-12 text-center text-sm text-elfia-muted">
             Nothing in the shop just now — check back after the next live.
           </p>
         )}
 
-        {!showUploaded && groups.map(({ g, items }) => (
+        {groups.map(({ g, items }) => (
           <section key={g.key} className="mt-12">
             {/* The printed catalog's section rule: wordmark, then a dashed
                 line running to the edge. */}

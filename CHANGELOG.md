@@ -1,3 +1,40 @@
+# ELFIA OFFICIAL STORE — v1.26.0 (27-08-2026)
+
+## The /catalog page is the tile grid again — full stop
+
+The CEO, on seeing v1.25.0's inline document view: "I want like the
+previous which is correctly with the prices tag! you make it this worse
+now!"
+
+He is right, and the change is reverted completely. The tile grid IS the
+catalog page: every product with its photo, its name, and its price tag
+drawn live from the shop — always correct, whatever any PDF says. v1.25.0
+replaced that with a rendering of the uploaded document, which faithfully
+showed the document's own gaps (labels with no published product carry no
+price) — trading a page that was always right for a picture of a file that
+might not be.
+
+- `app/catalog/page.tsx` is back to exactly the v1.24 behaviour: cover,
+  tile grid with live price tags on every product, PDF embedded on desktop,
+  "Open the PDF" button everywhere.
+- An upload from the portal changes what it always changed: the
+  downloadable/shareable PDF and the cover — never this page's layout.
+- The v1.25.0 PDF improvements STAND (they fix what was actually asked):
+  the cream chip under prices, the filled Price pill on single-product
+  detail pages, page furniture handled, and the portal naming every label
+  that will print without a price.
+- The rig now asserts the OPPOSITE of what it asserted for one release:
+  with an upload live, the page keeps its tiles and draws no document
+  canvases (16 checks).
+
+pdf.js stays installed but dormant (public/vendor/, package.json) — removing
+it again would churn three files for no behaviour change.
+
+## Deploy
+
+**No migration.** Website only (the engine is unchanged since v1.25.0 —
+deploying both via PUSH.bat is fine as always).
+
 # ELFIA OFFICIAL STORE — v1.25.0 (27-08-2026)
 
 ## The uploaded catalog, finished: prices everywhere they belong, and ON the page
