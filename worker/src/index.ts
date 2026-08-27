@@ -79,7 +79,7 @@ export interface Env {
   CATALOG_FILENAME?: string;
 }
 
-const VERSION = "1.33.0";
+const VERSION = "1.34.0";
 const STATUSES = ["pending_payment", "payment_review", "paid", "shipped", "completed", "cancelled"] as const;
 type Status = (typeof STATUSES)[number];
 

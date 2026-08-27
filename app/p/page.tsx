@@ -204,7 +204,7 @@ function ProductInner() {
             {p.image_key && (
               // eslint-disable-next-line @next/next/no-img-element
               <img src="/api/v1/tile-backdrop" alt="" aria-hidden loading="lazy" decoding="async"
-                className="absolute inset-0 h-full w-full object-cover object-top opacity-0 transition-opacity duration-500 group-hover:opacity-100" />
+                className="absolute inset-0 h-full w-full object-cover object-top opacity-0 transition-opacity duration-500 group-hover:opacity-100 touch:opacity-100" />
             )}
             {p.image_key ? (
               // eslint-disable-next-line @next/next/no-img-element

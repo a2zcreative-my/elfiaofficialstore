@@ -85,7 +85,7 @@ function Tile({ p }: { p: Product }) {
             otherwise, so this page never knows or cares which. */}
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src="/api/v1/tile-backdrop" alt="" aria-hidden
-          className="absolute inset-0 h-full w-full object-cover object-top opacity-0 transition-opacity duration-500 group-hover:opacity-100"
+          className="absolute inset-0 h-full w-full object-cover object-top opacity-0 transition-opacity duration-500 group-hover:opacity-100 touch:opacity-100"
           loading="lazy" decoding="async" />
         {p.image_key ? (
           // eslint-disable-next-line @next/next/no-img-element

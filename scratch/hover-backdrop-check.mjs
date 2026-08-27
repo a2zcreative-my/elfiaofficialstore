@@ -18,6 +18,10 @@
  *   4. Every layer points at /api/v1/tile-backdrop — the ONE stable URL —
  *      so a portal upload changes every card at once, and no page holds a
  *      hardcoded picture any more.
+ *   5. v1.34.0 — ON A PHONE THERE IS NO CURSOR, so the backdrop is simply
+ *      ALWAYS on. The CEO: "I want mobile apps view also can see this
+ *      hover!" Checked in a real touch emulation (hover: none), where the
+ *      desktop rule would have left every card blank forever.
  *
  *   node scratch/stub-api.mjs
  *   node scratch/serve-local.mjs
@@ -154,8 +158,81 @@ step("/catalog keeps the effect it already had");
   ok("and revealed by it", hovered.opacity > 0.9, String(hovered.opacity));
 }
 
+
+/* ---- v1.34.0: the app view, where nothing can hover ---- */
+
+step("a phone shows the backdrop with no cursor at all");
+{
+  const phone = await browser.newContext({
+    viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 3,
+    userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 "
+             + "(KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+  });
+  const mob = await phone.newPage();
+
+  for (const [label, path] of [["home", "/"], ["shop", "/shop"], ["catalog", "/catalog"]]) {
+    await mob.goto(`${SITE}${path}`, { waitUntil: "domcontentloaded" });
+    await mob.waitForSelector(SEL, { timeout: 15000, state: "attached" });
+    await mob.waitForTimeout(900);
+
+    if (label === "home") {
+      /* The premise first: if the browser claimed it CAN hover, the rest of
+         this section would be testing a desktop in a small window. */
+      const noHover = await mob.evaluate(() => matchMedia("(hover: none)").matches);
+      ok("the emulated phone really reports (hover: none)", noHover === true);
+    }
+
+    const state = await mob.evaluate(() => {
+      const layers = [...document.querySelectorAll('img[src="/api/v1/tile-backdrop"]')]
+        .filter((el) => el.getClientRects().length > 0);
+      return {
+        n: layers.length,
+        opaque: layers.filter((el) => Number(getComputedStyle(el).opacity) > 0.9).length,
+        photosOnTop: layers.every((back) => {
+          const frame = back.parentElement;
+          const photo = [...frame.querySelectorAll("img")].find((el) => el !== back);
+          if (!photo) return true;
+          return getComputedStyle(photo).position !== "static";
+        }),
+      };
+    });
+    ok(`${label}: every laid-out card shows the backdrop (${state.opaque}/${state.n})`,
+       state.n > 0 && state.opaque === state.n);
+    ok(`${label}: the photo still paints above it`, state.photosOnTop === true);
+  }
+
+  /* And a product page in the app view. */
+  const id = await mob.evaluate(async () => {
+    const j = await (await fetch("/api/v1/products")).json();
+    return (j.products.find((p) => p.image_key) ?? j.products[0]).id;
+  });
+  await mob.goto(`${SITE}/p?id=${id}`, { waitUntil: "domcontentloaded" });
+  await mob.waitForSelector(SEL, { timeout: 15000, state: "attached" });
+  await mob.waitForTimeout(900);
+  const hero = await mob.evaluate(() =>
+    Number(getComputedStyle(document.querySelector('img[src="/api/v1/tile-backdrop"]')).opacity));
+  ok("the product page's photo has it too on a phone", hero > 0.9, String(hero));
+
+  await phone.close();
+}
+
+/* A desktop must NOT have become always-on: the fade is the whole point of
+   the effect where a cursor exists, and losing it would be a regression
+   nobody would notice until it looked wrong. */
+step("the desktop reveal is untouched");
+{
+  await pg.goto(`${SITE}/shop`, { waitUntil: "domcontentloaded" });
+  await pg.waitForSelector(SEL, { timeout: 15000, state: "attached" });
+  await pg.waitForTimeout(800);
+  const canHover = await pg.evaluate(() => matchMedia("(hover: hover)").matches);
+  ok("this context reports (hover: hover)", canHover === true);
+  const { rest, hovered } = await hoverProbe((await visible())[0]);
+  ok("still hidden until the cursor arrives", rest.opacity === 0, String(rest.opacity));
+  ok("and still revealed by it", hovered.opacity > 0.9, String(hovered.opacity));
+}
+
 await browser.close();
 console.log(fail === 0
-  ? `\nPASS - ${pass} checks: the ELFIA backdrop stands behind every product, everywhere.`
+  ? `\nPASS - ${pass} checks: the ELFIA backdrop stands behind every product, on every device.`
   : `\n${fail} of ${pass + fail} checks failed.`);
 process.exit(fail === 0 ? 0 : 1);

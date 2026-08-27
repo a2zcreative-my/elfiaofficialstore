@@ -1,3 +1,25 @@
+# ELFIA OFFICIAL STORE — v1.34.0 (27-08-2026)
+
+## The app view sees it too — where nothing can hover, it is always on
+
+The CEO: "I want mobile apps view also can see this hover!"
+
+A phone has no cursor. Nothing can be moved over a card, and a tap opens
+the product — so a hover-only effect is invisible on a phone forever, and
+that is what the app view had.
+
+- **On any device with no cursor** (phones, tablets, the app view) the
+  ELFIA backdrop is simply THERE behind every cut-out photo, all the
+  time: product cards, the product page, /catalog.
+- **On a desktop the fade stays exactly as it was** — hidden until the
+  cursor arrives, revealed under it.
+- One new `touch:` variant in globals.css carries this, keyed on the
+  browser's own `(hover: none)` — not on screen width, which would put
+  the always-on look on a narrow desktop window and leave a big tablet
+  without it.
+- Same picture, same layer, same portal upload. Only the trigger differs,
+  because the input differs.
+
 # ELFIA OFFICIAL STORE — v1.33.0 (27-08-2026)
 
 ## The ELFIA backdrop on every product card, not just /catalog
