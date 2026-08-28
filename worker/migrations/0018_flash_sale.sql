@@ -1,21 +1,21 @@
--- elfia-store 0018 — the flash-sale deadline (store v1.41.0).
+-- elfia-store 0018 - the flash-sale deadline (store v1.41.0).
 --
 -- The CEO, 28-08-2026: "ELFIA should have a pill of Flash Sales to make the
 -- customer attracted."
 --
--- `flash_until` is the moment the sale ends, mirrored from the portal by the
--- product sync. NULL = no flash sale, which is every existing row: this
+-- flash_until is the moment the sale ends, mirrored from the portal by the
+-- product sync. NULL means no flash sale, which is every existing row: this
 -- migration changes no price and starts no sale.
 --
 -- WHAT THIS COLUMN IS NOT: it is not what decides the price. The portal owns
 -- the price and stops applying the discount itself once the deadline passes,
--- so the next 5-minute pull simply carries the old price back. This column
+-- so the next scheduled pull simply carries the old price back. This column
 -- exists so the SHOPFRONT can show the pill and count down to the deadline
--- between pulls — a customer watching the last two minutes of a sale sees
--- the clock move, and the price behind it was never the store's to decide.
+-- between pulls. A customer watching the last two minutes of a sale sees the
+-- clock move, and the price behind it was never the store to decide.
 --
--- That division matters: with one clock (the portal's) the shop can never be
--- selling at a price the office believes has expired.
+-- That division matters: with one clock, the portal one, the shop can never
+-- be selling at a price the office believes has expired.
 --
 -- Single ALTER, nothing else in this file.
 
