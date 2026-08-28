@@ -13,6 +13,6 @@
     "wrangler": "^4.114.0"
   },
   "dependencies": {
-    "pdf-lib": "^1.17.1"
+    "pdf-lib": "1.17.1"
   }
 }

@@ -417,6 +417,11 @@ export async function pullStock(env: Env): Promise<PullResult> {
     sku: string; stock: number; price_cents?: number; list_price_cents?: number;
     name?: string; category?: string; description?: string;
     image_url?: string; image_updated_at?: string;
+    /* v1.41.0 — a flash sale's deadline. The portal sends it only while it
+       is still ahead; absent means no flash sale is running, which is also
+       how one ENDS — the portal stops sending the deadline and stops
+       applying the discount in the same breath. */
+    flash_until?: string;
   }[];
   /* v1.7.0 — the hero carousel, portal-authored. Absent key (a portal older
      than its 0087) = leave the store's slides exactly as they are. */
@@ -625,6 +630,24 @@ export async function pullStock(env: Env): Promise<PullResult> {
       const cmp = it.list_price_cents !== undefined && Number.isFinite(list) && list > price ? list : null;
       await env.DB.prepare(`UPDATE products SET compare_price_cents = ?1 WHERE id = ?2`)
         .bind(cmp, m.id).run().catch(() => null);
+    }
+
+    /* v1.41.0 — the FLASH SALE deadline, recomputed on every pull exactly as
+       the slashed price above is. Present and still ahead → the shop draws
+       the red pill and counts down to it. Absent, or already passed → the
+       pill comes off. That is also how a sale ENDS: the portal stops sending
+       the deadline and stops applying the discount in the same pull, so the
+       price and the pill go together and neither can be left behind.
+       The store never judges this for itself. One clock, and it is the
+       portal's — the shopfront can never promise a sale the office ended.
+       Armored: pre-0018 the column is absent and the pill waits for the
+       migration without disturbing anything else. */
+    {
+      const rawFlash = typeof it.flash_until === "string" ? it.flash_until.trim() : "";
+      const flashAt = rawFlash === "" ? NaN : Date.parse(rawFlash);
+      const flash = Number.isFinite(flashAt) && flashAt > Date.now() ? new Date(flashAt).toISOString() : null;
+      await env.DB.prepare(`UPDATE products SET flash_until = ?1 WHERE id = ?2`)
+        .bind(flash, m.id).run().catch(() => null);
     }
 
     /* v1.6.0 — THE PORTAL OWNS WHATEVER IT SENDS, for every matched SKU.

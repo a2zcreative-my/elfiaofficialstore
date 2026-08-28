@@ -15,7 +15,7 @@ import {
   maxQty, splitName, STORE, type Product,
 } from "@/lib/config";
 
-import { Icon, ProductCard, SectionHeader, WishHeart, useDataRefresh } from "./../ui";
+import { FlashPill, Icon, ProductCard, SectionHeader, WishHeart, useDataRefresh } from "./../ui";
 
 /** The share row: the phone's own share sheet where there is one, a
     WhatsApp hand-off and a copy button everywhere else. */
@@ -229,7 +229,12 @@ function ProductInner() {
             {/* The test ids are how scratch/live-price-check.mjs reads THIS
                 product's price rather than any of the prices in "You may also
                 like" further down the page. */}
-            <p className="mt-4 text-2xl font-bold text-elfia-deep" data-testid="product-price">
+            {/* v1.41.0 — the flash pill sits ABOVE the price, on its own
+                line: this is the page where the customer decides, and the
+                clock is the reason to decide now. It removes itself when the
+                countdown ends, leaving the ordinary Save badge below. */}
+            <p className="mt-4 empty:mt-0"><FlashPill p={p} /></p>
+            <p className="mt-2 text-2xl font-bold text-elfia-deep" data-testid="product-price">
               {fmtRM(p.price_cents)}
               {was && (
                 <>

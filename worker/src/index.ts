@@ -85,7 +85,7 @@ export interface Env {
   CATALOG_FILENAME?: string;
 }
 
-const VERSION = "1.40.0";
+const VERSION = "1.41.0";
 const STATUSES = ["pending_payment", "payment_review", "paid", "shipped", "completed", "cancelled"] as const;
 type Status = (typeof STATUSES)[number];
 
@@ -492,7 +492,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
       const probe = async (q: string): Promise<boolean> => {
         try { await env.DB.prepare(q).first(); return true; } catch { return false; }
       };
-      const [accounts, progress, syncReady, traffic, consent, portalProducts, saleSlides, framing, slideZoom, cutout] = await Promise.all([
+      const [accounts, progress, syncReady, traffic, consent, portalProducts, saleSlides, framing, slideZoom, cutout, flashSale] = await Promise.all([
         table("customers"), table("order_events"), table("stock_events"), table("traffic_hits"),
         probe("SELECT marketing_consent_at FROM customers LIMIT 1"),
         probe("SELECT portal_pending FROM products LIMIT 1"),
@@ -500,8 +500,9 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
         probe("SELECT focus_x FROM portal_slides LIMIT 1"),
         probe("SELECT zoom FROM portal_slides LIMIT 1"),
         probe("SELECT cutout_key FROM portal_slides LIMIT 1"),
+        probe("SELECT flash_until FROM products LIMIT 1"),
       ]);
-      const migrationsCurrent = accounts && progress && syncReady && traffic && consent && portalProducts && saleSlides && framing && slideZoom && cutout;
+      const migrationsCurrent = accounts && progress && syncReady && traffic && consent && portalProducts && saleSlides && framing && slideZoom && cutout && flashSale;
       const cfg = await storeConfig(env);
       return json({
         ok: db && migrationsCurrent, version: VERSION, db, r2,
@@ -519,6 +520,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
             ...(framing ? [] : ["slide_framing (0015 — the portal cannot aim or un-crop a carousel photo)"]),
             ...(slideZoom ? [] : ["slide_zoom (0016 — the portal cannot zoom a carousel photo out)"]),
             ...(cutout ? [] : ["slide_cutout (0017 — the carousel cannot show a cut-out model)"]),
+            ...(flashSale ? [] : ["flash_sale (0018 — the Flash Sale pill will not appear)"]),
           ],
         }),
         admin_key_configured: Boolean(env.ADMIN_KEY),
@@ -779,7 +781,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
       try {
         /* v1.7.0 — compare_price_cents (the struck-through sale price). */
         results = (await env.DB.prepare(
-          `SELECT id, name, description, price_cents, compare_price_cents, stock, image_key, active, sort, sku, category, featured, track_stock
+          `SELECT id, name, description, price_cents, compare_price_cents, flash_until, stock, image_key, active, sort, sku, category, featured, track_stock
            FROM products WHERE active = 1 ORDER BY sort, id DESC LIMIT 200`,
         ).all()).results;
       } catch {
@@ -823,7 +825,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
       let product: unknown;
       try {
         product = await env.DB.prepare(
-          `SELECT id, name, description, price_cents, compare_price_cents, stock, image_key, active, sort, sku, category, featured, track_stock
+          `SELECT id, name, description, price_cents, compare_price_cents, flash_until, stock, image_key, active, sort, sku, category, featured, track_stock
            FROM products WHERE id = ?1 AND active = 1`,
         ).bind(prodMatch[1]).first();
       } catch {

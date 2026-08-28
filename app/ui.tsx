@@ -15,7 +15,8 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import {
-  WISH_EVENT, comparePrice, fmtRM, imageUrl, isSoldOut, lowStock, readWishlist, splitName, toggleWish,
+  WISH_EVENT, comparePrice, flashCountdown, flashLeftMs, fmtRM, imageUrl, isSoldOut, lowStock,
+  readWishlist, splitName, toggleWish,
   type Product,
 } from "@/lib/config";
 
@@ -181,6 +182,56 @@ export function WishHeart({ id, className = "" }: { id: number; className?: stri
   );
 }
 
+/* ---------- v1.41.0: the flash-sale pill ----------
+   The CEO, 28-08-2026: "ELFIA should have a pill of Flash Sales to make the
+   customer attracted."
+
+   Red, because that is the one colour this shop does not otherwise use — the
+   ordinary sale badge is gold, and a flash sale has to read as different at
+   a glance or it is just another badge.
+
+   The countdown is what makes it work, and it is honest: it ticks off the
+   deadline the portal set, and when the clock runs out the pill removes
+   ITSELF rather than waiting for the next five-minute sync. A customer who
+   watches "2m 04s" reach zero and still sees a sale badge has been told a
+   small lie, and it is exactly the kind people notice.
+
+   `compact` is the corner-of-a-card version; the full one sits on the
+   product page where there is room for the word "ends".
+
+   Ticks every second only while a sale is actually running: no sale, no
+   timer, so a shop with nothing on offer does no work at all. */
+export function FlashPill({ p, compact = false }: { p: Product; compact?: boolean }) {
+  const [left, setLeft] = useState<number | null>(() => flashLeftMs(p));
+  useEffect(() => {
+    /* Re-read from the product on every tick rather than counting down a
+       local number: a sync that changes or ends the sale mid-view is picked
+       up, and the tab returning from sleep shows the truth, not a stale
+       countdown that kept running in a frozen timer. */
+    const tick = () => setLeft(flashLeftMs(p));
+    tick();
+    if (flashLeftMs(p) === null) return;
+    const t = setInterval(tick, 1000);
+    return () => clearInterval(t);
+  }, [p]);
+  if (left === null) return null;
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full bg-red-600 font-bold tracking-wider text-white uppercase ${
+        compact ? "px-2.5 py-1 text-[10px]" : "px-3 py-1.5 text-xs"}`}
+      /* The countdown changes every second; without this a screen reader
+         would announce it endlessly. The label carries the meaning once. */
+      aria-label={`Flash sale, ends in ${flashCountdown(left)}`}
+    >
+      <span aria-hidden>⚡</span>
+      <span aria-hidden>{compact ? "Flash" : "Flash sale"}</span>
+      <span aria-hidden className="font-mono tabular-nums opacity-90">
+        {compact ? flashCountdown(left) : `ends in ${flashCountdown(left)}`}
+      </span>
+    </span>
+  );
+}
+
 /* ---------- product tile ----------
    4:5 lookbook frame, shade name large, SKU small, price in deep rose — the
    shape v0.6.0 settled on, now with the heart and a softer card. */
@@ -191,6 +242,9 @@ export function ProductCard({ p, compact = false }: { p: Product; compact?: bool
   const low = lowStock(p);
   /* v1.7.0 — the portal's discount, drawn as a struck price + SALE badge. */
   const was = comparePrice(p);
+  /* v1.41.0 — is a flash sale running on this card right now? Read once for
+     the badge choice; FlashPill keeps its own second-by-second clock. */
+  const flash = flashLeftMs(p) !== null;
   return (
     <Link href={`/p?id=${p.id}`} className="group block">
       <div className="relative aspect-[4/5] overflow-hidden rounded-2xl bg-elfia-veil ring-1 ring-elfia-line">
@@ -222,10 +276,18 @@ export function ProductCard({ p, compact = false }: { p: Product; compact?: bool
           <div className="flex h-full items-center justify-center text-2xl font-bold tracking-widest text-elfia-rose/40">ELFIA</div>
         )}
         <div className="absolute top-2.5 right-2.5"><WishHeart id={p.id} /></div>
+        {/* v1.41.0 — the flash pill outranks the plain Sale badge (it IS a
+            sale, said louder and with a clock), but NOT "Sold out": nothing
+            is more useful to a customer than knowing they cannot buy it, and
+            two badges in one corner is how a card stops being readable.
+            When the countdown reaches zero FlashPill renders nothing, and
+            this falls back to the gold Sale badge on its own. */}
         {out ? (
           <span className="absolute top-3 left-3 rounded-full bg-white/95 px-2.5 py-1 text-[10px] font-bold tracking-wider text-elfia-body uppercase">
             Sold out
           </span>
+        ) : flash ? (
+          <span className="absolute top-3 left-3"><FlashPill p={p} compact /></span>
         ) : low ? (
           <span className="absolute top-3 left-3 rounded-full bg-elfia-deep px-2.5 py-1 text-[10px] font-bold tracking-wider text-white uppercase">
             {low} left

@@ -45,6 +45,12 @@ export interface Product {
      runs; the storefront draws the struck-through number and a SALE badge
      from it. NULL/absent = no sale. */
   compare_price_cents?: number | null;
+  /* v1.41.0 — when a FLASH sale on this product ends, as an ISO timestamp.
+     Mirrored from the portal, which sends it only while it is still ahead;
+     NULL/absent = no flash sale. It never decides the price — the portal has
+     already stopped applying the discount by the time this clears — it only
+     drives the red pill and its countdown. */
+  flash_until?: string | null;
 }
 
 /** v1.7.0 — one hero-carousel slide, authored in the portal and mirrored by
@@ -112,6 +118,40 @@ export const slideFraming = (s: Pick<PortalSlide, "focus_x" | "focus_y" | "fit" 
 export const comparePrice = (p: Product): number | null =>
   typeof p.compare_price_cents === "number" && p.compare_price_cents > p.price_cents
     ? p.compare_price_cents : null;
+
+/* ---- v1.41.0 — flash sales ----
+   The portal owns the price and the deadline; the shopfront owns the clock
+   in between pulls. Nothing here decides a price — these only answer "is a
+   flash sale running right now, and how long is left". */
+
+/** Milliseconds left in this product's flash sale, or null when none runs.
+    A deadline already passed reads as null, so the pill goes the instant it
+    expires even though the next sync may be minutes away. */
+export const flashLeftMs = (p: Product, now: number = Date.now()): number | null => {
+  const raw = typeof p.flash_until === "string" ? p.flash_until.trim() : "";
+  if (raw === "") return null;
+  const t = Date.parse(raw);
+  if (!Number.isFinite(t)) return null;
+  const left = t - now;
+  /* A flash pill with no reduced price behind it would be a promise the
+     price does not keep, so the struck-through number is part of the test. */
+  return left > 0 && comparePrice(p) !== null ? left : null;
+};
+
+export const isFlashSale = (p: Product, now: number = Date.now()): boolean =>
+  flashLeftMs(p, now) !== null;
+
+/** "1d 4h" / "3h 12m" / "9m 05s" — the last hour counts seconds, because
+    that is when it matters. Deliberately short: this sits inside a pill. */
+export const flashCountdown = (ms: number): string => {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60), sec = s % 60;
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${String(sec).padStart(2, "0")}s`;
+  return `${sec}s`;
+};
 
 /** The single answer to "can this be bought right now?". Everything on the
     storefront asks this rather than testing `stock <= 0` on its own — that
