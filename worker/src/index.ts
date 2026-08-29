@@ -1200,6 +1200,12 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
         last_gateway_error: st.last_gateway_error ?? null,
         last_gateway_hint: st.last_gateway_hint ?? null,
         signature_key_set: billplzSignatureConfigured(env),
+        /* v1.42.0 — where the payers are standing. A bank refusing an app's
+           embedded browser and a broken gateway look identical from here
+           otherwise, and they need completely different responses. */
+        pay_attempts_in_app: Number(st.pay_attempts_in_app) || 0,
+        pay_attempts_browser: Number(st.pay_attempts_browser) || 0,
+        last_in_app_pay: st.last_in_app_pay ?? null,
         /* Live money and a sandbox key is the one combination that looks
            fine in testing and fails in front of a customer. */
         warning: check.ok && check.sandbox
@@ -1565,6 +1571,26 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
       if (o.status !== "pending_payment" && o.status !== "payment_review") {
         return err("invalid_input", "Order is not awaiting payment", 400);
       }
+      /* v1.42.0 — COUNT WHERE THE PAYER IS STANDING.
+         On 29-08 a customer reached Maybank2u and was told "You have been
+         logged out. Access denied." Nothing was wrong with the order, the
+         bill or the redirect: Malaysian bank logins refuse to run inside an
+         app's embedded browser, and most of this shop's customers arrive by
+         tapping a TikTok link.
+         The shop now warns them before they start. This counter is how we
+         find out whether that is really what is happening, instead of
+         reasoning about it from one screenshot: two numbers, kept in
+         sync_state, visible on the payment check. Nothing about the bill
+         changes and no personal data is stored — an app name and a tally. */
+      try {
+        const inApp = typeof body?.in_app === "string" ? body.in_app.slice(0, 24) : "";
+        const key = inApp ? "pay_attempts_in_app" : "pay_attempts_browser";
+        const stNow = await getState(env);
+        const prev = Number(stNow[key]) || 0;
+        await setState(env, key, String(prev + 1));
+        if (inApp) await setState(env, "last_in_app_pay", `${new Date().toISOString()} · ${inApp}`);
+      } catch { /* a counter must never stop a payment */ }
+
       const bill = await billplzCreateBill(env, {
         order_number: o.order_number, token: o.token, total_cents: o.total_cents,
         customer_name: o.customer_name, phone: o.phone, email: o.email,

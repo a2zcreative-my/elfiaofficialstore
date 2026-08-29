@@ -16,6 +16,7 @@
       · Bank transfer + receipt — always.
     Nothing else is drawn. An e-wallet logo on a page that cannot take an
     e-wallet is a promise the shop would have to break. */
+import { currentBrowser, escapeHatch, type InAppBrowser } from "@/lib/in-app-browser";
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
@@ -302,10 +303,22 @@ function OrderInner() {
      Billplz's FPX page -> Billplz redirects back here and the verified
      callback flips the status to paid. */
   const [paying, setPaying] = useState(false);
+  /* v1.42.0 — read once, on the client only. Server rendering has no
+     customer to warn, and `navigator` does not exist there. */
+  const [browser, setBrowser] = useState<InAppBrowser>({ inApp: false, app: "", platform: "other" });
+  useEffect(() => { setBrowser(currentBrowser()); }, []);
   const payOnline = async () => {
     setPaying(true);
     try {
-      const r = await fetch(`/api/v1/orders/${encodeURIComponent(token)}/pay`, { method: "POST" });
+      /* The shop tells the worker where the customer was standing. Not to
+         change anything about the bill — to make the pattern countable, so
+         "the gateway is broken" and "half our payers are inside TikTok" stop
+         looking the same from the admin screen. */
+      const r = await fetch(`/api/v1/orders/${encodeURIComponent(token)}/pay`, {
+        method: "POST",
+        headers: browser.inApp ? { "Content-Type": "application/json" } : {},
+        body: browser.inApp ? JSON.stringify({ in_app: browser.app }) : undefined,
+      });
       const j = (await r.json()) as { url?: string; error?: { message?: string } };
       if (r.ok && j.url) { window.location.href = j.url; return; }
       /* v1.14.0 — its own message, shown inside the FPX row. This used to
@@ -502,6 +515,28 @@ function OrderInner() {
                                    much as the button agrees with it.
                       Bank transfer stays available in both cases, which is
                       the escape hatch if something really has gone wrong. */}
+                  {/* v1.42.0 — the warning that saves the customer two
+                      minutes and a failed login. Malaysian banks refuse to
+                      run inside an app's embedded browser: Maybank2u answers
+                      "You have been logged out. Access denied." Most of this
+                      shop's customers arrive by tapping a TikTok link, so
+                      most of them meet this. It warns, never blocks — the
+                      detection is a guess and some webviews do work. */}
+                  {browser.inApp && (
+                    <div className="mb-3 rounded-xl border border-elfia-rose/40 bg-elfia-veil px-3 py-2.5">
+                      <p className="text-xs font-semibold text-elfia-deep">
+                        You are browsing inside {browser.app}
+                      </p>
+                      <p className="mt-1 text-xs leading-relaxed text-elfia-body">
+                        Banks block online banking inside app browsers, so the payment page may
+                        say “access denied” however carefully you type. {escapeHatch(browser)}
+                      </p>
+                      <p className="mt-1.5 text-xs leading-relaxed text-elfia-body">
+                        Or use bank transfer below — it works from here and we confirm it the
+                        same day.
+                      </p>
+                    </div>
+                  )}
                   <button type="button" onClick={() => void payOnline()}
                     disabled={paying || checking || outcome === "slow"}
                     className="inline-flex h-12 w-full items-center justify-center rounded-full bg-elfia-deep px-6 text-sm font-semibold text-white hover:bg-elfia-deeper disabled:opacity-50">
