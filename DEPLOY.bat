@@ -75,6 +75,8 @@ call node tests\payment-integrity.mjs
 if errorlevel 1 call :die "A payment safety rule is broken - see the list above. Nothing was deployed. These are the checks that stop a paid RM 1 bill being credited to somebody else's order; do not bypass them."
 call node tests\brand-isolation.mjs
 if errorlevel 1 call :die "Another company's identity appears in this repo. Nothing was deployed."
+call node tests\order-tracking.mjs
+if errorlevel 1 call :die "The order-tracking rules are broken. Nothing was deployed - a customer would get a dead or wrong parcel link."
 
 REM ------------------------------------------------------ database + worker
 set "STEP=applying database migrations"

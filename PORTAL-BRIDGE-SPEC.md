@@ -170,6 +170,7 @@ GET  https://elfiaofficialstore.my/api/v1/bridge/orders?since=<cursor>
       "payment_method": "fpx",
       "tracking_no": null,
       "tracking_courier": null,
+      "tracking_url": null,
       "created_at": "2026-08-20 11:54:03",
       "updated_at": "2026-08-20 12:10:44"
     }
@@ -181,6 +182,14 @@ GET  https://elfiaofficialstore.my/api/v1/bridge/orders?since=<cursor>
 
 Rules:
 
+- **`tracking_url`** (v1.43.0) is the customer-facing courier link, already
+  built — `null` when there is no tracking number yet, or when the courier is
+  one the shop has no link builder for. **The portal must not assemble this
+  URL itself.** The shop keeps the courier list (J&T, Ninja Van, Pos Laju,
+  Flash, City-Link, DHL) and their URL shapes in one map; a courier that
+  changes its tracking URL is then one edit, not two repositories with the
+  forgotten one sending customers to a dead page. A number with no link is
+  shown as a number.
 - `since` is the `cursor` from the previous response. First call: omit it.
   Rows come back oldest-change-first, at most 200 per call; keep calling with
   the new cursor until `orders` is empty, then store the cursor for next time.
@@ -201,6 +210,39 @@ Rules:
   same order carries the current value, so upserts keep the portal honest.
 
 ---
+
+## C2 — moving an order forward (portal → store) (v1.12.0)
+
+The portal runs the shop, so it must be able to confirm a payment and enter a
+tracking number without opening the store's own `/admin`. Same bridge key,
+same shared implementation the store's admin uses — there is deliberately not
+a second copy of these rules.
+
+```
+POST /api/v1/bridge/orders/{order_number}
+X-Bridge-Key: <key>
+
+{ "action": "ship", "tracking_no": "630123456789", "tracking_courier": "jnt" }
+```
+
+| action | allowed from | becomes | notes |
+|---|---|---|---|
+| `confirm_paid` | `pending_payment`, `payment_review` | `paid` | |
+| `ship` | `paid` | `shipped` | `tracking_no` + `tracking_courier` |
+| `complete` | `shipped` | `completed` | |
+| `cancel` | `pending_payment`, `payment_review` | `cancelled` | puts the reserved stock back and mirrors the movement to feed B |
+| `update_tracking` (v1.43.0) | `shipped` | *(unchanged)* | corrects the number after the parcel is gone |
+
+Courier keys: `jnt`, `ninjavan`, `poslaju`, `flash`, `citylink`, `dhl`. An
+unrecognised key is dropped rather than stored, so the customer is never
+shown a dead link.
+
+**A paid order is never cancelled through this route.** Refunds are a money
+decision made by a human, and the store answers 409 with that sentence in it.
+
+The response carries `{ ok, status, tracking_no, tracking_url }` — the link
+comes back with the action rather than only on the next feed poll, so the
+portal can offer to send it to the customer immediately.
 
 ## D — traffic feed (portal ← store) — poll the store (v1.2.0)
 

@@ -379,10 +379,56 @@ const ORDER_MOVES: Record<string, { from: Status[]; to: Status }> = {
   cancel:       { from: ["pending_payment", "payment_review"], to: "cancelled" },
 };
 
+/* v1.43.0 — `update_tracking` is an action but NOT a move: the order stays
+   shipped and only the number changes. It exists because a tracking number
+   is typed by a human off a parcel label, and until now a typo was
+   permanent — the customer would sit on a courier page following somebody
+   else's parcel, or nothing at all, with no way for anyone to correct it.
+   Both callers gate on this set rather than on ORDER_MOVES, so neither can
+   quietly forget the new action. */
+const ORDER_ACTIONS = new Set([...Object.keys(ORDER_MOVES), "update_tracking"]);
+
+/** The customer-facing tracking link, or null when we have no builder for
+    that courier. ONE definition — the order page, the action response and
+    the portal feed all call this rather than assembling a URL of their own. */
+function trackingUrl(courierKey: string | null | undefined, no: string | null | undefined): string | null {
+  const c = courierKey && COURIERS[courierKey] ? COURIERS[courierKey]! : null;
+  return c && no ? c.url(no) : null;
+}
+
 async function applyOrderAction(
   env: Env, ctx: ExecutionContext, o: OrderRow, action: string,
   body: Record<string, unknown> | null,
 ): Promise<Response> {
+  /* Correcting the number on a parcel already handed over. Deliberately
+     limited to `shipped`: before that there is nothing to correct, and
+     after delivery the number is history — editing it would rewrite what
+     the customer was told at the time. */
+  if (action === "update_tracking") {
+    if (o.status !== "shipped") {
+      return err("invalid_input", `Only a shipped order has a tracking number to correct. This one is ${o.status}.`, 409);
+    }
+    const t = str(body?.tracking_no, 60);
+    if (!t) return err("invalid_input", "A tracking number is required", 400);
+    const ck = str(body?.tracking_courier, 20);
+    const c = ck && COURIERS[ck] ? ck : null;
+    await env.DB.prepare(
+      `UPDATE orders SET tracking_no = ?1, updated_at = datetime('now') WHERE id = ?2`,
+    ).bind(t, o.id).run();
+    if (c) {
+      await env.DB.prepare(`UPDATE orders SET tracking_courier = ?1 WHERE id = ?2`)
+        .bind(c, o.id).run().catch(() => null); // pre-0009
+    }
+    /* The correction is written into the order's own history, so the
+       customer sees that the number changed rather than finding a different
+       one than the one they were given. */
+    await recordOrderEvent(env, o.id, o.status, `Tracking number updated - now ${t}`);
+    return json({
+      ok: true, status: o.status, tracking_no: t,
+      tracking_url: trackingUrl(c ?? o.tracking_courier, t),
+    });
+  }
+
   const mv = ORDER_MOVES[action];
   if (!mv) return err("invalid_input", "Unknown action", 400);
   if (!mv.from.includes(o.status)) {
@@ -432,7 +478,15 @@ async function applyOrderAction(
     cancel: "Order cancelled",
   };
   await recordOrderEvent(env, o.id, mv.to, NOTES[action] ?? null);
-  return json({ ok: true, status: mv.to, tracking_no: tracking ?? o.tracking_no ?? null });
+  /* The link comes back with the action, not only on the next feed poll:
+     the portal offers to WhatsApp it to the customer the moment the parcel
+     is marked shipped, and five minutes of "no link yet" is exactly when
+     somebody sends the number without one. */
+  const finalNo = tracking ?? o.tracking_no ?? null;
+  return json({
+    ok: true, status: mv.to, tracking_no: finalNo,
+    tracking_url: trackingUrl(courier ?? o.tracking_courier, finalNo),
+  });
 }
 
 export default {
@@ -1040,6 +1094,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
       ).bind(o.id).all<{ status: string; note: string | null; created_at: string }>()
         .catch(() => ({ results: [] as { status: string; note: string | null; created_at: string }[] }));
       const courier = o.tracking_courier && COURIERS[o.tracking_courier] ? COURIERS[o.tracking_courier]! : null;
+      // (tracking_url below comes from the one shared builder)
       return json({
         order_number: o.order_number, status: o.status,
         customer_name: o.customer_name, phone: o.phone, address: o.address,
@@ -1050,7 +1105,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
            countdown; the cron turns it into a cancellation. */
         expires_at: (o as { expires_at?: string | null }).expires_at ?? null,
         tracking_courier: courier?.label ?? null,
-        tracking_url: courier && o.tracking_no ? courier.url(o.tracking_no) : null,
+        tracking_url: trackingUrl(o.tracking_courier, o.tracking_no),
         events,
         created_at: o.created_at, config: await storeConfig(env),
       });
@@ -1170,7 +1225,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
       const o = await env.DB.prepare(`SELECT * FROM orders WHERE order_number = ?1`)
         .bind(decodeURIComponent(bridgeOrder[1]!)).first<OrderRow>();
       if (!o) return err("not_found", "No order with that number", 404);
-      if (!ORDER_MOVES[action]) return err("invalid_input", "Unknown action", 400);
+      if (!ORDER_ACTIONS.has(action)) return err("invalid_input", "Unknown action", 400);
       return applyOrderAction(env, ctx, o, action, body);
     }
 
@@ -1261,9 +1316,15 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
         ).bind(...(since ? [since] : [])).all<Record<string, unknown> & { changed_at: string; items: string }>()).results;
       }
 
+      /* v1.43.0 — the tracking LINK rides the feed, built here from the one
+         COURIERS map. The portal could assemble it from tracking_courier
+         itself, but then a courier changing its URL would have to be fixed
+         in two repositories and the one nobody remembered would keep
+         sending customers to a dead page. */
       const orders = results.map((o) => ({
         ...o,
         items: JSON.parse(o.items) as unknown[],   // qty + the price actually charged
+        tracking_url: trackingUrl(o.tracking_courier as string | null, o.tracking_no as string | null),
       }));
       return json({
         orders,
@@ -1960,7 +2021,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
         const o = await env.DB.prepare(`SELECT * FROM orders WHERE id = ?1`).bind(adminOrder[1]).first<OrderRow>();
         if (!o) return err("not_found", "Order not found", 404);
 
-        if (action && ORDER_MOVES[action]) {
+        if (action && ORDER_ACTIONS.has(action)) {
           return applyOrderAction(env, ctx, o, action, body);
         }
         if (body?.admin_notes !== undefined) {

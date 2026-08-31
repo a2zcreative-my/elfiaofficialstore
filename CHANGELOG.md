@@ -1,3 +1,61 @@
+# ELFIA OFFICIAL STORE — v1.43.0 (30-08-2026) — THE TRACKING LINK, AND FIXING A TYPO
+
+## What the portal asked for
+
+**A2Z CEO:** *"on the web order, I want to add their tracking number and also
+how to make sure that they able to tracking their order based on the tracking
+number provided? I want to use J&T service or Ninjavan service."*
+
+Most of this shop already did it. Since v1.12.0 the portal can enter a courier
+and a tracking number over the bridge, and since v0.9.0 the customer's order
+page turns them into a **track parcel** link — J&T Express and Ninja Van have
+been in the courier map from the start, alongside Pos Laju, Flash, City-Link
+and DHL. Two things were genuinely missing.
+
+## 1. A typo was permanent
+
+A tracking number is typed by a human off a parcel label, and `ship` was the
+only way it could ever be set — an action that is legal only from `paid`. Get
+a digit wrong and the customer sat on a courier page following somebody else's
+parcel, with nobody able to correct it.
+
+**New action `update_tracking`**, allowed only from `shipped`: the status does
+not move, the number and courier change, `updated_at` bumps so the portal's
+feed re-sends it, and the correction is written into the order's own history —
+*"Tracking number updated — now …"* — so the customer sees a number change
+rather than quietly finding a different one than the one they were given.
+
+Deliberately not allowed after delivery: at that point the number is history,
+and editing it rewrites what the customer was told at the time.
+
+Both callers — the bridge and the shop's own `/admin` — now gate on one
+`ORDER_ACTIONS` set instead of on `ORDER_MOVES`, so neither can forget an
+action that is not a status move.
+
+## 2. The portal had a number but no link
+
+**Feed C now carries `tracking_url`**, built here, and the action response
+carries it too so the portal has the link the instant a parcel is marked
+shipped rather than after its next five-minute poll.
+
+The portal holds the courier key and could assemble the URL itself. That is
+exactly what must not happen: this shop keeps one map of six couriers and the
+shape of each one's tracking URL, and the day J&T changes its URL the fix has
+to be one edit, not two repositories with the forgotten one sending customers
+to a dead page for months. The spec now says so in as many words, and
+`tests/order-tracking.mjs` fails the build if anything here builds a link
+outside the single `trackingUrl()` function.
+
+## Guard
+
+`tests/order-tracking.mjs` (23 checks, five ways negative-tested), wired into
+DEPLOY.bat: J&T and Ninja Van are still in the map, every link is https and
+encodes the number, one builder feeds the order page, the feed and the action
+response, `update_tracking` stays shipped-only and bumps `updated_at`, and an
+unrecognised courier key is dropped rather than stored.
+
+---
+
 # ELFIA OFFICIAL STORE — v1.42.0 (29-08-2026) — THE BANK SAID "ACCESS DENIED"
 
 ## What happened to a customer
