@@ -16,7 +16,7 @@ import { useEffect, useState } from "react";
 
 import { addToCart, isSoldOut, readWishlist, type Product } from "@/lib/config";
 
-import { CardSkeleton, EmptyState, ProductCard, useDataRefresh, useWishlist } from "./../ui";
+import { CardSkeleton, EmptyState, ProductCard, Skel, useDataRefresh, useWishlist } from "./../ui";
 
 export default function WishlistPage() {
   const ids = useWishlist();
@@ -43,11 +43,14 @@ export default function WishlistPage() {
     <main className="px-4 py-4 sm:px-6 sm:py-8">
       <div className="mx-auto w-full max-w-6xl">
         <h1 className="text-xl font-bold text-elfia-ink sm:text-2xl">Wishlist</h1>
-        <p className="text-xs text-elfia-muted">
-          {products === null ? "Loading…"
-            : saved.length === 0 ? "Nothing saved yet"
-            : `${saved.length} shade${saved.length === 1 ? "" : "s"} saved on this device`}
-        </p>
+        {/* v1.44.0 — skeleton until the first fetch lands: the count is a
+            small block, not a word, until the products are in. */}
+        {products === null
+          ? <Skel className="mt-1 h-3 w-40" />
+          : <p className="text-xs text-elfia-muted">
+              {saved.length === 0 ? "Nothing saved yet"
+                : `${saved.length} shade${saved.length === 1 ? "" : "s"} saved on this device`}
+            </p>}
 
         {products === null && (
           <div className="mt-6 grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-3 lg:grid-cols-4"><CardSkeleton n={4} /></div>

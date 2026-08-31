@@ -23,7 +23,7 @@ import {
   splitName, writeCart, writeDraft, type Account, type CartLine, type Product, type StoreConfig,
 } from "@/lib/config";
 
-import { Icon } from "./../ui";
+import { Icon, Skel } from "./../ui";
 
 export default function Checkout() {
   const router = useRouter();
@@ -41,13 +41,20 @@ export default function Checkout() {
   const [lines, setLines] = useState<CartLine[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [config, setConfig] = useState<StoreConfig | null>(null);
+  /* v1.44.0 — skeleton until the first fetch lands. `priced` flips when the
+     products answer (so the summary never shows RM 0.00 for a full cart);
+     `meChecked` flips when /auth/me answers, so "Ordering as a guest" is
+     never said to someone who is about to turn out to be signed in. */
+  const [priced, setPriced] = useState(false);
+  const [meChecked, setMeChecked] = useState(false);
 
   useEffect(() => {
     const cart = readCart();
     if (cart.length === 0) { setEmpty(true); return; }
     setLines(cart);
     void fetch("/api/v1/products").then((r) => r.json())
-      .then((j: { products: Product[] }) => setProducts(j.products)).catch(() => null);
+      .then((j: { products: Product[] }) => setProducts(j.products)).catch(() => null)
+      .finally(() => setPriced(true));
     void fetch("/api/v1/store-config").then((r) => r.json())
       .then((j: StoreConfig) => setConfig(j)).catch(() => null);
 
@@ -68,7 +75,8 @@ export default function Checkout() {
           email: f.email || j.customer.email,
         }));
       })
-      .catch(() => null);
+      .catch(() => null)
+      .finally(() => setMeChecked(true));
   }, []);
 
   const rows = lines
@@ -141,7 +149,9 @@ export default function Checkout() {
         <p className="mt-1 text-sm text-elfia-muted">
           Place the order first — payment comes on the next page, by FPX or bank transfer.
         </p>
-        {me ? (
+        {!meChecked ? (
+          <Skel className="mt-2.5 h-3 w-64 max-w-full" />
+        ) : me ? (
           <p className="mt-2 text-xs text-elfia-muted">
             Ordering as <span className="font-semibold text-elfia-body">{me.email}</span> — it will appear in your account.
           </p>
@@ -197,7 +207,19 @@ export default function Checkout() {
           <aside className="rounded-2xl border border-elfia-line bg-white p-5 sm:sticky sm:top-24">
             <p className="text-sm font-semibold text-elfia-ink">Order summary</p>
             <div className="mt-3 space-y-2.5">
-              {rows.map(({ line, product }) => (
+              {/* v1.44.0 — one skeleton line per cart line until priced, in
+                  the summary row's own shape (thumb, name, qty, price). */}
+              {!priced && lines.map((l) => (
+                <div key={l.id} className="flex items-center gap-2.5" aria-busy="true">
+                  <Skel className="h-12 w-10 shrink-0 rounded-lg" />
+                  <div className="min-w-0 flex-1">
+                    <Skel className="h-3 w-2/3" />
+                    <Skel className="mt-1.5 h-2.5 w-10" />
+                  </div>
+                  <Skel className="h-3 w-14 shrink-0" />
+                </div>
+              ))}
+              {priced && rows.map(({ line, product }) => (
                 <div key={line.id} className="flex items-center gap-2.5">
                   <span className="h-12 w-10 shrink-0 overflow-hidden rounded-lg bg-elfia-veil">
                     {product.image_key && (
@@ -214,13 +236,20 @@ export default function Checkout() {
               ))}
             </div>
             <div className="mt-4 border-t border-elfia-line pt-3 text-sm">
-              <div className="flex justify-between"><span className="text-elfia-body">Subtotal</span><span className="font-semibold tabular-nums">{fmtRM(subtotal)}</span></div>
+              <div className="flex justify-between">
+                <span className="text-elfia-body">Subtotal</span>
+                {priced ? <span className="font-semibold tabular-nums">{fmtRM(subtotal)}</span> : <Skel className="h-3.5 w-16" />}
+              </div>
               <div className="mt-1.5 flex justify-between">
                 <span className="text-elfia-body">Delivery</span>
-                <span className="font-semibold tabular-nums">{shipping === null ? "…" : shipping === 0 ? <span className="text-emerald-700">FREE</span> : fmtRM(shipping)}</span>
+                {!priced || shipping === null ? <Skel className="h-3.5 w-12" />
+                  : <span className="font-semibold tabular-nums">{shipping === 0 ? <span className="text-emerald-700">FREE</span> : fmtRM(shipping)}</span>}
               </div>
               <div className="mt-3 flex justify-between border-t border-elfia-line pt-3 text-base font-bold">
-                <span>Total</span><span className="tabular-nums text-elfia-deep">{fmtRM(subtotal + (shipping ?? 0))}</span>
+                <span>Total</span>
+                {priced
+                  ? <span className="tabular-nums text-elfia-deep">{fmtRM(subtotal + (shipping ?? 0))}</span>
+                  : <Skel className="h-5 w-24" />}
               </div>
             </div>
             <p className="mt-3 flex items-start gap-1.5 text-[11px] leading-relaxed text-elfia-muted">

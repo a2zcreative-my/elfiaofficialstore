@@ -24,7 +24,7 @@ import Link from "next/link";
 
 import { accountDigits, btnClass, fmtRM, fmtWhen, rememberOrder, type OrderEvent, type OrderView } from "@/lib/config";
 
-import { Icon, StatusPill } from "./../ui";
+import { Icon, Skel, SkelText, StatusPill } from "./../ui";
 
 /** v1.4.0 (security audit C10) — a link is rendered only if it is really an
     https:// URL. The courier links are built server-side from a fixed map, so
@@ -157,6 +157,81 @@ function MethodRow({ id, checked, onSelect, title, note, badge, children }: {
       </label>
       {checked && children && <div className="border-t border-elfia-line/70 p-4 pt-3.5">{children}</div>}
     </div>
+  );
+}
+
+/** v1.44.0 — the order page's own shape while the order is on its way:
+    the same <main> and max-w-xl column, the header with its status pill,
+    the summary card, two payment-method rows, the progress card, the items
+    and the address. Used both as the Suspense fallback and while the fetch
+    runs, so the customer sees one shape from first paint to real page. */
+function OrderSkeleton() {
+  return (
+    <main className="px-4 py-5 sm:px-6 sm:py-10" aria-busy="true">
+      <div className="mx-auto w-full max-w-xl">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <Skel className="h-2.5 w-12" />
+            <Skel className="mt-1.5 h-7 w-40" />
+            <Skel className="mt-2 h-3 w-32" />
+          </div>
+          <div className="pt-6"><Skel className="h-6 w-24 rounded-full" /></div>
+        </div>
+
+        <section className="mt-5">
+          <div className="rounded-2xl border border-elfia-line bg-white p-5">
+            <Skel className="h-3.5 w-28" />
+            <div className="mt-3 space-y-1.5">
+              <div className="flex justify-between"><Skel className="h-3.5 w-32" /><Skel className="h-3.5 w-16" /></div>
+              <div className="flex justify-between"><Skel className="h-3.5 w-20" /><Skel className="h-3.5 w-12" /></div>
+            </div>
+            <div className="mt-3 flex items-center justify-between border-t border-elfia-line pt-3">
+              <Skel className="h-4 w-24" /><Skel className="h-6 w-28" />
+            </div>
+          </div>
+          <Skel className="mt-5 mb-2.5 h-3.5 w-32" />
+          <div className="space-y-2.5">
+            {[0, 1].map((i) => (
+              <div key={i} className="flex items-start gap-3 rounded-2xl border border-elfia-line bg-white p-4">
+                <Skel className="mt-0.5 h-4 w-4 shrink-0 rounded-full" />
+                <div className="min-w-0 flex-1">
+                  <Skel className="h-3.5 w-40" />
+                  <SkelText lines={2} className="mt-2" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <div className="mt-5 rounded-2xl border border-elfia-line bg-white p-5">
+          <Skel className="mb-5 h-1.5 w-full rounded-full" />
+          <div className="space-y-4">
+            {[0, 1, 2, 3].map((i) => (
+              <div key={i} className="flex gap-3">
+                <Skel className="mt-0.5 h-6 w-6 shrink-0 rounded-full" />
+                <div className="min-w-0 flex-1">
+                  <Skel className="h-3.5 w-36" />
+                  <Skel className="mt-1.5 h-3 w-24" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="mt-4 rounded-2xl border border-elfia-line bg-white p-5">
+          <Skel className="mb-3 h-3.5 w-12" />
+          <div className="flex justify-between py-1"><Skel className="h-3.5 w-48 max-w-[70%]" /><Skel className="h-3.5 w-14" /></div>
+          <div className="flex justify-between py-1"><Skel className="h-3.5 w-36 max-w-[60%]" /><Skel className="h-3.5 w-14" /></div>
+          <div className="mt-2 flex justify-between border-t border-elfia-line pt-2"><Skel className="h-3.5 w-16" /><Skel className="h-3.5 w-12" /></div>
+          <div className="mt-2 flex justify-between"><Skel className="h-4 w-12" /><Skel className="h-4 w-20" /></div>
+        </div>
+
+        <div className="mt-4 rounded-2xl border border-elfia-line bg-white p-5">
+          <Skel className="h-3.5 w-28" />
+          <SkelText lines={2} className="mt-2.5" />
+        </div>
+      </div>
+    </main>
   );
 }
 
@@ -346,7 +421,8 @@ function OrderInner() {
     else setUploadMsg("Upload failed — please try again or WhatsApp us the receipt.");
   };
 
-  if (order === null) return <main className="px-6 py-16 text-center text-sm text-elfia-muted">Loading…</main>;
+  /* v1.44.0 — skeleton until the first fetch lands. */
+  if (order === null) return <OrderSkeleton />;
   if (order === "missing") {
     return (
       <main className="px-6 py-16 text-center">
@@ -397,8 +473,12 @@ function OrderInner() {
 
             {outcome === "checking" && (
               <div className="mb-4 flex items-start gap-3 rounded-2xl border border-elfia-line bg-white p-4">
-                <span aria-hidden
-                  className="mt-0.5 h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-elfia-line border-t-elfia-deep" />
+                {/* v1.44.0 — a pulsing dot, not a spinner: the same beat as
+                    every skeleton on the shop, so "still working" looks the
+                    same everywhere. */}
+                <span aria-hidden className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center">
+                  <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-elfia-deep" />
+                </span>
                 <div>
                   <p className="text-sm font-semibold text-elfia-ink">Confirming your payment with the bank…</p>
                   <p className="mt-1 text-xs leading-relaxed text-elfia-body">
@@ -649,7 +729,7 @@ function OrderInner() {
 
 export default function OrderPage() {
   return (
-    <Suspense fallback={<main className="px-6 py-16 text-center text-sm text-elfia-muted">Loading…</main>}>
+    <Suspense fallback={<OrderSkeleton />}>
       <OrderInner />
     </Suspense>
   );

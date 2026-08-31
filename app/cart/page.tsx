@@ -16,7 +16,7 @@ import {
   type CartLine, type Product, type StoreConfig,
 } from "@/lib/config";
 
-import { EmptyState, Icon, useDataRefresh } from "./../ui";
+import { EmptyState, Icon, Skel, useDataRefresh } from "./../ui";
 
 export default function Cart() {
   const [lines, setLines] = useState<CartLine[]>([]);
@@ -55,9 +55,15 @@ export default function Cart() {
     <main className="px-4 py-4 sm:px-6 sm:py-8">
       <div className="mx-auto w-full max-w-2xl">
         <h1 className="text-xl font-bold text-elfia-ink sm:text-2xl">Your cart</h1>
-        <p className="text-xs text-elfia-muted">
-          {loaded ? `${rows.reduce((n, r) => n + r.line.qty, 0)} item${rows.reduce((n, r) => n + r.line.qty, 0) === 1 ? "" : "s"}` : "Loading…"}
-        </p>
+        {/* v1.44.0 — skeleton until the first fetch lands: the count is a
+            small block, not a word, until the prices are in. */}
+        {loaded ? (
+          <p className="text-xs text-elfia-muted">
+            {`${rows.reduce((n, r) => n + r.line.qty, 0)} item${rows.reduce((n, r) => n + r.line.qty, 0) === 1 ? "" : "s"}`}
+          </p>
+        ) : (
+          <Skel className="mt-1 h-3 w-14" />
+        )}
 
         {loaded && rows.length === 0 && (
           <div className="mt-6">
@@ -86,7 +92,23 @@ export default function Cart() {
         )}
 
         <div className="mt-4 space-y-3">
-          {rows.map(({ line, product }) => {
+          {/* v1.44.0 — one skeleton row per line already in the cart, in the
+              row's own shape (thumbnail, three lines, the quantity pill), so
+              nothing moves when the prices arrive. Rows are what the device
+              holds; only their prices are still on the way. */}
+          {!loaded && lines.map((l) => (
+            <div key={l.id} className="flex items-center gap-3 rounded-2xl border border-elfia-line bg-white p-3" aria-busy="true">
+              <Skel className="h-20 w-16 shrink-0 rounded-xl" />
+              <div className="min-w-0 flex-1">
+                <Skel className="h-2.5 w-16" />
+                <Skel className="mt-2 h-3.5 w-2/3" />
+                <Skel className="mt-2 h-3.5 w-14" />
+                <Skel className="mt-2.5 h-2.5 w-28" />
+              </div>
+              <Skel className="h-9 w-[6.25rem] shrink-0 rounded-full" />
+            </div>
+          ))}
+          {loaded && rows.map(({ line, product }) => {
             const { series, shade } = splitName(product.name);
             return (
               <div key={line.id} className="flex items-center gap-3 rounded-2xl border border-elfia-line bg-white p-3">
@@ -125,6 +147,17 @@ export default function Cart() {
             );
           })}
         </div>
+
+        {/* v1.44.0 — the totals card, as a skeleton, while the prices load. */}
+        {!loaded && lines.length > 0 && (
+          <div className="mt-5 rounded-2xl border border-elfia-line bg-white p-5" aria-busy="true">
+            <div className="flex justify-between"><Skel className="h-3.5 w-16" /><Skel className="h-3.5 w-14" /></div>
+            <div className="mt-2.5 flex justify-between"><Skel className="h-3.5 w-14" /><Skel className="h-3.5 w-10" /></div>
+            <div className="mt-3 flex justify-between border-t border-elfia-line pt-3"><Skel className="h-4 w-12" /><Skel className="h-4 w-20" /></div>
+            <Skel className="mt-5 h-12 w-full rounded-full" />
+            <Skel className="mx-auto mt-3 h-3 w-24" />
+          </div>
+        )}
 
         {rows.length > 0 && (
           <>

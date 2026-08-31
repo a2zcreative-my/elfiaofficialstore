@@ -20,7 +20,7 @@ import {
   type Product, type SortKey,
 } from "@/lib/config";
 
-import { CardSkeleton, EmptyState, Icon, ProductCard, useDataRefresh } from "./../ui";
+import { CardSkeleton, EmptyState, Icon, PageSkeleton, ProductCard, Skel, useDataRefresh } from "./../ui";
 
 function ShopInner() {
   const params = useSearchParams();
@@ -89,9 +89,11 @@ function ShopInner() {
             <h1 className="truncate text-xl font-bold text-elfia-ink sm:text-2xl">
               {q ? `“${q}”` : (groupLabel ?? "All products")}
             </h1>
-            <p className="text-xs text-elfia-muted">
-              {products === null ? "Loading…" : `${shown.length} product${shown.length === 1 ? "" : "s"} found`}
-            </p>
+            {/* v1.44.0 — skeleton until the first fetch lands: the count is
+                a small block, not a word, until the products are in. */}
+            {products === null
+              ? <Skel className="mt-1 h-3 w-28" />
+              : <p className="text-xs text-elfia-muted">{`${shown.length} product${shown.length === 1 ? "" : "s"} found`}</p>}
           </div>
         </div>
 
@@ -186,7 +188,7 @@ function ShopInner() {
 
 export default function ShopPage() {
   return (
-    <Suspense fallback={<main className="px-6 py-16 text-center text-sm text-elfia-muted">Loading…</main>}>
+    <Suspense fallback={<PageSkeleton width="max-w-6xl" />}>
       <ShopInner />
     </Suspense>
   );

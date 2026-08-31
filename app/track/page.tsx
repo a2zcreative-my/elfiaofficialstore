@@ -19,7 +19,7 @@ import { useEffect, useState } from "react";
 
 import { btnClass, fmtWhen, inputClass, labelClass, readRecent, waLink, type RecentOrder, type StoreConfig } from "@/lib/config";
 
-import { Icon } from "./../ui";
+import { Icon, Skel } from "./../ui";
 
 export default function Track() {
   const router = useRouter();
@@ -28,12 +28,18 @@ export default function Track() {
   const [error, setError] = useState("");
   const [config, setConfig] = useState<StoreConfig | null>(null);
   const [recent, setRecent] = useState<RecentOrder[]>([]);
+  /* v1.44.0 — skeleton until the first fetch lands. The only thing this page
+     fetches decides whether "Still stuck?" offers WhatsApp or a plain
+     sentence; until it answers, that line is a block rather than the wrong
+     one of the two. */
+  const [configLoaded, setConfigLoaded] = useState(false);
 
   useEffect(() => { setRecent(readRecent()); }, []);
 
   useEffect(() => {
     void fetch("/api/v1/store-config").then((r) => (r.ok ? r.json() : null))
-      .then((j: StoreConfig | null) => setConfig(j)).catch(() => null);
+      .then((j: StoreConfig | null) => setConfig(j)).catch(() => null)
+      .finally(() => setConfigLoaded(true));
   }, []);
 
   const submit = async (e: React.FormEvent) => {
@@ -109,7 +115,8 @@ export default function Track() {
           {error && <p className="mt-3 text-sm font-medium text-red-700">{error}</p>}
         </form>
 
-        <p className="mt-5 text-center text-xs text-elfia-muted">
+        {!configLoaded && <Skel className="mx-auto mt-5 h-3 w-64 max-w-full" />}
+        {configLoaded && <p className="mt-5 text-center text-xs text-elfia-muted">
           Still stuck?{" "}
           {showWa ? (
             <a className="font-semibold text-elfia-deep underline" rel="noopener noreferrer" target="_blank"
@@ -120,7 +127,7 @@ export default function Track() {
             <>Message us and we will find it for you.</>
           )}{" "}
           or <Link href="/shop" className="underline hover:text-elfia-deep">keep shopping</Link>.
-        </p>
+        </p>}
         <p className="mt-2 text-center text-xs text-elfia-muted">
           Ordering often?{" "}
           <Link href="/account" className="underline hover:text-elfia-deep">Create an account</Link>{" "}

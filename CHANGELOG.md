@@ -1,3 +1,82 @@
+# ELFIA OFFICIAL STORE — v1.44.0 (31-08-2026) — NOTHING LOADS IN WORDS
+
+## What the CEO asked for
+
+**A2Z CEO:** *"I want no loading without skeleton loading react … audit all
+the files to ensure that no loading leak without skeleton loading react either
+in web or mobile view apps for both my web."*
+
+## What the audit found
+
+The shop had one skeleton — `CardSkeleton`, the grey product tiles — and used
+it on three pages (home, shop, wishlist). Everywhere else, loading was either
+a sentence or a blank:
+
+- **"Loading…" in words, ten times.** The account page while it checked who
+  you were; the order and product pages while they fetched; the three
+  `<Suspense>` fallbacks on `/p`, `/order` and `/shop` (the very first thing
+  a customer sees on a static page that reads its query string); the count
+  lines on the cart, shop and wishlist; and the catalog's *"Loading the
+  collection…"*.
+- **One spinner**, on the order page while a payment was being confirmed.
+- **Nine of the twelve pages that fetch on mount drew nothing — or worse, an
+  empty state — until the data arrived.** The account page said *"No orders
+  on this account yet"* while the orders were still on their way. Checkout's
+  summary read **RM 0.00** for a full cart and *"Ordering as a guest"* to a
+  customer about to turn out to be signed in. The admin showed the passcode
+  form to someone whose cookie was a moment from signing them in. Collections
+  had a placeholder, but it sat above an empty list whose margin made the
+  page jump 20px when the rows landed.
+
+## What changed
+
+**Four primitives in `app/ui.tsx`**, in CardSkeleton's own style
+(`animate-pulse`, `bg-elfia-blush/70`): `Skel` (one block), `SkelText`
+(lines, the last one shorter), `SkelRows` (thumbnail, two lines, chip — the
+shape of every list on the shop) and `PageSkeleton` (a whole page, for
+Suspense fallbacks). A caller's `rounded-full` or `space-y-3` replaces the
+default instead of fighting it.
+
+**Every fetch-on-mount page now draws the shape of what is coming**, on the
+same `<main>`, the same column width and the same grid breakpoints as the
+real thing, phone and desktop, so nothing moves when the data lands:
+
+- `/account` — greeting card, the four order tiles, order rows; and the
+  orders list itself shows rows, not *"No orders yet"*, until it has an
+  answer.
+- `/order` and `/p` — a page-shaped skeleton (status header, summary, payment
+  rows, progress, items, address; photo frame, title, price, buttons, the
+  "You may also like" rail) used for **both** the Suspense fallback and the
+  fetch, so the customer sees one shape from first paint to real page. The
+  payment-confirming spinner is a pulsing dot on the same beat as every
+  skeleton.
+- `/cart` and `/checkout` — one skeleton row per line already in the cart,
+  and skeleton totals, until the prices are in. Checkout's *"Ordering as…"*
+  line waits for `/auth/me` to answer.
+- `/catalog` — a collection section with its round tiles; `/categories` —
+  rows inside the list they stand in for; `/shop` and `/wishlist` — the count
+  line is a block, not a word; `/track` — the WhatsApp line waits for the
+  store config; `/admin` — the dashboard's tab row, filter chips and order
+  rows until the cookie probe answers, and rows (not *"No orders here"*)
+  while a filter change is in flight.
+
+Every empty-state message is kept, and every one is now gated on the data
+having arrived, so none can flash while loading. No request, price or layout
+changed.
+
+## Guard
+
+`tests/skeleton-loading.mjs` (16 checks, negative-tested both ways), wired
+into DEPLOY.bat: no loading state in words anywhere in `app/` (comments
+stripped; `loading="lazy"` and the `"loading"` state literal ignored), no
+`animate-spin`, every function component with a `useEffect` and a `fetch`
+references a `Skel`/`*Skeleton`, nothing returns `null` on a loading flag,
+every `<Suspense fallback>` is a skeleton, and the primitives exist in the
+house style. The deploy stops with *"A page loads without a skeleton"* if any
+of it regresses.
+
+---
+
 # ELFIA OFFICIAL STORE — v1.43.0 (30-08-2026) — THE TRACKING LINK, AND FIXING A TYPO
 
 ## What the portal asked for

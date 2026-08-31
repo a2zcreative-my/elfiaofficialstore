@@ -386,6 +386,86 @@ export function CardSkeleton({ n = 4 }: { n?: number }) {
   );
 }
 
+/* ---------- v1.44.0: skeleton primitives ----------
+   The CEO, 31-08-2026: "I want no loading without skeleton loading react …
+   audit all the files to ensure that no loading leak without skeleton
+   loading react either in web or mobile view apps."
+
+   The audit found the word "Loading…" in ten places, one spinner, and nine
+   of the twelve pages that fetch on mount drawing nothing — or an empty
+   state — until the data arrived. CardSkeleton above was the one house
+   skeleton; these are the rest of the set, in the same style (animate-pulse,
+   bg-elfia-blush/70), so every page can draw the SHAPE of what is coming
+   rather than a sentence about waiting. tests/skeleton-loading.mjs keeps it
+   that way. */
+
+/** A caller's `rounded-xl` or `space-y-3` REPLACES the default rather than
+    fighting it: Tailwind resolves two radius classes by stylesheet order, not
+    by which one was written last. */
+function withDefaults(defaults: string, className: string): string {
+  const own = className.split(/\s+/).filter(Boolean);
+  const keep = defaults.split(/\s+/).filter((d) => {
+    const stem = d.replace(/-.*$/, "");
+    return !own.some((c) => c === stem || c.startsWith(`${stem}-`));
+  });
+  return [...keep, ...own].join(" ");
+}
+
+/** One pulsing block. Size and shape come from the caller. */
+export function Skel({ className = "" }: { className?: string }) {
+  return <div className={withDefaults("animate-pulse rounded bg-elfia-blush/70", className)} aria-hidden />;
+}
+
+/** A paragraph's worth of lines, the last one shorter, the way text ends. */
+export function SkelText({ lines = 3, className = "" }: { lines?: number; className?: string }) {
+  return (
+    <div className={withDefaults("space-y-2", className)} aria-hidden>
+      {Array.from({ length: lines }).map((_, i) => (
+        <Skel key={i} className={`h-3 ${i === lines - 1 && lines > 1 ? "w-2/3" : "w-full"}`} />
+      ))}
+    </div>
+  );
+}
+
+/** List rows in the shape the order and account lists use: a thumbnail on
+    the left, two lines of text, a status chip on the right. */
+export function SkelRows({ rows = 4, className = "" }: { rows?: number; className?: string }) {
+  return (
+    <div className={withDefaults("space-y-2", className)} aria-hidden>
+      {Array.from({ length: rows }).map((_, i) => (
+        <div key={i} className="flex items-center gap-3 rounded-2xl border border-elfia-line bg-white p-3">
+          <Skel className="h-12 w-12 shrink-0 rounded-xl" />
+          <div className="min-w-0 flex-1">
+            <Skel className="h-3.5 w-2/5" />
+            <Skel className="mt-2 h-3 w-1/4" />
+          </div>
+          <Skel className="h-6 w-16 shrink-0 rounded-full" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** A whole page, for Suspense fallbacks and auth checks. The outer <main>
+    carries the padding every content page uses (cart, shop, product,
+    wishlist, collections), so the real page lands on the same edges. */
+export function PageSkeleton({ title = true, width = "max-w-5xl" }: { title?: boolean; width?: string }) {
+  return (
+    <main className="px-4 py-4 sm:px-6 sm:py-8" aria-busy="true">
+      <div className={`mx-auto w-full ${width}`}>
+        {title && (
+          <>
+            <Skel className="h-7 w-48 sm:h-8" />
+            <Skel className="mt-2 h-3 w-24" />
+          </>
+        )}
+        <SkelText lines={2} className="mt-6 max-w-md" />
+        <SkelRows rows={3} className="mt-6" />
+      </div>
+    </main>
+  );
+}
+
 /* ---------- order status ----------
    One vocabulary for the badge on the dashboard, the tabs, and the order
    page, so a customer never sees an order called two different things. */

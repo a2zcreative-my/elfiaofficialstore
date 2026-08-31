@@ -66,7 +66,7 @@ popd
 
 REM ---------------------------------------------------------------- gates
 set "STEP=running the safety gates"
-call :say "[6/9] Safety gates - typecheck, payment integrity, brand isolation, no hardcoded keys"
+call :say "[6/9] Safety gates - typecheck, payment integrity, brand isolation, no hardcoded keys, skeleton loading"
 call node tests\no-secrets.mjs
 if errorlevel 1 call :die "A credential looks like it is written into the code. Nothing was deployed. See the list above - move each one into: cd worker  then  npx wrangler secret put NAME"
 call node tests\worker-compile-gate.mjs
@@ -77,6 +77,8 @@ call node tests\brand-isolation.mjs
 if errorlevel 1 call :die "Another company's identity appears in this repo. Nothing was deployed."
 call node tests\order-tracking.mjs
 if errorlevel 1 call :die "The order-tracking rules are broken. Nothing was deployed - a customer would get a dead or wrong parcel link."
+call node tests\skeleton-loading.mjs
+if errorlevel 1 call :die "A page loads without a skeleton - a customer would see 'Loading...' text or a blank page. Nothing was deployed."
 
 REM ------------------------------------------------------ database + worker
 set "STEP=applying database migrations"

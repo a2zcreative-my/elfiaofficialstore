@@ -27,7 +27,7 @@ import {
   type Account, type AccountOrder, type StoreConfig,
 } from "@/lib/config";
 
-import { Icon, IconTile, StatusPill, useWishlist, type IconName } from "./../ui";
+import { Icon, IconTile, Skel, SkelRows, StatusPill, useWishlist, type IconName } from "./../ui";
 
 /** The four states the CEO's layout puts on the dashboard, mapped onto the
     order statuses this shop really has. Everything else (cancelled) lives
@@ -42,6 +42,9 @@ const BUCKETS: { key: string; label: string; icon: IconName; match: (s: string) 
 export default function AccountPage() {
   const [me, setMe] = useState<Account | null | "loading">("loading");
   const [orders, setOrders] = useState<AccountOrder[]>([]);
+  /* v1.44.0 — "No orders yet" must never show while the orders are still on
+     their way; the list draws skeleton rows until the first answer lands. */
+  const [ordersLoaded, setOrdersLoaded] = useState(false);
   const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [form, setForm] = useState({ name: "", email: "", password: "", phone: "", address: "", website: "" });
   /* v1.3.0 — PDPA marketing consent at sign-up. Default OFF, never pre-ticked. */
@@ -56,8 +59,9 @@ export default function AccountPage() {
   const wishes = useWishlist();
 
   const loadOrders = useCallback(async () => {
-    const r = await fetch("/api/v1/auth/orders");
-    if (r.ok) setOrders(((await r.json()) as { orders: AccountOrder[] }).orders);
+    const r = await fetch("/api/v1/auth/orders").catch(() => null);
+    if (r?.ok) setOrders(((await r.json()) as { orders: AccountOrder[] }).orders);
+    setOrdersLoaded(true);
   }, []);
 
   useEffect(() => {
@@ -127,11 +131,54 @@ export default function AccountPage() {
 
   const signOut = async () => {
     await fetch("/api/v1/auth/logout", { method: "POST" });
-    setMe(null); setOrders([]);
+    setMe(null); setOrders([]); setOrdersLoaded(false);
   };
 
+  /* v1.44.0 — skeleton until the first fetch lands. Drawn in the signed-in
+     layout (greeting card, the four order tiles, order rows) on the same
+     <main> and max-w-3xl column, so a returning customer's page lands on top
+     of its own shape rather than replacing a sentence. */
   if (me === "loading") {
-    return <main className="px-6 py-20 text-center text-sm text-elfia-muted">Loading…</main>;
+    return (
+      <main className="px-4 py-4 sm:px-6 sm:py-10" aria-busy="true">
+        <div className="mx-auto w-full max-w-3xl">
+          <div className="flex items-center gap-3.5 rounded-3xl bg-elfia-blush p-4 ring-1 ring-elfia-line sm:p-5">
+            <Skel className="h-12 w-12 shrink-0 rounded-full bg-white/80" />
+            <div className="min-w-0 flex-1">
+              <Skel className="h-4 w-40 bg-white/80" />
+              <Skel className="mt-2 h-3 w-52 bg-white/80" />
+            </div>
+            <Skel className="h-8 w-20 shrink-0 rounded-full bg-white/80" />
+          </div>
+          <section className="mt-5">
+            <div className="mb-3 flex items-end justify-between">
+              <Skel className="h-4 w-24" />
+            </div>
+            <div className="grid grid-cols-4 gap-2 sm:gap-3">
+              {BUCKETS.map((b) => (
+                <div key={b.key} className="flex flex-col items-center gap-1.5 rounded-2xl bg-white px-1 py-3.5 ring-1 ring-elfia-line">
+                  <Skel className="h-9 w-9 rounded-full" />
+                  <Skel className="h-2.5 w-12" />
+                </div>
+              ))}
+            </div>
+            <SkelRows rows={3} className="mt-3" />
+          </section>
+          <Skel className="mt-5 h-28 rounded-3xl" />
+          <section className="mt-6">
+            <Skel className="mb-3 h-4 w-28" />
+            <div className="grid grid-cols-4 gap-2 sm:gap-3">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <div key={i} className="flex flex-col items-center gap-1.5 rounded-2xl bg-white px-2 py-3.5 ring-1 ring-elfia-line">
+                  <Skel className="h-10 w-10 rounded-full" />
+                  <Skel className="h-2.5 w-12" />
+                </div>
+              ))}
+            </div>
+          </section>
+        </div>
+      </main>
+    );
   }
 
   const freeAbove = config && config.free_above_cents > 0 ? fmtRM(config.free_above_cents) : null;
@@ -286,7 +333,11 @@ export default function AccountPage() {
             })}
           </div>
 
-          {orders.length === 0 ? (
+          {/* v1.44.0 — skeleton until the first fetch lands; the empty state
+              waits for the answer instead of standing in for it. */}
+          {!ordersLoaded ? (
+            <SkelRows rows={3} className="mt-3" />
+          ) : orders.length === 0 ? (
             <div className="mt-3 rounded-2xl border border-elfia-line bg-white px-5 py-8 text-center">
               <p className="text-sm text-elfia-muted">No orders on this account yet.</p>
               <Link href="/shop" className={`${btnClass} mt-4`}>Browse the shop</Link>

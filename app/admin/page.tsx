@@ -16,6 +16,8 @@ import { useCallback, useEffect, useState } from "react";
 
 import { btnClass, btnGhost, fmtRM, fmtWhen, imageUrl, inputClass, labelClass, type Product } from "@/lib/config";
 
+import { Skel, SkelRows } from "./../ui";
+
 interface AdminOrder {
   id: number; order_number: string; token: string; customer_name: string; phone: string; address: string;
   tracking_courier?: string | null;
@@ -138,8 +140,17 @@ export default function Admin() {
      stays signed in because the cookie (not sessionStorage) carries the
      session. On load we simply try: if the cookie is still good the data
      arrives, otherwise the passcode screen shows. */
+  /* v1.44.0 — skeleton until the first fetch lands. `probed` is false only
+     until the cookie probe has answered: before that, neither the passcode
+     form nor the dashboard is the truth, so the page draws the dashboard's
+     shape. `listLoading` covers the same effect re-running on a filter
+     change, so an empty filter never says "No orders here" mid-fetch. */
+  const [probed, setProbed] = useState(false);
+  const [listLoading, setListLoading] = useState(false);
   useEffect(() => {
-    void load("", true).then((ok) => { if (ok) setAuthed(true); });
+    setListLoading(true);
+    void load("", true).then((ok) => { if (ok) setAuthed(true); }).catch(() => null)
+      .finally(() => { setProbed(true); setListLoading(false); });
   }, [load]);
 
   const login = async (e: React.FormEvent) => {
@@ -268,6 +279,32 @@ export default function Admin() {
     void load(key);
   };
 
+  /* v1.44.0 — skeleton until the first fetch lands: the tab row, the
+     gateway card, the filter chips and order rows, on the dashboard's own
+     <main> and max-w-4xl column. */
+  if (!probed) {
+    return (
+      <main className="px-6 py-10" aria-busy="true">
+        <div className="mx-auto w-full max-w-4xl">
+          <div className="flex items-center gap-3">
+            {Array.from({ length: 3 }).map((_, i) => <Skel key={i} className="h-9 w-24 rounded-lg" />)}
+            <Skel className="ml-auto h-3 w-12" />
+            <Skel className="h-3 w-14" />
+          </div>
+          <div className="mt-5 rounded-xl border border-stone-200 bg-white p-4">
+            <div className="flex flex-wrap items-center gap-3">
+              <Skel className="h-10 w-56 rounded-full" />
+              <Skel className="h-3 w-72 max-w-full" />
+            </div>
+          </div>
+          <div className="mt-4 flex flex-wrap gap-1.5">
+            {FILTERS.map((f) => <Skel key={f} className="h-6 w-20 rounded-full" />)}
+          </div>
+          <SkelRows rows={4} className="mt-4 space-y-3" />
+        </div>
+      </main>
+    );
+  }
 
   if (!authed) {
     return (
@@ -340,7 +377,10 @@ export default function Admin() {
               ))}
             </div>
             <div className="mt-4 space-y-3">
-              {orders.length === 0 && <p className="text-sm text-stone-500">No orders here.</p>}
+              {/* v1.44.0 — skeleton rows while a filter change is in flight;
+                  the empty state waits for the answer. */}
+              {orders.length === 0 && listLoading && <SkelRows rows={3} className="space-y-3" />}
+              {orders.length === 0 && !listLoading && <p className="text-sm text-stone-500">No orders here.</p>}
               {orders.map((o) => {
                 const items = JSON.parse(o.items) as { name: string; qty: number; price_cents: number }[];
                 return (

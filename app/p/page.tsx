@@ -15,7 +15,7 @@ import {
   maxQty, splitName, STORE, type Product,
 } from "@/lib/config";
 
-import { FlashPill, Icon, ProductCard, SectionHeader, WishHeart, useDataRefresh } from "./../ui";
+import { CardSkeleton, FlashPill, Icon, ProductCard, SectionHeader, Skel, SkelText, WishHeart, useDataRefresh } from "./../ui";
 
 /** The share row: the phone's own share sheet where there is one, a
     WhatsApp hand-off and a copy button everywhere else. */
@@ -120,13 +120,67 @@ function NotifyMe({ product }: { product: Product }) {
   );
 }
 
+/** v1.44.0 — the product page's own shape while the product is on its way:
+    the same <main>, max-w-5xl column and two-column grid (sm:grid-cols-2),
+    the 3:4 photo frame, SKU line, title, price, description, stock pill,
+    quantity + Add to cart, and the "You may also like" rail as cards. Used
+    both as the Suspense fallback and while the fetch runs, so the customer
+    sees one shape from first paint to real page. */
+function ProductSkeleton() {
+  return (
+    <main className="px-4 py-4 sm:px-6 sm:py-8" aria-busy="true">
+      <div className="mx-auto w-full max-w-5xl">
+        <div className="mb-3 flex items-center gap-1.5">
+          <Skel className="h-3 w-12" />
+          <span className="text-xs text-elfia-line">/</span>
+          <Skel className="h-3 w-28" />
+        </div>
+        <div className="grid gap-7 sm:grid-cols-2 sm:gap-10">
+          <Skel className="aspect-[3/4] rounded-3xl" />
+          <div className="sm:pt-2">
+            <Skel className="h-2.5 w-40" />
+            <Skel className="mt-3 h-8 w-3/4" />
+            <Skel className="mt-2 h-3.5 w-24" />
+            <Skel className="mt-5 h-7 w-32" />
+            <SkelText lines={3} className="mt-6" />
+            <Skel className="mt-5 h-8 w-48 rounded-full" />
+            <div className="mt-6 flex flex-wrap items-center gap-3">
+              <Skel className="h-12 w-32 rounded-full" />
+              <Skel className="h-12 flex-1 rounded-full sm:w-40 sm:flex-none" />
+            </div>
+            <div className="mt-6 flex flex-wrap items-center gap-2 border-t border-elfia-line pt-5">
+              <Skel className="h-3 w-24" />
+              <Skel className="h-9 w-20 rounded-full" />
+              <Skel className="h-9 w-24 rounded-full" />
+            </div>
+            <div className="mt-8 space-y-3 border-t border-elfia-line pt-5">
+              <Skel className="h-3 w-2/3" /><Skel className="h-3 w-3/5" /><Skel className="h-3 w-1/2" />
+            </div>
+          </div>
+        </div>
+        <section className="mt-14">
+          <div className="mb-3 flex items-end justify-between gap-3">
+            <Skel className="h-5 w-40 sm:h-6" />
+            <Skel className="h-3 w-14" />
+          </div>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-4">
+            <CardSkeleton n={4} />
+          </div>
+        </section>
+      </div>
+    </main>
+  );
+}
+
 function ProductInner() {
   const params = useSearchParams();
   const id = Number(params.get("id"));
   const [p, setP] = useState<Product | null | "missing">(null);
   const [qty, setQty] = useState(1);
   const [added, setAdded] = useState(false);
-  const [others, setOthers] = useState<Product[]>([]);
+  /* v1.44.0 — null until "You may also like" has answered, so the rail
+     draws card skeletons rather than appearing from nowhere a beat later. */
+  const [others, setOthers] = useState<Product[] | null>(null);
   /* The phone buy bar exists ONLY while the real Add-to-cart button is off
      screen, and only on a phone. Rendering both at once would put two
      "Add to cart" buttons in the page at the same time — confusing for a
@@ -161,7 +215,8 @@ function ProductInner() {
       .catch(() => setOthers([]));
   }, [id, refresh]);
 
-  if (p === null) return <main className="px-6 py-16 text-center text-sm text-elfia-muted">Loading…</main>;
+  /* v1.44.0 — skeleton until the first fetch lands. */
+  if (p === null) return <ProductSkeleton />;
   if (p === "missing") {
     return (
       <main className="px-6 py-16 text-center">
@@ -180,7 +235,7 @@ function ProductInner() {
   const was = comparePrice(p); // v1.7.0 — the portal's discount
   const { series, shade } = splitName(p.name);
   const collection = (p.category ?? "bawal") === "shawl" ? "Shawl" : "Bawal";
-  const also = others.filter((o) => o.id !== p.id && (o.category ?? "bawal") === (p.category ?? "bawal")).slice(0, 4);
+  const also = (others ?? []).filter((o) => o.id !== p.id && (o.category ?? "bawal") === (p.category ?? "bawal")).slice(0, 4);
 
   return (
     <main className="px-4 py-4 sm:px-6 sm:py-8">
@@ -302,7 +357,15 @@ function ProductInner() {
           </div>
         </div>
 
-        {also.length > 0 && (
+        {/* v1.44.0 — skeleton until the first fetch lands. */}
+        {others === null ? (
+          <section className="mt-14" aria-busy="true">
+            <SectionHeader title="You may also like" href="/shop" />
+            <div className="grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-4">
+              <CardSkeleton n={4} />
+            </div>
+          </section>
+        ) : also.length > 0 && (
           <section className="mt-14">
             <SectionHeader title="You may also like" href="/shop" />
             <div className="grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-4">
@@ -336,7 +399,7 @@ function ProductInner() {
 
 export default function ProductPage() {
   return (
-    <Suspense fallback={<main className="px-6 py-16 text-center text-sm text-elfia-muted">Loading…</main>}>
+    <Suspense fallback={<ProductSkeleton />}>
       <ProductInner />
     </Suspense>
   );

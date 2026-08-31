@@ -15,7 +15,7 @@ import { useEffect, useState } from "react";
 
 import { collectionsOf, fmtRM, imageUrl, type Product } from "@/lib/config";
 
-import { EmptyState, Icon, useDataRefresh } from "./../ui";
+import { EmptyState, Icon, Skel, useDataRefresh } from "./../ui";
 
 export default function CategoriesPage() {
   const [products, setProducts] = useState<Product[] | null>(null);
@@ -56,21 +56,23 @@ export default function CategoriesPage() {
           </div>
         </div>
 
-        {products === null && (
-          <div className="mt-5 space-y-3">
-            {Array.from({ length: 4 }).map((_, i) => (
-              <div key={i} className="flex animate-pulse items-center gap-3 rounded-2xl bg-white p-3 ring-1 ring-elfia-line">
-                <div className="h-14 w-14 rounded-xl bg-elfia-blush/70" />
-                <div className="flex-1">
-                  <div className="h-3.5 w-1/3 rounded bg-elfia-blush/70" />
-                  <div className="mt-2 h-3 w-1/4 rounded bg-elfia-blush/70" />
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
         <div className="mt-5 space-y-3">
+          {/* v1.44.0 — skeleton until the first fetch lands, INSIDE the list
+              it stands in for: the same 16×16 tile, two lines and chevron as
+              a real collection row, so nothing shifts when they arrive. (The
+              old placeholder sat in its own block above an empty list, and
+              the list's margin made the page jump 20px when data landed.) */}
+          {products === null && Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="flex items-center gap-3.5 rounded-2xl border border-elfia-line bg-white p-3" aria-busy="true">
+              <Skel className="h-16 w-16 shrink-0 rounded-xl" />
+              <div className="min-w-0 flex-1">
+                <Skel className="h-4 w-1/3" />
+                <Skel className="mt-2 h-3 w-2/3" />
+                <Skel className="mt-2 h-3 w-1/4" />
+              </div>
+              <Skel className="h-4 w-4 shrink-0" />
+            </div>
+          ))}
           {rows.map(({ g, items }) => (
             <Link key={g.key} href={`/shop?c=${g.key}`}
               className="group flex items-center gap-3.5 rounded-2xl border border-elfia-line bg-white p-3 transition-colors hover:border-elfia-rose">
@@ -110,6 +112,7 @@ export default function CategoriesPage() {
           </div>
         )}
 
+        {products === null && <Skel className="mt-5 h-12 w-full rounded-full" />}
         {rows.length > 0 && (
           <Link href="/shop"
             className="mt-5 flex h-12 w-full items-center justify-center rounded-full border border-elfia-line bg-white text-sm font-semibold text-elfia-deep transition-colors hover:border-elfia-rose">

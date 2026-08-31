@@ -51,7 +51,7 @@ import {
   type Product,
 } from "@/lib/config";
 
-import { Icon, useDataRefresh } from "../ui";
+import { Icon, Skel, useDataRefresh } from "../ui";
 
 /** The catalog's cover, from the stable route: the CEO's uploaded cover
     when one exists (v1.21.0), the shipped one otherwise. It carries no
@@ -211,8 +211,26 @@ export default function Catalog() {
         </div>
 
         {/* ---- the shades, by collection ---- */}
+        {/* v1.44.0 — skeleton until the first fetch lands: one collection
+            section in its own shape — the wordmark-and-rule header, then the
+            tile grid (round photo, name, price) on the same breakpoints. */}
         {products === null && (
-          <p className="mt-12 text-center text-sm text-elfia-muted">Loading the collection…</p>
+          <section className="mt-12" aria-busy="true">
+            <div className="flex items-center gap-3">
+              <Skel className="h-7 w-32 sm:h-8" />
+              <span className="h-px flex-1 border-t border-dashed border-elfia-rose/60" />
+              <Skel className="h-3 w-14" />
+            </div>
+            <div className="mt-6 grid grid-cols-2 gap-x-4 gap-y-7 sm:grid-cols-3 lg:grid-cols-4">
+              {Array.from({ length: 8 }).map((_, i) => (
+                <div key={i} className="flex flex-col items-center">
+                  <Skel className="aspect-square w-full rounded-full" />
+                  <Skel className="mt-3 h-3.5 w-2/3" />
+                  <Skel className="mt-2 h-3 w-1/3" />
+                </div>
+              ))}
+            </div>
+          </section>
         )}
 
         {products !== null && groups.length === 0 && (
