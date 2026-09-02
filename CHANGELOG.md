@@ -1,3 +1,37 @@
+# ELFIA OFFICIAL STORE — v1.44.1 (31-08-2026) — THE FOOTER NAMES THE OPERATOR
+
+## What the CEO asked for
+
+**A2Z CEO:** *"elfia footer need to add A 2 Z Creative SSM since this is
+handle by A 2 Z Creative."*
+
+## What changed
+
+Both footers — the phone one and the desktop one — now end with one muted
+line under the copyright:
+
+> ELFIA is a brand operated by A2Z CREATIVE MARKETING · SSM 202603003468 (CA0414729-A)
+
+The wording and the number come from the agency's own issuer record in the
+portal (`lib/issuers.ts`, facts supplied by the CEO on 19-08-2026), not
+retyped from memory — a wrong SSM number on a storefront is worse than none.
+
+## The part that needed care
+
+This repo has a **brand-isolation guard** whose whole job is to fail the
+build if the agency's name, SSM number, bank account or domain appears
+anywhere in ELFIA's code — ELFIA is a client brand and must not wear the
+agency's identity. This request is the owner of that policy adding a legal
+disclosure, so the guard gained its SECOND deliberate exemption (the payee
+`BANK_LINE` was the first, 26-08): the agency's name and registration are
+allowed **only on the single line that defines `OPERATOR_LINE`** in
+`app/chrome.tsx`. Both footers render that constant. The same identity on
+any other line — including elsewhere in the same file — still fails the
+build, so a disclosure cannot quietly grow into co-branding.
+
+Negative-tested both ways: the identity pasted anywhere else in the repo
+fails; the operator line itself passes.
+
 # ELFIA OFFICIAL STORE — v1.44.0 (31-08-2026) — NOTHING LOADS IN WORDS
 
 ## What the CEO asked for

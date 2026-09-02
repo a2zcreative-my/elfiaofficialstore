@@ -357,6 +357,21 @@ export function WhatsAppButton() {
  * desktop footer squeezed into 390px. Same idea as the header: two faces of
  * one storefront, not two sites.
  */
+/* v1.44.1 (CEO: "elfia footer need to add A 2 Z Creative SSM since this is
+   handle by A 2 Z Creative") — the legal operator line.
+   ELFIA is the BRAND; the legal entity behind the shop is the agency, and a
+   Malaysian storefront that takes bank transfers should say which registered
+   company a customer is actually dealing with.
+   ONE constant, on one line, rendered by both footers. This is the second
+   deliberate exemption in tests/brand-isolation.mjs (the payee BANK_LINE was
+   the first): the guard allows the agency's name and SSM number ONLY on the
+   line that defines this constant — the same identity anywhere else in the
+   repo still fails the build, because the isolation rule is about ELFIA not
+   wearing another company's branding, and a single "operated by" disclosure
+   is the opposite of that. Wording and number are from the agency's own
+   issuer record (lib/issuers.ts, supplied by the CEO 19-08-2026). */
+const OPERATOR_LINE = "ELFIA is a brand operated by A2Z CREATIVE MARKETING \u00b7 SSM 202603003468 (CA0414729-A)";
+
 export function SiteFooter() {
   const year = new Date().getFullYear();
   return (
@@ -390,6 +405,11 @@ export function SiteFooter() {
           Premium bawal, ordered direct and delivered across Malaysia.
         </p>
         <p className="mt-3 text-[11px] text-elfia-muted">© {year} {STORE.name}</p>
+        {/* Wider than the 15rem line above on purpose: the floating buttons
+            sit higher than this last line once the page has bottomed out, and
+            a legal line that wraps to four words a row reads like an
+            apology. */}
+        <p className="mx-auto mt-1.5 max-w-xs text-[10px] leading-relaxed text-elfia-muted/80">{OPERATOR_LINE}</p>
       </footer>
 
       {/* ---- desktop ---- */}
@@ -434,6 +454,7 @@ function DesktopFooter({ year }: { year: number }) {
         <p className="mt-10 border-t border-elfia-line pt-6 text-center text-[11px] text-elfia-muted">
           © {year} {STORE.name}
         </p>
+        <p className="mt-1.5 text-center text-[10px] text-elfia-muted/80">{OPERATOR_LINE}</p>
       </div>
     </footer>
   );
