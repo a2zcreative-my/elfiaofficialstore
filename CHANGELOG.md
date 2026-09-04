@@ -1,3 +1,46 @@
+# ELFIA OFFICIAL STORE — v1.44.2 (04-09-2026) — THE COUNTER THAT NEVER COUNTED
+
+## What happened
+
+The portal's `PUSH.bat` gained a compile gate today — each engine is typechecked
+before it is published, the check the 19-08 outage taught. On its first run it
+refused to publish this store's engine:
+
+```
+src/index.ts(428,40): error TS2339: Property 'tracking_courier' does not exist on type 'OrderRow'.
+src/index.ts(488,44): error TS2339: Property 'tracking_courier' does not exist on type 'OrderRow'.
+src/index.ts(1647,30): error TS2552: Cannot find name 'body'. Did you mean 'Body'?
+src/index.ts(1647,58): error TS2552: Cannot find name 'body'. Did you mean 'Body'?
+```
+
+The store's own `DEPLOY.bat` has run this same gate since v1.29; the combined
+deploy script had not, and these two slipped through it.
+
+## What was wrong
+
+**Line 1647 was a real bug, hidden by its own safety net.** v1.42.0 added the
+in-app-browser tally on the pay route: the shop tells the worker when a
+customer is paying from inside TikTok's browser, and the worker counts it, so
+the "logged out. Access denied" reports could be measured instead of argued
+about. The route never read the request body. `body?.in_app` threw a
+ReferenceError on every payment — and the `try/catch` around the counter
+swallowed it, exactly as designed ("a counter must never stop a payment"). So
+payments went through, nobody noticed, and both tallies read zero for a week,
+which on the payment check looks like "no in-app payers", the opposite of the
+truth. The route now reads the body (a missing body is the ordinary-browser
+case, not an error).
+
+**Lines 428 and 488 were type-only.** `OrderRow` never gained the
+`tracking_courier` column that migration 0009 added; `SELECT *` returned it
+and the code used it, so nothing broke at runtime. The field is on the type
+now, optional, because a row read before 0009 has no such column.
+
+## Verified
+
+Reproduced the four errors on the shipped file, then `tsc --noEmit` clean on
+the fixed one. brand-isolation, no-secrets, order-tracking, payment-integrity
+and bank-line all pass. The next `PUSH.bat` publishes it.
+
 # ELFIA OFFICIAL STORE — v1.44.1 (31-08-2026) — THE FOOTER NAMES THE OPERATOR
 
 ## What the CEO asked for

@@ -363,6 +363,9 @@ interface OrderRow {
   address: string; email: string | null; notes: string | null; items: string;
   subtotal_cents: number; shipping_cents: number; total_cents: number; status: Status;
   receipt_key: string | null; payment_method: string | null; tracking_no: string | null;
+  /* v1.43.0 (migration 0009) — the courier key behind the tracking link.
+     Optional: a row read before 0009 applied has no such column. */
+  tracking_courier?: string | null;
   admin_notes: string | null; created_at: string; updated_at: string | null;
 }
 
@@ -1642,7 +1645,15 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
          find out whether that is really what is happening, instead of
          reasoning about it from one screenshot: two numbers, kept in
          sync_state, visible on the payment check. Nothing about the bill
-         changes and no personal data is stored — an app name and a tally. */
+         changes and no personal data is stored — an app name and a tally.
+         v1.44.2 — THE COUNTER NEVER COUNTED. `body` was read nowhere in this
+         route, so the line below threw a ReferenceError on every payment,
+         the catch swallowed it exactly as designed, and both tallies stayed
+         at zero for a week while reading as "no in-app payers". The compile
+         gate PUSH.bat now runs before publishing caught it. The shop sends
+         a JSON body only when it detects an in-app browser; a missing body
+         is the browser case, not an error. */
+      const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
       try {
         const inApp = typeof body?.in_app === "string" ? body.in_app.slice(0, 24) : "";
         const key = inApp ? "pay_attempts_in_app" : "pay_attempts_browser";
