@@ -2,6 +2,196 @@
 
 All notable changes to the AZ ONE OFFICIAL platform.
 
+## [1.113.0] - 2026-09-05 - the Sales map: revenue by state, invoices and web orders
+
+**CEO**, 05-09-2026: *"on Sales tabs should add Sales mapped like ecommerce or hotel type for me to monitor on the sales state location and revenue by states."* Asked what it should show, he chose both layers with a switch.
+
+### What was in the way
+Neither an invoice nor a web order carries a state. A customer has one free-text address line; the ELFIA checkout has one free-text address box. So a map by state needs the state READ out of the text - and it has to be honest about what it could not read.
+
+### Now
+- **The Sales map leads the Sales tab.** The same Malaysian geometry the Operations, ELFIA Traffic and Hotels maps draw, in the same language - gold shade for the amount, navy bubble with the figure, press a state for its own numbers, a side panel with the total and the top six.
+- **Two layers, one switch.** *Invoices*: A2Z's own invoices placed by the customer's address, shade by amount invoiced, with paid and unpaid told apart in the panel. *Web orders*: ELFIA orders the portal has seen **paid** - the same fact the Finance tab's revenue reads - placed by the shipping address.
+- **Three ranges**: this month, this year (default), all time - on the Malaysian calendar, not UTC.
+- **Nothing silently dropped.** An address with no readable state goes to an *unplaced* line under the map with its count and its money (*"RM 1,250 from 3 invoices could not be placed - add the state to the customer's address and the map places it"*). The totals always equal the inputs.
+
+### How the state is read (`worker/src/my-state.ts`, pure, 94 checks run against it)
+The last state name written, as people write it - *Selangor*, *Penang*, *N. Sembilan*, *W.P. Kuala Lumpur*, *KL* - and the five-digit postcode, whose first two digits Pos Malaysia allocates to one state without exception (with the Genting and Cameron Highlands outliers). When both are present and disagree, the later one in the text is believed, because an address reads "postcode, then state": *Jalan Kelantan, 50480 Kuala Lumpur* is in Kuala Lumpur. The vocabulary is the geometry's sixteen names, upper case - the same list the hotel workbook uses.
+
+### Under it
+`GET /staff/sales/map?range=month|year|all` (`worker/src/sales-map.ts`, behind `revenue_view`; `aggregate()` and `rangeStart()` pure and RUN by the guard), `components/portal/sales-map.tsx` (lazy; remembered and live on `docs`, `clients`, `orders`, `web-orders`). Guard #47 `tests/sales-map.mjs`, negative-tested three ways. No migration.
+
+## [1.112.0] - 2026-09-05 - Enquiries are staff work: their own tab, on the desk, pushed on arrival
+
+**CEO**, 05-09-2026: *"Customer enquiries - I think should create a new tabs under customer/client inquiry which is require Staff action for response their inquire either via apps or emails."* Asked how an email reply should leave the system, he chose in-app only for now (a portal-sent email needs a provider and a verified domain - a later step).
+
+### What was there
+Since v1.21.0 the enquiries were a card at the top of the Sales tab with a status dropdown and, from v1.4.191, an in-app reply the customer reads on their Account page. A website enquiry was saved and **nobody was told**; an /account enquiry wrote bell rows to three roles by hand, with no push and no landing tab. Nothing said who was handling one, and nothing said a customer had waited too long.
+
+### Now
+- **An Enquiries tab**, one place after Sales, for everyone with `enquiry_manage` (`ENQUIRY_ROLES` in `lib/portal-tabs.ts`, mirrored to the worker and held by the guard). Worklist chips lead: **Waiting · Overdue · Mine · Answered · Became business · Closed · All**, each with its count over everything, not the page.
+- **Overdue after a day.** A waiting enquiry older than 24 hours is marked overdue on the row, counted on a chip, and flagged on the desk. An enquiry that has a reply is never overdue, whatever its status says.
+- **One enquiry, one person.** *Take it* puts your name on a waiting enquiry so two people do not answer the same customer; a *Who answers* dropdown hands it to a colleague, who is told once; handing it to someone who cannot answer enquiries is refused. A reply takes the enquiry for the replier unless somebody already has it.
+- **On the One Desk.** A waiting enquiry sits on the desk of everyone who can answer it until somebody takes it; a taken one sits only on its taker's desk until it is closed. New bucket *Enquiries*, live on the `enquiries` topic.
+- **Pushed on arrival, both doors.** Website form and /account now go through one announcer: everyone with `enquiry_manage` - and only them - is pushed once, naming the customer and the category, landing on the Enquiries tab. A bell item for an enquiry is now pressable and opens the tab.
+- The reply, WhatsApp and mailto links, *Answered outside*, *Became business* (raise the quotation on Sales), *Close* and *Reopen* all report both ways. The panel is remembered on the device and live.
+
+### Under it
+`worker/src/enquiries.ts` (routes moved out of index.ts; `isOverdue()` and `hoursWaiting()` pure and RUN by the guard; `announceEnquiry()`), `components/portal/enquiries-panel.tsx` (lazy), desk bucket in `worker/src/desk.ts`, `PUSH_TAB.enquiry`, `TAB_ACCESS_TABS`, side-nav Business section, i18n. The Sales hint reads *documents + map*; the Hotels hint now says *review outreach by state*. Guard #46 `tests/enquiries.mjs` (43 checks), negative-tested three ways. No migration.
+
+## [1.111.0] - 2026-09-05 - Hotels is the review venture: the pipeline re-spoken, the watchers withdrawn
+
+**CEO**, 05-09-2026, minutes after v1.110.0: *"I think watcher not supposed to include on the hotel since Hotel is another service that I want to do for Hotel review which is upcoming project is Airbnb and Hotel review content for me to upscale my business like a Foodie of Pin Yang."* Asked how the pipeline should read for that business, he chose: reframe it for review outreach.
+
+### What was wrong
+The 05-09 roadmap read the 442 hotels as a sales list and phase 05 built accordingly: stages *quoted / won / lost*, a link from a hotel to a client's quotations and invoices, the map coloured by revenue, and a company Watcher over hotel follow-ups (joining the MOF/Halal certificate watcher from v1.108.0). The hotels are not customers of the operating company. They are the subjects of a separate venture - hotel and Airbnb stays, reviewed and published - and the operating company's rules and money have no business in it.
+
+### Now
+- **The stages speak review outreach**: *Not contacted → Contacted → Stay agreed → Reviewed → Published*, and *Declined*. They still move by what happened - a call, a stay agreed, the stay taken, the review out - forward only by themselves, and a later call revives a decline. The call outcomes are the seven things that actually happen on such a call: spoke, no answer, call back, they declined, a stay is agreed, we stayed and reviewed, the review is published.
+- **Where the review lives.** Logging *the review is published* takes the link; it sits on the hotel as *Read the review* and marks the row *review out*.
+- **The map's second colouring is reviews published per state**, and the side panel reads *N of M contacted · K stays agreed · P published*. The revenue colouring is gone.
+- **The client link, the documents and the money are gone** from the hotel page and the worker module. `hotels.customer_id` stays on the table unread (it carries a foreign key SQLite will not drop; an unused nullable column costs nothing).
+- **No Watcher looks at hotels.** Both `hotel_cert` and `hotel_followup` are removed; their open findings clear themselves on the next hourly run. The Watchers card no longer carries their labels. `tests/watchers.mjs` now asserts that no watcher's key, label, tab or SQL names hotels, and its date test runs on asset warranties instead.
+- The worklist chips are *All · Not contacted · Due for a call · Contacted · Stay agreed · Reviewed · Published · Declined*.
+
+### Under it
+`worker/migrations/0117_hotel_review_pipeline.sql` rebuilds the `stage` column beside itself (SQLite cannot alter a CHECK in place), carries every old word to its nearest new one (quoted→agreed, won→published, lost/dormant→declined; sent_quote/meeting→agreed, not_interested/lost→declined), rebuilds `hotel_calls` with the new outcomes, re-creates the indexes the rebuild loses, and adds `hotels.review_url` - which is also the probe, since every other name is the same before and after. Verified on SQLite 3.45 with seeded rows: old words are refused after, ids continue, both indexes present. Guard #45 (68 checks) re-spoken and negative-tested three more ways, including a watcher reading `hotels` again.
+
+**Deploy note:** run `DEPLOY.bat` once; 0116 and 0117 apply in order whether or not v1.110.0 was ever deployed.
+
+## [1.110.0] - 2026-09-05 - roadmap phase 05: the hotel directory becomes a pipeline
+
+**CEO**, 05-09-2026: *"what phase left? continue next phase"*. The last of the five phases from the 05-09 roadmap. The roadmap said it plainly: 442 hotels and 690 named contacts on one tab, quotations and invoices on another, nothing connecting them - *"the most valuable asset in the system is currently a phone book."*
+
+### What a hotel now has
+- **A stage** - never contacted, contacted, quoted, won, lost, dormant - shown as a coloured chip on every row. The first four move **by what happened**: logging a call moves a lead to contacted, a "quotation sent" outcome to quoted, "won the business" to won. It only ever moves forward by itself - a no-answer after a quotation does not un-quote the hotel. Lost and dormant are a person's call, set from a dropdown on the open hotel, and a later call revives them.
+- **A call log.** On an open hotel: *how did it go* (eight outcomes), *who you spoke to* (the hotel's own contacts), *call back on* (a date), and notes. Each call is stamped with who made it; the hotel remembers when it was last spoken to and when the next call is due. **Logging a call is queueable** (phase 03's outbox): in a lobby with one bar of signal it is kept on the phone and sent when the signal is back, at the time it was pressed, and the toast says *Kept - no signal* rather than pretending it failed.
+- **The client it became.** *Create client from this hotel* makes a customer row from the hotel's company, address and first contact and links it; *Link an existing client* finds one by name; the quotations and invoices in that client's name then show on the hotel, with what has been paid, what is unpaid and what was quoted.
+- **A worklist.** Chips above the list: **All · Never contacted · Due for a call · Contacted · Quoted · Won · Lost**. *Never contacted* is who to ring. *Due* is who to ring back - a follow-up date that has passed, or a contacted/quoted hotel quiet for ninety days. A never-called lead is deliberately **not** due: 300 of them would bury the ten real lapses.
+- **The map answers "where is the money".** A Hotels / Revenue toggle on the map card: by revenue the shade and the bubble are what each state's hotels have **paid**, and the side panel lists the states that have paid the most and says, for the country or the pressed state, *N of M contacted · K won*.
+
+### A watcher for it
+`hotel_followup` - *Hotel follow-up overdue or gone quiet* - tells the CEO, CCO and sales when a follow-up date has passed or a worked hotel has been quiet past the threshold (default 90 days, the CEO's to change), once, and clears when the call is logged.
+
+### Under it
+- `worker/migrations/0116_hotel_pipeline.sql`: `hotel_calls` (hotel, contact, user, outcome, notes, next_at), and on `hotels`: `customer_id`, `stage`, `last_contact_at`, `next_at`, `owner_id`, indexed. The owner is whoever last worked the hotel, unless set.
+- `worker/src/hotel-pipeline.ts`: `stageAfter()` and `isDue()` are pure and RUN by the guard; routes `GET /staff/hotels/pipeline`, `GET /staff/hotels/:id/pipeline`, `POST /:id/calls`, `PUT /:id/link`, `POST /:id/client`, `PUT /:id/stage`. Reads are open to `hotels_view`, writes behind `hotels_manage`, every write audited (`hotel.call`, `hotel.link`, `hotel.client`, `hotel.stage`).
+- The hotel list carries the new columns with a pre-0116 fallback, filters by `?stage=` and `?due=1`, and returns per-state money for the map. Guard #45 `tests/hotel-pipeline.mjs` (56 checks) runs the two rules and a call against a fake database, holds the panel's vocabulary to the worker's, the queueable route on both sides of the outbox, and the door before the list route; negative-tested four ways. `tests/watchers.mjs` learned that a ref may carry a hyphen.
+
+All five phases of the 05-09 roadmap are now shipped: 01 role landing (1.103), 02 remembered views (1.104), 03 offline outbox (1.105), 04 one desk / search everything / watchers (1.106-1.108), 05 hotel pipeline (1.110).
+
+## [1.109.1] - 2026-09-05 - installed on a phone, the header clears the status bar
+
+**CEO**, 05-09-2026, a screenshot of the portal on his Android Home Screen: the clock, signal and battery drawn straight over the avatar and "Today". *"When I add for Home screen it is like this 🤦🏻‍♂️"*
+
+### Why
+The manifest asks for `viewport-fit=cover`, so an installed app runs edge to edge - the system bar is drawn over the page, and the page is expected to keep its own content clear of it. The **bottom** bar has done exactly that for its inset since v1.10.0. The **top** never had to: in a browser tab the inset is zero, and until phones started drawing under the status bar nobody saw the gap.
+
+### Fix
+Every sticky mobile header - portal, admin, account - and the connection line now pad their top by `env(safe-area-inset-top)`, **added to** their own padding rather than swapped for it, so in a browser tab they look exactly as before and when installed they sit under the status bar with their content below it. Being sticky, the portal header keeps clearing the bar as the page scrolls.
+
+`tests/shell-scroll.mjs` now finds every `sticky top-0` header in the three pages and holds it to clearing the inset, added to its own padding; negative-tested by removing the style from the portal header.
+
+## [1.109.0] - 2026-09-05 - a part-time live host is paid by the clock, less the break
+
+**CEO**, 05-09-2026, with a Saturday on the attendance register - Nurul in at 11:05, out at 22:30, both punches marked *rest day*: *"if live host part time should count as part time working which is based on their working hour and minus 1 hour of break"*.
+
+### What was wrong
+Two things, from the same root: a part-time live host was being measured against a shift pattern that does not govern her.
+
+- **Her hours were trimmed to a pattern.** Since v1.80.0 an hourly person's pay was the overlap of her punch span with her scheduled blocks and assigned sessions - written for a host on an explicit split shift, so the gap between an afternoon and an evening block was not paid. On a day the pattern called a rest day there was nothing to overlap, so the whole span counted with **nothing deducted**: the Saturday above would have paid 11 h 25.
+- **The register called her Saturday a rest day.** The pattern spoke about somebody it does not govern - a part-timer has no rest days; every day worked is a working day.
+
+### The rule now
+For an hourly person, a day's paid minutes are **clock-out minus clock-in, minus one hour of unpaid break** - the break only when the day ran past five hours, which is the statutory trigger the salaried pattern already uses (Employment Act 1955 s.60A(1)(a)). A three-hour evening session took no break and is not docked one. The Saturday above: 11 h 25 clocked, **10 h 25 paid**, RM 156.25.
+
+The rule lives in `worker/src/hourly.ts`, one small file, so it can be run by its guard without bundling `staff.ts`.
+
+**One consequence worth naming.** The v1.80.0 split-day trim is gone for hourly staff: a host who clocks in at 11:00 for an afternoon block and out at 22:30 after an evening one is paid the span less one hour. The CEO's words were *"based on their working hour"*; if the gap should not be paid, the intersection is in the history at v1.80.0 and is one decision away.
+
+### What you see
+- The register marks a part-timer's punches **part-time · by the clock** instead of *rest day*, and her clock-in toast reads *Counted by the clock* instead of late/early/rest day.
+- The payroll row shows **clocked 11 h 25 · 1 h 00 break** beside the figure, with the rule on hover - a wage an hour a day under the clock explains itself where the eye already is.
+
+### Guards
+**#44** (`tests/hourly-by-the-clock.mjs`) runs the rule on the CEO's Saturday and the edges around it: three hours pays three, exactly five pays five, 5 h 01 pays 4 h 01, eight pays seven. Negative-tested by deducting the break every day and by triggering at ≥ 5 h instead of > 5 h. The v1.80.0 checks in `shift-schedule.mjs` that held the old rule now hold the new one as firmly.
+
+## [1.108.0] - 2026-09-05 - roadmap phase 04c: Watchers and the morning brief
+
+### What was wrong
+Every alert the company had lived inside one module and fired inside one screen. Stock ran low on the Inventory tab, a paid order sat unshipped on Web Orders, a claim aged on Claims, a hotel's MOF certificate lapsed in a spreadsheet nobody re-opened. The person who needed to know was whoever happened to look.
+
+### Watchers
+Six rules over the company's own data, checked every hour on the cron that already runs, delivered through the push and the bell that already exist:
+
+| rule | tells | default |
+|---|---|---|
+| Stock below the line | CEO, COO, sales | 5 units |
+| Paid web order not shipped | CEO, COO, sales | 3 days |
+| Claim undecided | CEO | 7 days |
+| Hotel MOF / Halal certificate expiring | CEO, CCO, sales | 30 days ahead |
+| Asset warranty ending | CEO, HR | 30 days ahead |
+| Leave request waiting too long | CEO, HR | 3 days |
+
+**Pushed once.** Every finding has a stable ref (`stock:17`, `order:1042`). The hourly run diffs against what is already open: a new finding is pushed to its audience and recorded; one still true is left alone; one no longer true is cleared - and is new again, and pushed again, if it comes back. Nobody is told the same thing twice for the same reason; a bell that rings hourly for the same thing is a bell people mute.
+
+**The dates are read as written.** The hotel workbook wrote validity by hand as `25.06.2027`; the reader takes that, `d.m.yyyy`, `dd/mm/yyyy` and ISO, and refuses free text rather than guessing.
+
+**A Watchers card on the Dashboard**, executive tier, under One Desk: every open finding, oldest first, each pressable to the tab where it is fixed - because a push tells you once and a card stays until the thing is done. The rules themselves sit beneath, on or off and the threshold each watches against. The COO and CCO read them; **only the CEO changes one**, and every change is audited.
+
+### The morning brief
+**08:00 MYT, to the CEO, COO and CCO, one notification each:** how many things wait on *them* (their desk, personalised - not a company total), who has clocked in so far, yesterday's web sales, and how many watcher findings are open. One glance before the day starts. It is the only thing here that repeats daily, and it repeats because a morning is a new morning. New cron `0 0 * * *` in `wrangler.toml`, with its branch.
+
+### Guard #43
+`tests/watchers.mjs` (46 checks) **runs the runner** against a fake database and a recording `notify()`: two identical runs push on the first only; a fixed finding is cleared and a returning one pushed again; a watcher switched off is not checked; the CEO's threshold beats the default; the audience is the watcher's roles and not the live host. It runs `isoDate` on the workbook's forms and on free text, and runs the brief for two executives to check each is told their own count. Negative-tested by dropping the seen-check (pushed twice), removing the stale sweep (never cleared), accepting only ISO, and briefing the COO with the CEO's desk.
+
+Migration **0115** adds `watcher_settings` and `watcher_open`.
+
+### Phase 04, complete
+One Desk (v1.106.0), search everything (v1.107.0) and Watchers (v1.108.0) are the three things the roadmap said only this system could do, because only this system holds HR, sales, stock, orders and the hotel list in one database behind one permission matrix. The portal has stopped being twenty-six places you go and started being one place that tells you what needs you.
+
+## [1.107.0] - 2026-09-05 - roadmap phase 04b: search everything
+
+### What was wrong
+Ctrl K searched tabs, staff names and client companies - three of twelve places a thing could be - and loaded the staff and client directories on every open to do it. A phone number, a hotel, an order number, a quotation, a SKU, an asset tag or a task title had no search at all.
+
+### Search everything
+One request, `/staff/search?q=`, over **eight tables in one batch**: hotels and their contacts, staff, clients, quotations and invoices, ELFIA web orders, stock, assets and tasks. Type a phone number and the hotel contact, the client and the order it belongs to come back together; type a name and get the person, their tasks and the documents in their name. The palette asks the server after a 220 ms pause, shows a skeleton while the answer is out, and never shows a stale answer under a newer query.
+
+**Phone numbers are matched by digits.** *017-476 1019*, *0174761019* and *+60 17 476 1019* are one number: the query and every phone column are stripped to digits before comparing, so whichever way it was typed finds whichever way it was stored. A run of fewer than six digits is not treated as a phone, so *2026* in a note does not light up every number with 2026 in it. LIKE wildcards in the query are escaped, so *50%* does not match everything.
+
+**What a person may find is what they may see.** Every source is gated by the permission its own tab is gated by - hotels by `hotels_view`, stock by `inventory`, orders by the web-orders rule, staff and assets by the Staff Details rule, tasks by *your own, or everything for a manager*. A live host searching a number gets the colleague, not the hotel contact, because the Hotels tab is not hers. A search that leaks is worse than no search.
+
+### Why there is no index
+The obvious build is an FTS5 table kept current by triggers. Two things argued against it: wrangler splits migrations on semicolons and a trigger body is full of them - the migration that built the index would be the one most likely to fail on the remote parser guard #36's sibling exists to protect against; and the whole corpus is a few thousand rows. Eight capped LIKE queries in one batch answer in milliseconds and are always current - nothing to rebuild, nothing to drift, nothing to forget when a table gains a column. If the company outgrows that, the index is a later, measured decision.
+
+### Guard #42
+`tests/search-everything.mjs` (127 checks) runs `sourcesFor` for **every role against every source** and holds each to the tab's own permission; runs `phoneDigits` and `likePattern` on real inputs; and checks the wiring - the door, the debounce, the stale-answer guard, the removed preloads, every hit's tab being real, every kind having a group header in both languages. Negative-tested by letting a live host search hotels, dropping the digit strip, and removing the stale-answer check.
+
+## [1.106.0] - 2026-09-05 - roadmap phase 04a: One Desk
+
+### What was wrong
+Approvals lived in five tabs. Leave waited on the Leave tab, claims on Claims, overtime and forgotten punches on Attendance, commission on Commission, and the announcement you had not acknowledged sat on News. The answer to *"what is waiting on me"* was a tour of the product, and the thing that had waited longest was whichever tab you happened not to open.
+
+### One Desk
+The first card on the Dashboard: **everything waiting on the person looking, from every module, oldest first, overdue on top.** Pressing an item goes to the tab where it is decided; the desk itself decides nothing and writes nothing. When there is nothing, it is one quiet line - *"Nothing is waiting on you."* - and takes no room, because a heading over an empty box is a card asking to be ignored.
+
+Seven buckets, each filtered to **what this person may act on, by the same rule the acting route enforces**:
+
+- **Leave** at the stage this role acts at - HR at *applied*, COO/CCO at *HR reviewed*, CEO at *pre-approved*, a COO/CCO applicant skipping straight to the CEO - and never your own.
+- **Claims** at the step this role performs: HR review for staff claims; pre-approval by the COO (staff) or CCO (HR); the CEO's decision once the chain is complete, or straight away for exec and top claims. Never your own, and never one that pays you.
+- **Overtime** with both punches, undecided (CEO/COO). **Punches** forgotten or sent late from offline, awaiting approval (CEO). **Commission** pending (CEO tier).
+- **Tasks**: your open ones, overdue first by deadline - and tasks *you* created whose every scope item is ticked but which nobody has closed: *"review and close"*.
+- **News** from the last thirty days you have not acknowledged.
+
+Each bucket has a comfortable window (leave 3 days, claims 7, overtime 3, punches 2, commission 14, news 7) past which an item is marked overdue and floats to the top with how long it has waited.
+
+### One rule, not two
+The leave approval chain moved out of `staff.ts` into `worker/src/leave-chain.ts`, byte for byte, so the desk and the decide route read the **same** function. Two copies of an approval rule is exactly how a desk ends up showing a request its owner cannot act on. The claim chain is written out in `desk.ts` as `staff.ts` spells it, and guard #41 runs both against the decide routes' own cases.
+
+### Guard #41
+`tests/one-desk.mjs` (43 checks) runs `claimStepFor` and `leaveCanActAt` for real: a fresh staff claim waits on HR and on nobody else; after HR review, on the COO and not yet the CEO; fully chained, on the CEO and off the COO's desk; an HR claim waits on the CCO; an exec claim goes straight to the CEO; nobody sees their own; a pre-approver never sees a claim that pays them. It holds `staff.ts` to importing the leave chain rather than keeping a copy, the desk to refetching on every topic a bucket can move on, every tab it names to being real, and the card to being the first thing on the Dashboard. Negative-tested three ways.
+
 ## [1.105.0] - 2026-09-05 - roadmap phase 03: the outbox
 
 **CEO**, 05-09-2026, on how an offline clock-in should be recorded: *phone's time, marked pending* - and on what may queue: *attendance punches, task updates, leave and claim submissions, hotel call notes*.

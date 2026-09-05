@@ -2,7 +2,9 @@
 // without importing it, so every pass threw a silent ReferenceError and the
 // feature never fired once.
 import { handleStaff, notify, type StaffUser } from "./staff";
+import { handleEnquiries, announceEnquiry } from "./enquiries"; // v1.112.0
 import { replayOrRun, purgeIdempotencyKeys, REPLAY_HEADER } from "./outbox"; // v1.105.0 - the outbox, server side
+import { runWatchers, morningBrief } from "./watchers"; // v1.108.0
 // v1.65.0 — live cards: one counter per topic, bumped where writes land.
 import { bumpVersion, topicOf } from "./shared";
 // v1.35.0: the ELFIA feed's serialiser lives in its own pure module so the
@@ -275,7 +277,7 @@ const SESSION_TTL_HOURS = 12;
    compares the ledger tail against this; the EXPECTED_MIGRATIONS list and
    probe set in /health/detail carry the same standing rule: every new
    migration file adds its line here AND there. */
-const LATEST_MIGRATION = "0114_outbox";
+const LATEST_MIGRATION = "0117_hotel_review_pipeline";
 const OAUTH_STATE_COOKIE = "azone_oauth_state";
 const MAX_WEBHOOK_BODY_BYTES = 64 * 1024;
 
@@ -1810,6 +1812,28 @@ export default {
       // a traffic failure can never mark the orders pull as failed.
       await pollElfiaTraffic(env);
       await bumpVersion(env, "web-traffic");
+      /* v1.108.0 - the WATCHERS ride this tick once an hour, on the :00
+         firing. Hourly is often enough for stock, orders and certificates,
+         and a finding is pushed only the first time it appears, so the hour
+         is about how soon somebody hears, not how often. Never fatal: a
+         watcher that throws is named in the error log and the orders pull
+         above has already succeeded. */
+      if (new Date().getUTCMinutes() < 5) {
+        try {
+          const r = await runWatchers(env);
+          if (r.failed.length) await logError(env, "watchers", r.failed.join("; "));
+        } catch (e) {
+          await logError(env, "watchers", e instanceof Error ? e.message : String(e));
+        }
+      }
+      return;
+    }
+    /* v1.108.0 - 08:00 MYT: the morning brief to the CEO, COO and CCO. Their
+       desk, who is in, yesterday's web sales, open watcher findings - one
+       notification before the day starts. */
+    if (event.cron === "0 0 * * *") {
+      try { await morningBrief(env); }
+      catch (e) { await logError(env, "morning_brief", e instanceof Error ? e.message : String(e)); }
       return;
     }
     if (event.cron === "20 19 * * *") {
@@ -2502,9 +2526,9 @@ async function route(request: Request, env: Env, path: string): Promise<Response
     if (!body || !isNonEmptyString(body.name, 120) || !isNonEmptyString(body.message, 4000)) {
       return errorResponse("invalid_input", "name and message are required", 400);
     }
-    await env.DB.prepare(
+    const ins = await env.DB.prepare(
       `INSERT INTO enquiries (name, company, phone, email, message)
-       VALUES (?1, ?2, ?3, ?4, ?5)`,
+       VALUES (?1, ?2, ?3, ?4, ?5) RETURNING id`,
     )
       .bind(
         (body.name as string).trim(),
@@ -2513,7 +2537,10 @@ async function route(request: Request, env: Env, path: string): Promise<Response
         isNonEmptyString(body.email, 200) ? body.email : null,
         (body.message as string).trim(),
       )
-      .run();
+      .first<{ id: number }>();
+    /* v1.112.0 - a website enquiry was saved and nobody was told. Now the
+       business team is pushed the moment it lands, like an /account one. */
+    await announceEnquiry(env, ins?.id ?? null, (body.name as string).trim(), null, "site");
     return json({ ok: true }, 201);
   }
 
@@ -3826,56 +3853,12 @@ async function route(request: Request, env: Env, path: string): Promise<Response
     return errorResponse("not_found", "Staff route not found", 404);
   }
 
-  if (path === "/api/v1/enquiries" && method === "GET") {
-    if (!user || !can(user.role, "enquiry_manage")) {
-      return errorResponse("forbidden", "Business team access required", 403);
-    }
-    let results: unknown[];
-    try {
-      results = (await env.DB.prepare(
-        `SELECT id, name, company, phone, email, message, category, status, reply, replied_at, assigned_to, created_at
-         FROM enquiries ORDER BY created_at DESC LIMIT 100`,
-      ).all()).results;
-    } catch {
-      results = (await env.DB.prepare(
-        `SELECT id, name, company, phone, email, message, status, assigned_to, created_at
-         FROM enquiries ORDER BY created_at DESC LIMIT 100`,
-      ).all()).results;
-    }
-    return json({ enquiries: results });
-  }
-
-  if (path.match(/^\/api\/v1\/enquiries\/\d+$/) && method === "PATCH") {
-    if (!user || !can(user.role, "enquiry_manage")) {
-      return errorResponse("forbidden", "Business team access required", 403);
-    }
-    const id = path.split("/").pop()!;
-    const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
-    const allowed = ["new", "contacted", "qualified", "closed"];
-    const hasStatus = typeof body?.status === "string" && allowed.includes(body.status);
-    /* v1.4.191 (CEO gap list): IN-APP REPLY — staff answer inside the portal
-       and the customer reads it on /account. Sending a reply auto-marks the
-       enquiry contacted (unless a further status is set in the same call). */
-    const hasReply = typeof body?.reply === "string" && body.reply.trim() !== "";
-    if (!body || (!hasStatus && !hasReply)) {
-      return errorResponse("invalid_input", `Provide reply text and/or status (${allowed.join(", ")})`, 400);
-    }
-    if (hasReply) {
-      try {
-        await env.DB.prepare(
-          `UPDATE enquiries SET reply = ?1, replied_by = ?2, replied_at = datetime('now'),
-             status = COALESCE(?3, CASE WHEN status = 'new' THEN 'contacted' ELSE status END)
-           WHERE id = ?4`,
-        ).bind((body.reply as string).trim().slice(0, 2000), user.id, hasStatus ? body.status : null, id).run();
-      } catch (e) {
-        if (String(e).includes("no such column")) return errorResponse("migration_missing", "Run: npx wrangler d1 migrations apply azoneofficial --remote (0055_enquiry_reply)", 500);
-        throw e;
-      }
-    } else {
-      await env.DB.prepare(`UPDATE enquiries SET status = ?1 WHERE id = ?2`).bind(body.status, id).run();
-    }
-    await audit(env, user.id, "enquiry.update_status", "enquiries", id, { ...(hasStatus ? { status: body.status } : {}), ...(hasReply ? { replied: true } : {}) });
-    return json({ ok: true });
+  /* v1.112.0 - the enquiry routes live in enquiries.ts: the list with who
+     took it and who answered, and reply / status / take on one enquiry. */
+  if (path === "/api/v1/enquiries" && method === "GET" || /^\/api\/v1\/enquiries\/\d+$/.test(path) && method === "PATCH") {
+    const body = method === "PATCH" ? ((await request.json().catch(() => null)) as Record<string, unknown> | null) : null;
+    const r = await handleEnquiries(env, path.slice("/api/v1".length), method, body, user ? { id: user.id, role: user.role, name: user.name } : null, new URL(request.url).searchParams);
+    if (r) return r;
   }
 
   /* v1.4.197 (CEO, from his LIVE Center screenshots: "I want to bring this
@@ -4409,6 +4392,9 @@ async function route(request: Request, env: Env, path: string): Promise<Response
       ["0112 (the hotel list, seeded)", `SELECT person_name, phone FROM hotel_contacts LIMIT 1`],
       ["0113 (who reports to whom)", `SELECT reports_to FROM users LIMIT 1`],
       ["0114 (the outbox)", `SELECT key FROM idempotency_keys LIMIT 1`],
+      ["0115 (watchers)", `SELECT ref FROM watcher_open LIMIT 1`],
+      ["0116 (the hotel pipeline)", `SELECT stage, customer_id FROM hotels LIMIT 1`],
+      ["0117 (the pipeline re-spoken for review outreach)", `SELECT review_url FROM hotels LIMIT 1`],
     ];
     for (const [label, probe] of probes) {
       try { await env.DB.prepare(probe).first(); } catch (e) {
@@ -4542,6 +4528,9 @@ async function route(request: Request, env: Env, path: string): Promise<Response
       "0112_hotels_seed",
       "0113_reports_to",
       "0114_outbox",
+      "0115_watchers",
+      "0116_hotel_pipeline",
+      "0117_hotel_review_pipeline",
     ];
     let migrations_all: { name: string; applied: boolean }[] | null = null;
     try {
@@ -4693,20 +4682,9 @@ async function route(request: Request, env: Env, path: string): Promise<Response
       ).first<{ id: number }>();
       enqId = r1?.id ?? null;
     }
-    try {
-      const catLabel: Record<string, string> = {
-        general: "general", package_pricing: "package & pricing", live_commerce: "live commerce services",
-        order_delivery: "order & delivery", collaboration: "collaboration",
-      };
-      const { results: staffRows } = await env.DB.prepare(
-        `SELECT id FROM users WHERE is_active = 1 AND role IN ('sales_marketing', 'marketing', 'ceo')`,
-      ).all<{ id: number }>();
-      for (const st of staffRows) {
-        await env.DB.prepare(
-          `INSERT INTO notifications (user_id, kind, message, ref) VALUES (?1, 'enquiry', ?2, ?3)`,
-        ).bind(st.id, `New customer enquiry (${catLabel[category]}): ${user.name}`, `enquiry:${enqId ?? ""}`).run();
-      }
-    } catch { /* notifications are best-effort — the enquiry itself is saved */ }
+    /* v1.112.0 - one announcer for both doors: everyone with enquiry_manage,
+       pushed to the phone, landing on the Enquiries tab, live topic bumped. */
+    await announceEnquiry(env, enqId, user.name, category, "account");
     await audit(env, user.id, "account.enquiry", "enquiries", enqId ? String(enqId) : undefined, { category });
     return json({ ok: true }, 201);
   }
