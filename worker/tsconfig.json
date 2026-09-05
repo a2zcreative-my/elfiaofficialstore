@@ -9,5 +9,11 @@
     "noEmit": true,
     "types": ["@cloudflare/workers-types"]
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts"],
+  "//": "v1.46.2 - Windows names a file it cannot overwrite with a -1 suffix, and a copy of ANOTHER project's worker landed here as src/index-1.ts and failed the compile gate on imports that only resolve in that project. A duplicate is never a source file, so the duplicate NAMES are excluded and a stray copy can no longer stop a deploy. Listed one by one because TypeScript globs understand * and ? but not [0-9], and ?  would also swallow a real file called something-v2.ts. Delete such files when you see them - they are always a copy of something that lives elsewhere.",
+  "exclude": [
+    "src/**/*-1.ts", "src/**/*-2.ts", "src/**/*-3.ts", "src/**/*-4.ts", "src/**/*-5.ts",
+    "src/**/*-6.ts", "src/**/*-7.ts", "src/**/*-8.ts", "src/**/*-9.ts",
+    "src/**/*copy*.ts", "src/**/*Copy*.ts"
+  ]
 }

@@ -1,3 +1,80 @@
+# ELFIA OFFICIAL STORE — v1.46.2 (05-09-2026) — A STRAY COPY STOPPED THE DEPLOY
+
+The store half of DEPLOY.bat failed at the compile gate:
+
+```
+src/index-1.ts(4,53): error TS2307: Cannot find module './staff'
+src/index-1.ts(6,38): error TS2307: Cannot find module './shared'
+...
+```
+
+**Nothing was wrong with the store.** `src/index-1.ts` was a 274 KB copy of the
+A2Z PORTAL's worker entry point, written into this folder by accident while the
+desktop bridge was reconnecting; Windows would not overwrite the store's own
+`src/index.ts`, so it kept the copy beside it under a `-1` name. The gate read
+it and failed on imports that only resolve in the other project.
+
+It would have failed the NEXT gate too, which is worth writing down: `no-secrets`
+found a password-hash template inside that copy and refused the build. So
+excluding it from the typechecker alone would have moved the failure one step
+along rather than fixing it.
+
+- `src/index-1.ts` is now an empty, commented stub explaining what it was. It is
+  safe to delete; nothing imports it and wrangler never bundled it.
+- `worker/tsconfig.json` excludes duplicate names — `*-1.ts` through `*-9.ts`
+  and `*copy*.ts`. Listed one by one because TypeScript globs understand `*` and
+  `?` but not `[0-9]`, and `*-?.ts` would also swallow a real file named
+  something like `feature-v2.ts`.
+
+Verified by putting the real 274 KB copy back in place and running the gates:
+`no-secrets`, the compile gate and `payment-integrity` all pass with it there.
+
+---
+
+# ELFIA OFFICIAL STORE — v1.46.1 (05-09-2026) — CHECKED AGAINST BAYARCASH'S OWN DOCS
+
+The CEO sent the reference: `api.webimpian.support/bayarcash`. v1.46.0 was
+built from the same pages; this pass read the ones I had not, and fixed what
+they disagreed with.
+
+## Confirmed as built
+- `POST /v3/payment-intents` returns exactly `{type, id: "pi_…", payer_name,
+  payer_email, order_number, amount, url}` — the shop reads `id` and `url`,
+  which is what it does.
+- Required headers are `Content-Type: application/json` and
+  `Authorization: Bearer <PAT>`, with `Idempotency-Key` optional — all three
+  are what the shop sends.
+- The payment-intent checksum covers `amount | order_number | payer_email |
+  payer_name | payment_channel` (keys sorted, values joined with `|`,
+  HMAC-SHA256 with the API Secret Key) — as implemented.
+- The v3 callback checksum covers the nine transaction fields, excluding
+  `payer_name`, `payer_email` and `datetime` — as implemented.
+
+## Corrected
+- **`GET /v3/transactions` has no `limit` parameter.** It pages with `page`
+  (15 per page) and filters by `order_number`, `status`, `payment_channel`,
+  `exchange_reference_number`, `payer_email`. The admin credential check now
+  asks for `?page=1`. The old `?limit=1` was ignored rather than harmful, but
+  a call that quietly does something other than what it says is a call nobody
+  can reason about later.
+- **The callback now accepts the older v2 checksum as a fallback.** v3 signs
+  nine fields; the v2 shape signs thirteen (the same plus `record_type`,
+  `payer_name`, `payer_email`, `datetime`). Both are HMAC-SHA256 with OUR API
+  Secret Key, so accepting either is still proof Bayarcash sent it — and a
+  merchant account still emitting the v2 shape does not spend a day answering
+  403s at the door. `payment-integrity` now requires BOTH comparisons to be
+  constant time and fails on any `===` against the given checksum.
+
+## Still not documented by Bayarcash
+Which query parameters it appends to `return_url` on the v3 GET redirect. The
+docs say only "GET {return_url}". The shop therefore marks its own return with
+`back=1` and treats anything Bayarcash adds (`status`, `transaction_id`) as a
+CLAIM; what settles an order is the authenticated re-read of that payment
+intent. That was already the design, and it is now written down beside the
+line that builds the URL.
+
+---
+
 # ELFIA OFFICIAL STORE — v1.46.0 (05-09-2026) — BAYARCASH REPLACES BILLPLZ
 
 ## What the CEO asked for

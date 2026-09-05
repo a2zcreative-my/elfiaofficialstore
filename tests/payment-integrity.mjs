@@ -75,7 +75,15 @@ const cb = index.slice(start, start + 6000);
   if (!/for \(const k of \["transaction_id", "exchange_reference_number", "exchange_transaction_id", "order_number", "currency", "amount", "payer_bank_name", "status", "status_description"\]\)/.test(gw)) {
     fail("the callback checksum is not computed over Bayarcash's nine v3 fields — every genuine callback would be refused, or a forged one accepted");
   } else ok("the checksum covers exactly the nine fields Bayarcash signs");
-  if (!/constantTimeEqual\(expected\.toLowerCase\(\), given\.toLowerCase\(\)\)/.test(gw)) fail("the checksum is not compared in constant time");
+  /* v1.46.1 — the v3 checksum is compared first and the older v2 shape is
+     accepted as a fallback; BOTH comparisons must be constant time, and
+     neither may be a plain ===. */
+  {
+    const cmps = [...gw.matchAll(/constantTimeEqual\([a-z0-9]+\.toLowerCase\(\), given\.toLowerCase\(\)\)/gi)];
+    if (cmps.length < 2) fail("a checksum comparison is not constant time (both the v3 and the v2 shape must use constantTimeEqual)");
+    else if (/===\s*given|given\s*===/.test(gw)) fail("a checksum is compared with === somewhere — that leaks its bytes by timing");
+    else ok("every checksum comparison is constant time");
+  }
 }
 
 /* ---- P3: the money must cover the order ---- */

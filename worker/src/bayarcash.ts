@@ -162,6 +162,11 @@ export async function bayarcashCreateIntent(
     const payload: Record<string, unknown> = {
       ...signed,
       portal_key: (env.BAYARCASH_PORTAL ?? "").trim(),
+      /* v1.46.1 — Bayarcash documents the return as "GET {return_url}" and
+         does NOT publish which fields it appends, so the shop marks its own
+         return with back=1 and treats anything Bayarcash adds (status,
+         transaction_id) as a CLAIM only. What settles the order is the
+         authenticated re-read of this intent, either way. */
       return_url: `${storeUrl(env)}/order?t=${o.token}&back=1`,
       callback_url: `${storeUrl(env)}/api/v1/payments/bayarcash/callback`,
       checksum: await checksumOf((env.BAYARCASH_SECRET ?? "").trim(), signed),
@@ -224,7 +229,10 @@ export async function bayarcashCheck(env: Env): Promise<{ ok: boolean; status: n
     return { ok: false, status: 0, sandbox, message: "BAYARCASH_PAT and BAYARCASH_PORTAL are not both set - run `wrangler secret put` for each, then redeploy." };
   }
   try {
-    const r = await fetch(`${base(env)}/transactions?limit=1`, { headers: headers(env) });
+    /* v1.46.1 — GET /v3/transactions pages with `page` (15 per page); it has
+       no `limit`. Asking for page 1 is the cheapest authenticated read that
+       proves the token, and it creates nothing. */
+    const r = await fetch(`${base(env)}/transactions?page=1`, { headers: headers(env) });
     if (r.ok) {
       return {
         ok: true, status: r.status, sandbox,
@@ -323,12 +331,24 @@ export async function bayarcashCallbackOk(env: Env, fields: Record<string, strin
   if (!secret) return "unconfigured";
   const given = (fields.checksum ?? "").trim();
   if (!/^[a-f0-9]{64}$/i.test(given)) return false;
+  /* The v3 callback signs NINE fields. Bayarcash's older (v2) callback signs
+     thirteen - the same list plus record_type, payer_name, payer_email and
+     datetime. We compute v3 first and accept v2 as a fallback: both are
+     HMAC-SHA256 with OUR API Secret Key, so either one matching is still
+     proof that Bayarcash sent it, and a merchant account still emitting the
+     v2 shape does not spend a day answering 403s. */
   const signed: Record<string, string> = {};
   for (const k of ["transaction_id", "exchange_reference_number", "exchange_transaction_id", "order_number", "currency", "amount", "payer_bank_name", "status", "status_description"]) {
     signed[k] = fields[k] ?? "";
   }
-  const expected = await checksumOf(secret, signed);
-  return constantTimeEqual(expected.toLowerCase(), given.toLowerCase());
+  const v3 = await checksumOf(secret, signed);
+  if (constantTimeEqual(v3.toLowerCase(), given.toLowerCase())) return true;
+  const legacy: Record<string, string> = {};
+  for (const k of ["record_type", "transaction_id", "exchange_reference_number", "exchange_transaction_id", "order_number", "currency", "amount", "payer_name", "payer_email", "payer_bank_name", "status", "status_description", "datetime"]) {
+    legacy[k] = fields[k] ?? "";
+  }
+  const v2 = await checksumOf(secret, legacy);
+  return constantTimeEqual(v2.toLowerCase(), given.toLowerCase());
 }
 
 /** Bayarcash posts JSON to the callback URL; older integrations saw form
