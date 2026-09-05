@@ -4,12 +4,14 @@
  *
  * Every real credential in this system lives in a Wrangler secret, set from
  * the CEO's own machine and never written down here:
- *   ADMIN_KEY  BRIDGE_KEY  BILLPLZ_SECRET  BILLPLZ_COLLECTION  BILLPLZ_XSIGN
+ *   ADMIN_KEY  BRIDGE_KEY  BAYARCASH_PAT  BAYARCASH_PORTAL  BAYARCASH_SECRET
  *
  * This file makes that a rule the build enforces rather than a habit someone
  * has to remember. It fails on:
  *   1. a secret-looking NAME assigned a literal value in any tracked file;
- *   2. the SHAPES the real keys take — a Billplz API/collection key is a
+ *   2. the SHAPES the real keys take — a Bayarcash Portal Key is 32 hex, its
+ *      API Secret Key 64 hex, a Personal Access Token "<digits>|<40 chars>";
+ *      the old Billplz shapes stay banned too. A Billplz API/collection key is a
  *      UUID, an X-Signature key is 128 hex characters;
  *   3. a [vars] entry in wrangler.toml whose name ends in _KEY or _SECRET,
  *      because [vars] is committed and readable by anyone with the repo.
@@ -67,9 +69,25 @@ const RULES = [
     value: (m) => m[2],
   },
   {
-    name: "an admin/bridge/billplz key assigned a literal value",
-    re: /\b(ADMIN_KEY|BRIDGE_KEY|BILLPLZ_SECRET|BILLPLZ_COLLECTION|BILLPLZ_XSIGN)\s*[:=]\s*["'`]([^"'`\n]{4,})["'`]/g,
+    name: "an admin/bridge/gateway key assigned a literal value",
+    re: /\b(ADMIN_KEY|BRIDGE_KEY|BAYARCASH_PAT|BAYARCASH_PORTAL|BAYARCASH_SECRET|BILLPLZ_SECRET|BILLPLZ_COLLECTION|BILLPLZ_XSIGN)\s*[:=]\s*["'`]([^"'`\n]{4,})["'`]/g,
     value: (m) => m[2],
+  },
+  {
+    /* v1.46.0 — a Bayarcash Personal Access Token: an id, a pipe, a long
+       random string (Laravel Sanctum's shape). Nothing else in this repo
+       looks like that. */
+    name: "a Bayarcash Personal Access Token (digits|random)",
+    re: /\b\d{1,6}\|[A-Za-z0-9]{32,}\b/g,
+    value: (m) => m[0],
+  },
+  {
+    /* A 32-hex string assigned to anything — the Portal Key's shape. Bare
+       32-hex elsewhere (an order token, a hash in a test) is legitimate, so
+       this one requires an assignment. */
+    name: "a 32-character hex string assigned as a value (a Portal Key looks like this)",
+    re: /[:=]\s*["'`]([a-f0-9]{32})["'`]/gi,
+    value: (m) => m[1],
   },
   {
     name: "a 64+ character hex string (an X-Signature key looks like this)",

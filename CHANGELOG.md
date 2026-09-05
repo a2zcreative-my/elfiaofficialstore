@@ -1,3 +1,72 @@
+# ELFIA OFFICIAL STORE — v1.46.0 (05-09-2026) — BAYARCASH REPLACES BILLPLZ
+
+## What the CEO asked for
+
+*"I want to use BayarCash for my payment gateway, you have to remove Billplz
+inside ELFIA."* (A Portal Key was pasted with the request. It is not in this
+repo and never will be — see "Keys" below.)
+
+## What changed
+
+**`worker/src/bayarcash.ts` replaces `worker/src/billplz.ts`** and keeps its
+shape, so every route in `index.ts` kept its reasoning and changed its names:
+
+| Billplz | Bayarcash |
+|---|---|
+| POST /api/v3/bills → bill id + URL | POST /v3/payment-intents → intent id (`pi_…`) + URL |
+| GET /api/v3/bills/{id} (paid, paid_amount, collection_id, reference_1) | GET /v3/payment-intents/{id} (status "paid", amount, order_number) |
+| X-Signature over `key+value` pairs | HMAC-SHA256 checksum over sorted VALUES, joined with `\|` |
+| amount in **sen** | amount in **ringgit with two decimals** (`"39.00"`) — converted in one function, `ringgit()` |
+| `BILLPLZ_SECRET`, `BILLPLZ_COLLECTION`, `BILLPLZ_XSIGN` | `BAYARCASH_PAT`, `BAYARCASH_PORTAL`, `BAYARCASH_SECRET` |
+| `/payments/billplz/callback` (GET or POST) | `/payments/bayarcash/callback` (POST only) |
+| `/admin/billplz-test` | `/admin/gateway-test` |
+
+**The three locks are the same three.** (1) The callback's checksum must
+verify with the API Secret Key — required, not preferred: `bayarcashReady()`
+includes the secret, so a shop that could not verify a callback never raises a
+payment. (2) The callback's `order_number` only LOCATES the order row; what
+settles it is the payment intent the shop itself created for that row
+(`orders.bill_id`, which now holds the intent id), re-read over our token, and
+that record's own `order_number` and `amount`. (3) Paid, in full, to the sen.
+The customer's own `/verify-payment` route asks the same three questions.
+
+**Return journey.** The return URL we hand Bayarcash carries `back=1`;
+Bayarcash appends its fields (`transaction_id`, `status` …). The order page
+treats any of those as "returned", reads `status === "3"` as the gateway's own
+claim (never as proof), and strips everything but `t=` from the address bar.
+
+**Deploy.** `DEPLOY.bat gateway` asks for the three Bayarcash values one at a
+time (nothing is written to a file) and deletes the three Billplz secrets from
+the worker. The normal `DEPLOY.bat` now checks which gateway's secrets the
+worker holds at step 3b and says plainly if Bayarcash is incomplete or Billplz
+remnants remain. `wrangler.toml` and `README.md` describe the new setup;
+`BAYARCASH_SANDBOX = "1"` points the shop at the sandbox account.
+
+## Keys
+
+The `no-secrets` guard gained two shapes: a Personal Access Token
+(`<digits>|<random>`) and a 32-hex value assigned as a literal (a Portal Key).
+Typing the pasted key into any file fails the build — verified by doing it.
+Any key that has been in a chat or a screenshot should be regenerated in the
+Bayarcash console before it is entered with `DEPLOY.bat gateway`.
+
+## Verified
+
+Worker and changed pages typecheck. `payment-integrity` rewritten for the new
+names (18 checks, each negative-tested: a callback reading `status` from the
+request, `bayarcashReady()` without the secret, and `ringgit()` sending sen
+all fail it). `no-secrets`, `in-app-browser` pass. The portal's ELFIA tab
+card reads "Online payment (Bayarcash FPX)".
+
+## Still to do on the Bayarcash side
+
+Run `DEPLOY.bat gateway` with the three values, then `DEPLOY.bat`, then the
+admin test. The first real payment (sandbox first, if you can) is the proof of
+the Portal Key and the checksum; if Bayarcash refuses it, the reason lands in
+the ELFIA tab's payment check in their own words.
+
+---
+
 # ELFIA OFFICIAL STORE — v1.45.0 (05-09-2026) — THE SHOP FILLS THE SCREEN
 
 ## What the CEO asked for

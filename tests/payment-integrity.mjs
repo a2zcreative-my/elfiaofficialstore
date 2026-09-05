@@ -22,62 +22,85 @@ const fail = (msg) => { console.log(`FAIL ${msg}`); failed++; };
 const ok = (msg) => console.log(`ok   ${msg}`);
 
 const index = readFileSync("worker/src/index.ts", "utf8");
-const billplz = readFileSync("worker/src/billplz.ts", "utf8");
+const gw = readFileSync("worker/src/bayarcash.ts", "utf8");
+
+/* v1.46.0 — Bayarcash replaced Billplz. The three locks are the same three;
+   the names changed. The hole P1 found was "the paid fact came from the
+   gateway, the order it applied to came from the caller". Under Bayarcash the
+   callback carries an order_number and the shop is ALLOWED to read it - but
+   only to find the row. What settles the row is the payment intent the shop
+   itself created for it, re-read over our token, and that record's own
+   order_number and amount. These checks hold that shape. */
 
 /* Isolate the callback handler — every rule below is about THIS block. */
-const start = index.indexOf('if (path === "/payments/billplz/callback"');
-if (start < 0) { console.log("FAIL the Billplz callback handler is gone from index.ts"); process.exit(1); }
-const cb = index.slice(start, start + 5000);
+const start = index.indexOf('if (path === "/payments/bayarcash/callback"');
+if (start < 0) { console.log("FAIL the Bayarcash callback handler is gone from index.ts"); process.exit(1); }
+const cb = index.slice(start, start + 6000);
 
-/* ---- P1: the order is chosen by Billplz, never by the caller ---- */
+/* ---- P1: the order is settled by Bayarcash's record, never by the caller ---- */
 {
-  /* The precise shape of the hole: reading reference_1 out of the request's
-     own parameters. `bill.reference_1` (from the authenticated read) is fine
-     and is what the fixed code uses. */
-  if (/params\.get\((["'`])billplz\[reference_1\]\1\)|params\.get\((["'`])reference_1\2\)/.test(cb)) {
-    fail("the callback reads reference_1 from the CALLER's parameters again — a paid RM 1 bill could be replayed against any order (AUDIT P1)");
-  } else ok("the callback never reads reference_1 from the request");
+  if (!/const intent = await bayarcashFetchIntent\(env, o\.bill_id\)/.test(cb)) {
+    fail("the callback no longer re-reads the ORDER'S OWN payment intent from Bayarcash — nothing would authenticate the payment (AUDIT P1)");
+  } else ok("the callback re-reads the order's own intent over the authenticated API");
 
-  if (!/const bill = await billplzFetchBill\(env, billId\)/.test(cb)) {
-    fail("the callback no longer re-reads the bill from Billplz — nothing would authenticate the payment (AUDIT P1)");
-  } else ok("the callback re-reads the bill over the authenticated API");
+  if (/fields\.status\s*===|Number\(fields\.status\)|fields\.amount/.test(cb.replace(/\/\*[\s\S]*?\*\//g, ""))) {
+    fail("the callback reads status or amount from the CALLER's fields — a forged callback could settle an order (AUDIT P1)");
+  } else ok("the callback never takes paid or amount from the request");
 
-  if (!/bill\.reference_1/.test(cb)) {
-    fail("the callback no longer binds the order via the AUTHENTICATED bill's reference_1 (AUDIT P1)");
-  } else ok("the order is bound by Billplz's own record of the bill");
+  if (!/intent\.order_number !== null && intent\.order_number !== o\.order_number/.test(cb)) {
+    fail("the callback no longer checks the intent's own order_number against the row it found (AUDIT P1)");
+  } else ok("the order is bound by Bayarcash's own record of the intent");
+
+  if (!/if \(!intent\.paid\) return json/.test(cb)) {
+    fail("the callback no longer requires the AUTHENTICATED intent to say paid (AUDIT P1)");
+  } else ok("only Bayarcash's own 'paid' settles the order");
 }
 
-/* ---- P2: the signature is mandatory ---- */
+/* ---- P2: the checksum is mandatory ---- */
 {
   if (!/if \(sig !== true\)/.test(cb)) {
-    fail("the callback accepts a signature result other than true — an unsigned or unconfigured callback would be processed (AUDIT P2)");
-  } else ok("only a verified signature proceeds (unconfigured is refused)");
+    fail("the callback accepts a checksum result other than true — an unsigned or unconfigured callback would be processed (AUDIT P2)");
+  } else ok("only a verified checksum proceeds (unconfigured is refused)");
 
-  if (!/export function billplzReady\(/.test(billplz)) {
-    fail("billplzReady() is gone — the store could advertise online payment without BILLPLZ_XSIGN (AUDIT P2)");
+  if (!/export function bayarcashReady\(/.test(gw)) {
+    fail("bayarcashReady() is gone — the store could advertise online payment without BAYARCASH_SECRET (AUDIT P2)");
   } else {
-    if (!/billplzConfigured\(env\) && Boolean\(env\.BILLPLZ_XSIGN\)/.test(billplz)) {
-      fail("billplzReady() no longer requires BILLPLZ_XSIGN (AUDIT P2)");
-    } else ok("online payment is only offered when the signature key exists");
+    if (!/return bayarcashConfigured\(env\) && bayarcashSignatureConfigured\(env\);/.test(gw)) {
+      fail("bayarcashReady() no longer requires the API Secret Key (AUDIT P2)");
+    } else ok("online payment is only offered when the secret that verifies callbacks exists");
     /* The two doors that must use READY, not merely configured. */
-    if (!/gateway: billplzReady\(env\)/.test(index)) fail("/store-config advertises the gateway without requiring XSIGN (AUDIT P2)");
-    if (!/if \(!billplzReady\(env\)\) return err\("not_configured"/.test(index)) fail("the /pay route raises bills without requiring XSIGN (AUDIT P2)");
+    if (!/gateway: bayarcashReady\(env\)/.test(index)) fail("/store-config advertises the gateway without requiring the secret (AUDIT P2)");
+    if (!/if \(!bayarcashReady\(env\)\) return err\("not_configured"/.test(index)) fail("the /pay route raises intents without requiring the secret (AUDIT P2)");
   }
+  if (!/for \(const k of \["transaction_id", "exchange_reference_number", "exchange_transaction_id", "order_number", "currency", "amount", "payer_bank_name", "status", "status_description"\]\)/.test(gw)) {
+    fail("the callback checksum is not computed over Bayarcash's nine v3 fields — every genuine callback would be refused, or a forged one accepted");
+  } else ok("the checksum covers exactly the nine fields Bayarcash signs");
+  if (!/constantTimeEqual\(expected\.toLowerCase\(\), given\.toLowerCase\(\)\)/.test(gw)) fail("the checksum is not compared in constant time");
 }
 
 /* ---- P3: the money must cover the order ---- */
 {
-  if (!/bill\.paid_amount === null \|\| bill\.paid_amount < o\.total_cents/.test(cb)) {
+  if (!/intent\.amount_cents === null \|\| intent\.amount_cents < o\.total_cents/.test(cb)) {
     fail("the callback no longer compares the amount paid against the order total — a RM 1 payment could settle a RM 100 order (AUDIT P3)");
   } else ok("a payment smaller than the order total never marks it paid");
 
-  if (!/export async function billplzVerifyPaid\(env: Env, billId: string, expectCents: number\)/.test(billplz)) {
-    fail("billplzVerifyPaid no longer REQUIRES an expected amount — the check could be skipped by a caller (AUDIT P3)");
-  } else ok("billplzVerifyPaid cannot be called without an expected amount");
+  if (!/export async function bayarcashPaidFor\(\s*env: Env, intentId: string, expectCents: number, orderNumber: string,/.test(gw)) {
+    fail("bayarcashPaidFor no longer REQUIRES an expected amount and order number — the check could be skipped by a caller (AUDIT P3)");
+  } else ok("bayarcashPaidFor cannot be called without an expected amount and order number");
 
-  if (!/billplzCollectionOk/.test(cb)) {
-    fail("the callback no longer checks the bill belongs to this shop's collection (AUDIT P3)");
-  } else ok("a bill from another Billplz collection is refused");
+  if (!/const settledNow = await bayarcashPaidFor\(env, o\.bill_id, o\.total_cents, o\.order_number\)/.test(index)) {
+    fail("the verify-payment route no longer asks the full question (paid, amount, order number) (AUDIT P3)");
+  } else ok("the customer's own verify route asks the same three questions");
+
+  /* The unit boundary: the database is in sen, Bayarcash is in ringgit. The
+     conversion must live in one place, and the amount sent must be the
+     amount signed. */
+  if (!/export const ringgit = \(cents: number\): string => \(cents \/ 100\)\.toFixed\(2\);/.test(gw)) {
+    fail("the sen -> ringgit conversion is gone or moved — a RM 39.00 order sent as 3900 would be a RM 3,900 charge");
+  } else ok("sen becomes ringgit in exactly one place");
+  if (!/const amount = ringgit\(o\.total_cents\);/.test(gw) || !/amount,\s*payer_name,\s*payer_email,\s*\};/.test(gw)) {
+    fail("the amount sent to Bayarcash is not the one that was signed");
+  } else ok("the amount signed is the amount sent");
 }
 
 /* ---- the refusals are visible ---- */
@@ -139,4 +162,4 @@ const cb = index.slice(start, start + 5000);
 }
 
 if (failed) { console.error(`\n${failed} payment-integrity check(s) failed.`); process.exit(1); }
-console.log("\npayment-integrity: money can only be credited by Billplz, to the right order, for the right amount.");
+console.log("\npayment-integrity: money can only be credited by Bayarcash, to the right order, for the right amount.");

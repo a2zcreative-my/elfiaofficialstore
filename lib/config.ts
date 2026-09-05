@@ -195,7 +195,7 @@ export interface StoreConfig {
   whatsapp_digits: string;
   shipping_cents: number;
   free_above_cents: number;
-  gateway: boolean; // Stage B: true once the Billplz secrets are configured
+  gateway: boolean; // Stage B: true once the Bayarcash secrets are configured
   /** v1.0.0 — hours an unpaid order holds its stock before it is released. */
   hold_hours?: number;
 }

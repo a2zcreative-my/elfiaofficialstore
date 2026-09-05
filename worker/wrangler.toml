@@ -28,7 +28,7 @@ routes = [
 # ---- store facts (public, safe in this file) ----
 # EDIT THESE before the first deploy:
 [vars]
-# The shop's public origin. Billplz callback/redirect URLs and the allowed
+# The shop's public origin. Gateway callback/return URLs and the allowed
 # CORS origins are built from this — no domain is written into the source.
 STORE_URL = "https://elfiaofficialstore.my"
 # "No joy buyer": how long an unpaid order holds its stock before the cron
@@ -110,13 +110,13 @@ bucket_name = "elfia-media"
 
 # Secrets (never in this file):
 #   wrangler secret put ADMIN_KEY           <- the /admin passcode
-# Stage B (online FPX payment) — when the Billplz account is approved:
-#   wrangler secret put BILLPLZ_SECRET      <- API Secret Key (Billplz dashboard -> Settings)
-#   wrangler secret put BILLPLZ_COLLECTION  <- the Collection ID you create there
-#   wrangler secret put BILLPLZ_XSIGN       <- the X Signature Key (same page)
-#      Without XSIGN the store still refuses to trust a callback (every bill is
-#      re-queried against Billplz), but WITH it a forged callback is thrown out
-#      before it costs a network call. Set it.
-# To TEST against the Billplz sandbox first (separate account at
-# billplz-sandbox.com), add under [vars]:  BILLPLZ_SANDBOX = "1"
-# and use the sandbox account's secret/collection. Remove it for production.
+# Stage B (online FPX payment) — Bayarcash (v1.46.0; replaced Billplz).
+# Set all three with  DEPLOY.bat gateway  (or one at a time):
+#   wrangler secret put BAYARCASH_PAT      <- Personal Access Token (Bayarcash console -> profile)
+#   wrangler secret put BAYARCASH_PORTAL   <- Portal Key of the portal that takes the money
+#   wrangler secret put BAYARCASH_SECRET   <- API Secret Key (signs what we send, verifies callbacks)
+#      Without the secret no payment is ever raised: a callback the shop
+#      cannot verify is one it must not act on, so the card is not offered.
+# To TEST against the Bayarcash sandbox first (separate account at
+# console.bayarcash-sandbox.com), add under [vars]:  BAYARCASH_SANDBOX = "1"
+# and use the sandbox account's token/portal/secret. Remove it for production.

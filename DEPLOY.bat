@@ -3,13 +3,19 @@ setlocal EnableExtensions EnableDelayedExpansion
 title ELFIA OFFICIAL STORE - deploy
 REM ============================================================
 REM  ELFIA OFFICIAL STORE - full deploy (site + API + database)
-REM  Version 1.4.0
+REM  Version 1.46.0
 REM
 REM  This script NEVER closes without telling you why. Everything it
 REM  prints is also written to deploy-log.txt next to this file.
 REM
 REM  Just double-click it. It checks everything first and stops with a
 REM  plain-English message if something is not ready.
+REM
+REM  DEPLOY.bat gateway   - set the three Bayarcash secrets (each asks you
+REM                         to paste; nothing is written to a file) and
+REM                         remove the old Billplz secrets from the worker.
+REM                         Run this once when switching gateways, then run
+REM                         DEPLOY.bat as usual.
 REM ============================================================
 
 set "LOG=%~dp0deploy-log.txt"
@@ -21,6 +27,7 @@ echo.
 echo   ELFIA OFFICIAL STORE - deploy
 echo   ==============================
 echo.
+if /I "%~1"=="gateway" goto :gateway
 
 REM ---------------------------------------------------------------- checks
 set "STEP=checking your computer"
@@ -50,6 +57,24 @@ if errorlevel 1 (
 )
 popd
 call :say "      logged in"
+
+REM v1.46.0 - Bayarcash replaced Billplz. Say plainly which gateway the worker
+REM is holding keys for, before anything is deployed against it.
+set "STEP=checking the payment gateway secrets"
+call :say "[3b]  Checking the payment gateway secrets"
+pushd worker
+call npx wrangler secret list > "%TEMP%\elfia-secrets.txt" 2>>"%LOG%"
+popd
+set "GW_MISSING="
+findstr /C:"BAYARCASH_PAT" "%TEMP%\elfia-secrets.txt" >nul || set "GW_MISSING=!GW_MISSING! BAYARCASH_PAT"
+findstr /C:"BAYARCASH_PORTAL" "%TEMP%\elfia-secrets.txt" >nul || set "GW_MISSING=!GW_MISSING! BAYARCASH_PORTAL"
+findstr /C:"BAYARCASH_SECRET" "%TEMP%\elfia-secrets.txt" >nul || set "GW_MISSING=!GW_MISSING! BAYARCASH_SECRET"
+if defined GW_MISSING (
+  call :warn "Bayarcash is not fully set up - missing:!GW_MISSING!.  Online payment will stay OFF - bank transfer only - until you run:  DEPLOY.bat gateway"
+) else (
+  call :say "      Bayarcash: all three secrets are set"
+)
+findstr /C:"BILLPLZ_" "%TEMP%\elfia-secrets.txt" >nul && call :warn "Old Billplz secrets are still on the worker. They are no longer read by anything; remove them with:  DEPLOY.bat gateway"
 
 REM ------------------------------------------------------------- install
 set "STEP=installing site dependencies"
@@ -118,22 +143,20 @@ echo     "migrations_current"          the database has every table (if
 echo                                   false, the health line names the fix)
 echo     "admin_key_configured"        you can sign in to /admin
 echo     "bank_line_configured"        customers see your real account
-echo     "gateway_configured"          online payment is ON and SAFE. v1.4.0:
-echo                                   this needs BILLPLZ_XSIGN as well as the
-echo                                   two Billplz keys. Without the signature
-echo                                   key a callback cannot be authenticated,
-echo                                   so the shop takes bank transfer only
-echo                                   rather than payments it cannot verify.
-echo     "gateway_signature_configured" callbacks are signature-checked
+echo     "gateway_configured"          online payment is ON and SAFE. This
+echo                                   needs all three Bayarcash secrets. Without
+echo                                   the API Secret Key a callback cannot be
+echo                                   authenticated, so the shop takes bank
+echo                                   transfer only rather than payments it
+echo                                   cannot verify.
+echo     "gateway_signature_configured" callbacks are checksum-checked
 echo     "bridge_pull_configured"      counts come from the portal
 echo     "bridge_push_configured"      your sales reach the portal
 echo.
 echo   Any that say false, set the matching secret and run this again:
 echo     cd worker
 echo     npx wrangler secret put ADMIN_KEY
-echo     npx wrangler secret put BILLPLZ_SECRET
-echo     npx wrangler secret put BILLPLZ_COLLECTION
-echo     npx wrangler secret put BILLPLZ_XSIGN
+echo     DEPLOY.bat gateway                        (the three Bayarcash secrets)
 echo     npx wrangler secret put BRIDGE_KEY
 echo     npx wrangler secret put BRIDGE_URL        (portal inventory feed)
 echo     npx wrangler secret put BRIDGE_PUSH_URL   (portal movements endpoint)
@@ -143,9 +166,46 @@ echo                                               visitor hash. Generate with
 echo                                               openssl rand -hex 32)
 echo   (Each asks you to paste the value. It is never written to a file.)
 echo.
-echo   Then open /admin -^> Orders -^> "Test online payment (Billplz)".
+echo   Then open /admin -^> Orders -^> "Test online payment (Bayarcash)".
 echo.
 echo   Full log: deploy-log.txt
+echo.
+popd
+pause
+exit /b 0
+
+REM ------------------------------------------------------ gateway secrets
+:gateway
+set "STEP=setting the Bayarcash secrets"
+echo   Bayarcash - the three secrets, from the Bayarcash console:
+echo     BAYARCASH_PAT      Personal Access Token   (your profile page)
+echo     BAYARCASH_PORTAL   Portal Key              (the portal that takes the money)
+echo     BAYARCASH_SECRET   API Secret Key          (used for the checksum)
+echo   Each prompt asks you to paste the value. Nothing is written to a file.
+echo   A key that has ever been pasted into a chat or a screenshot should be
+echo   regenerated in the console first, then pasted here.
+echo.
+where npm >nul 2>&1 || call :die "npm is missing. Reinstall Node.js from nodejs.org."
+pushd worker
+call npx wrangler whoami >>"%LOG%" 2>&1 || ( popd & call :die "Not logged in to Cloudflare.  Fix: cd worker  then  npx wrangler login" )
+call npx wrangler secret put BAYARCASH_PAT
+if errorlevel 1 ( popd & call :die "BAYARCASH_PAT was not saved. Run DEPLOY.bat gateway again." )
+call npx wrangler secret put BAYARCASH_PORTAL
+if errorlevel 1 ( popd & call :die "BAYARCASH_PORTAL was not saved. Run DEPLOY.bat gateway again." )
+call npx wrangler secret put BAYARCASH_SECRET
+if errorlevel 1 ( popd & call :die "BAYARCASH_SECRET was not saved. Run DEPLOY.bat gateway again." )
+echo.
+call :say "      Removing the old Billplz secrets (harmless if already gone)"
+echo y| call npx wrangler secret delete BILLPLZ_SECRET >>"%LOG%" 2>&1
+echo y| call npx wrangler secret delete BILLPLZ_COLLECTION >>"%LOG%" 2>&1
+echo y| call npx wrangler secret delete BILLPLZ_XSIGN >>"%LOG%" 2>&1
+call npx wrangler secret list
+popd
+echo.
+echo   Done. Now run DEPLOY.bat (no argument) to publish the Bayarcash build,
+echo   then open /admin -^> Orders -^> "Test online payment (Bayarcash)".
+echo   If BAYARCASH_SANDBOX = "1" is in worker\wrangler.toml the shop talks to
+echo   the sandbox - remove it for real customers.
 echo.
 popd
 pause

@@ -12,7 +12,7 @@
     methods as a chosen list rather than a wall of instructions. The list only
     ever offers what the shop can actually take:
       · FPX online banking — appears when the Worker reports gateway:true,
-        i.e. the Billplz secrets are set. One tap creates the bill.
+        i.e. the Bayarcash secrets are set. One tap creates the payment.
       · Bank transfer + receipt — always.
     Nothing else is drawn. An e-wallet logo on a page that cannot take an
     e-wallet is a promise the shop would have to break. */
@@ -276,16 +276,18 @@ function OrderInner() {
     return () => clearInterval(t);
   }, []);
 
-  /* v0.7.0 — close the gap after an FPX payment. Billplz sends the payer
+  /* v0.7.0 — close the gap after an FPX payment. The gateway sends the payer
      straight back here while its server-to-server callback is still in
      flight (and that callback can be lost entirely). So we ask OUR worker to
-     re-check with Billplz: the answer comes from an authenticated read of the
-     bill, never from these URL parameters, which anyone could forge.
-     Returning from a payment (billplz[id] in the URL) polls for ~15s;
-     otherwise a single check on load is enough. */
+     re-check with the gateway: the answer comes from an authenticated read
+     of the payment intent, never from these URL parameters, which anyone
+     could forge. Returning from a payment polls for ~15s; otherwise a single
+     check on load is enough.
+     v1.46.0 — Bayarcash. The return URL we give it carries `back=1`, and
+     Bayarcash appends its own fields (transaction_id, status …) to it. */
   /* v1.14.0 — the RETURN JOURNEY.
    *
-   * Everything up to Billplz worked; coming back did not. A customer who
+   * Everything up to the gateway worked; coming back did not. A customer who
    * cancelled at their bank, or whose payment failed, landed on a page that
    * looked exactly as it had before they left: same Pay button, no
    * acknowledgement, no explanation. The old code polled for eighteen
@@ -302,25 +304,27 @@ function OrderInner() {
    * Captured ONCE on first render: the parameters are then stripped from
    * the URL, so a refresh an hour later does not replay a stale outcome. */
   const [gwReturn] = useState(() => ({
-    returned: params.has("billplz[id]") || params.has("billplz[paid]"),
-    /* Billplz's own claim. It is not proof — only the worker's authenticated
-       re-query decides whether money moved — but it is the difference
-       between "we are still confirming" and "that did not go through". */
-    claimsPaid: params.get("billplz[paid]") === "true",
+    returned: params.has("back") || params.has("transaction_id") || params.has("status"),
+    /* Bayarcash's own claim (status 3 = success). It is not proof — only the
+       worker's authenticated re-query decides whether money moved — but it
+       is the difference between "we are still confirming" and "that did not
+       go through". */
+    claimsPaid: params.get("status") === "3",
   }));
   const returnedFromGateway = gwReturn.returned;
   const [outcome, setOutcome] = useState<"none" | "checking" | "slow" | "declined">("none");
   const [recheck, setRecheck] = useState(0);
   const [checking, setChecking] = useState(false);
 
-  /* Strip billplz[...] from the address bar once it has been read. The
-     customer's order link stays shareable and a reload starts clean. */
+  /* Strip the gateway's fields from the address bar once they have been
+     read. The customer's order link (t=…) stays shareable and a reload
+     starts clean. */
   useEffect(() => {
     if (!gwReturn.returned || typeof window === "undefined") return;
     const u = new URL(window.location.href);
     let touched = false;
     for (const k of [...u.searchParams.keys()]) {
-      if (k.startsWith("billplz[")) { u.searchParams.delete(k); touched = true; }
+      if (k !== "t") { u.searchParams.delete(k); touched = true; }
     }
     if (touched) window.history.replaceState(null, "", u.toString());
   }, [gwReturn.returned]);
@@ -357,7 +361,7 @@ function OrderInner() {
       } catch { /* offline — try again, or settle below */ }
       if (attempts >= max) {
         setChecking(false);
-        /* The two silences, separated. Billplz saying paid while our own
+        /* The two silences, separated. The gateway saying paid while our own
            authenticated read does not yet agree is a SLOW confirmation, not
            a failure — telling that customer to pay again risks charging
            them twice. */
@@ -373,10 +377,10 @@ function OrderInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, recheck, order === null || order === "missing" ? order : order.status]);
 
-  /* Stage B (Billplz): visible only when the worker reports gateway:true.
-     One tap -> the worker creates the bill -> the customer lands on
-     Billplz's FPX page -> Billplz redirects back here and the verified
-     callback flips the status to paid. */
+  /* Stage B (Bayarcash): visible only when the worker reports gateway:true.
+     One tap -> the worker creates the payment intent -> the customer lands
+     on Bayarcash's FPX page -> Bayarcash sends them back here and the
+     verified callback flips the status to paid. */
   const [paying, setPaying] = useState(false);
   /* v1.42.0 — read once, on the client only. Server rendering has no
      customer to warn, and `navigator` does not exist there. */
@@ -581,7 +585,7 @@ function OrderInner() {
               {order.config.gateway && (
                 <MethodRow id="fpx" checked={method === "fpx"} onSelect={() => setMethod("fpx")}
                   title="Online banking (FPX)" badge="Instant"
-                  note="Maybank2u, CIMB Clicks, Bank Islam, RHB and the rest — secured by Billplz. Your order confirms itself the moment the bank replies.">
+                  note="Maybank2u, CIMB Clicks, Bank Islam, RHB and the rest — secured by Bayarcash. Your order confirms itself the moment the bank replies.">
                   {/* v1.14.0 — Pay is UNAVAILABLE while a payment might
                       already have been made. Two cases:
                         checking — the poll is still running, and a tap here
@@ -633,7 +637,7 @@ function OrderInner() {
                   )}
                   <p className="mt-2 flex items-center justify-center gap-1.5 text-center text-[11px] text-elfia-muted">
                     <Icon name="shield" size={13} className="text-elfia-rose" />
-                    You leave for Billplz&apos;s secure page and come straight back here.
+                    You leave for Bayarcash&apos;s secure page and come straight back here.
                   </p>
                 </MethodRow>
               )}

@@ -252,15 +252,15 @@ export default function Admin() {
     void load(key);
   };
 
-  /* v0.7.0 — prove the Billplz credentials before a customer meets them.
-     Read-only on Billplz's side: it reads the collection, never creates a
+  /* v0.7.0 — prove the gateway credentials before a customer meets them.
+     Read-only on Bayarcash's side: it lists one transaction, never creates a
      bill, never moves money. */
   const [gwTesting, setGwTesting] = useState(false);
   const [gwMsg, setGwMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const testGateway = async () => {
     setGwTesting(true); setGwMsg(null);
     try {
-      const r = await fetch("/api/v1/admin/billplz-test", { method: "POST", headers: hdr(key) });
+      const r = await fetch("/api/v1/admin/gateway-test", { method: "POST", headers: hdr(key) });
       const j = (await r.json()) as { ok?: boolean; message?: string; error?: { message?: string } };
       setGwMsg({ ok: Boolean(j.ok), text: j.message ?? j.error?.message ?? `Error ${r.status}` });
     } catch { setGwMsg({ ok: false, text: "Network problem — try again" }); }
@@ -355,10 +355,10 @@ export default function Admin() {
             <div className="mt-5 rounded-xl border border-stone-200 bg-white p-4">
               <div className="flex flex-wrap items-center gap-3">
                 <button type="button" className={btnGhost} disabled={gwTesting} onClick={() => void testGateway()}>
-                  {gwTesting ? "Checking…" : "Test online payment (Billplz)"}
+                  {gwTesting ? "Checking…" : "Test online payment (Bayarcash)"}
                 </button>
                 <p className="text-xs text-stone-500">
-                  Checks the API Secret Key and Collection ID against Billplz. Reads only — no bill is created and no money moves.
+                  Checks the Personal Access Token against Bayarcash and reports whether the Portal Key and API Secret Key are set. Reads only — no payment is created and no money moves.
                 </p>
               </div>
               {gwMsg && (

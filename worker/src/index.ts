@@ -20,14 +20,15 @@
  *     crypto.randomUUID, unguessable, never enumerable (no order listing
  *     without the admin key).
  *
- * Stage B (Billplz FPX — the CEO's chosen gateway) lives in billplz.ts and
- * stays inert until both secrets exist — see that file's header.
+ * Stage B (FPX online payment) lives in bayarcash.ts and stays inert until
+ * its three secrets exist — see that file's header. v1.46.0: Bayarcash
+ * replaced Billplz at the CEO's decision; the routes kept their reasoning.
  */
 import {
-  billplzCheck, billplzCollectionOk, billplzConfigured, billplzCreateBill,
-  billplzFailureHint, billplzFetchBill, billplzPaidFor, billplzReady,
-  billplzSignatureConfigured, billplzSignatureOk, storeUrl,
-} from "./billplz";
+  bayarcashCallbackOk, bayarcashCheck, bayarcashConfigured, bayarcashCreateIntent,
+  bayarcashFailureHint, bayarcashFetchIntent, bayarcashPaidFor, bayarcashReady,
+  bayarcashSignatureConfigured, readCallbackFields, storeUrl,
+} from "./bayarcash";
 import {
   callerIp, clearLimit, createSession, currentCustomer, destroySession, hashPassword, hitLimit,
   looksLikeEmail, normaliseEmail, normalisePhone, sessionCookie, clearCookie, sweepAuth,
@@ -52,15 +53,16 @@ export interface Env {
   WHATSAPP_DIGITS?: string;  // wrangler.toml var — "60123456789"
   SHIPPING_CENTS?: string;   // wrangler.toml var — flat rate, e.g. "1000"
   FREE_ABOVE_CENTS?: string; // wrangler.toml var — free delivery threshold
-  BILLPLZ_SECRET?: string;     // Stage B — wrangler secret put (API Secret Key)
-  BILLPLZ_COLLECTION?: string; // Stage B — wrangler secret put (Collection ID)
-  BILLPLZ_SANDBOX?: string;    // wrangler.toml var — "1" = sandbox account
-  /** v1.0.0 — the X Signature Key from the Billplz dashboard. Used to verify
-      that a callback or redirect really came from Billplz before the order is
-      re-queried. `wrangler secret put BILLPLZ_XSIGN`. */
-  BILLPLZ_XSIGN?: string;
+  /* v1.46.0 — Bayarcash (replaced Billplz). Three secrets, one optional var. */
+  BAYARCASH_PAT?: string;      // wrangler secret put — Personal Access Token (console profile)
+  BAYARCASH_PORTAL?: string;   // wrangler secret put — Portal Key of the portal that takes the money
+  /** The API Secret Key. Signs the payment intent we send and verifies the
+      checksum on every callback before the order is re-queried.
+      `wrangler secret put BAYARCASH_SECRET`. */
+  BAYARCASH_SECRET?: string;
+  BAYARCASH_SANDBOX?: string;  // wrangler.toml var — "1" = sandbox account
   /** v1.0.0 — this shop's public origin, e.g. "https://elfiaofficialstore.my".
-      Billplz callback/redirect URLs are built from it, so no domain is
+      Gateway callback/return URLs are built from it, so no domain is
       hardcoded in the source. */
   STORE_URL?: string;
   /** v1.0.0 — hours an unpaid order holds its stock before the cron releases
@@ -101,7 +103,7 @@ function originAllowed(request: Request, env: Env): boolean {
      precisely the shape of a cross-site request forgery: a hidden form on
      any page could POST to the API and the caller's own session would
      authorise it. Server-to-server callers (the portal bridge, curl, the
-     Billplz callback) send no cookie and are unaffected. */
+     gateway callback) send no cookie and are unaffected. */
   if (!origin) return !request.headers.get("Cookie");
   const store = storeUrl(env);
   const host = new URL(store).host;
@@ -201,9 +203,9 @@ async function bridgeAuth(request: Request, env: Env): Promise<Response | null> 
  * looks later, so the reason also goes into sync_state, which the portal's
  * ELFIA tab already reads.
  */
-async function logPaymentRefusal(env: Env, billId: string, why: string): Promise<void> {
-  const line = `${new Date().toISOString()} · bill ${billId} · ${why}`;
-  console.error(`billplz refused: ${line}`);
+async function logPaymentRefusal(env: Env, ref: string, why: string): Promise<void> {
+  const line = `${new Date().toISOString()} · ${ref} · ${why}`;
+  console.error(`bayarcash refused: ${line}`);
   await setState(env, "last_payment_refusal", line).catch(() => null);
 }
 
@@ -252,7 +254,7 @@ async function storeConfig(env: Env) {
     whatsapp_digits: env.WHATSAPP_DIGITS ?? "60000000000",
     shipping_cents: pick("shipping_cents", intVar(env.SHIPPING_CENTS, 1000)),
     free_above_cents: pick("free_above_cents", intVar(env.FREE_ABOVE_CENTS, 4500)),
-    gateway: billplzReady(env),
+    gateway: bayarcashReady(env),
     hold_hours: intVar(env.ORDER_HOLD_HOURS, 12),
     /** Which of the two answered — so /admin and the health probe can tell
         "the portal set this" apart from "nobody has set it yet". */
@@ -275,7 +277,7 @@ async function orderNumber(env: Env): Promise<string> {
 
 /** v0.9.0 — one row per movement in an order's life. Written for EVERY
     transition, including the ones the system makes on its own (a receipt
-    upload, an FPX payment verified against Billplz), because a history with
+    upload, an FPX payment verified against the gateway), because a history with
     gaps is not a history. Never edited, never deleted. */
 async function recordOrderEvent(env: Env, orderId: number, status: string, note: string | null): Promise<void> {
   await env.DB.prepare(
@@ -309,7 +311,7 @@ async function releaseExpiredOrders(env: Env): Promise<number> {
     /* v1.39.0 (SECURITY) — CLAIM THE CANCELLATION FIRST, then put the stock
        back. This UPDATE used to run at the END of the loop with no status
        predicate, and the gap between the SELECT above and that write is a
-       minute wide on a cron that fires every minute. A Billplz callback
+       minute wide on a cron that fires every minute. A gateway callback
        landing inside it — which is exactly what a late FPX redirect at the
        twelve-hour boundary looks like — marked the order paid, and this then
        overwrote it to cancelled, returned the goods to the shelf and told
@@ -583,7 +585,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
         admin_key_configured: Boolean(env.ADMIN_KEY),
         bank_line_configured: !cfg.bank_line.startsWith("REPLACE"),
         gateway_configured: cfg.gateway,
-        gateway_signature_configured: billplzSignatureConfigured(env),
+        gateway_signature_configured: bayarcashSignatureConfigured(env),
         store_url: storeUrl(env),
         order_hold_hours: intVar(env.ORDER_HOLD_HOURS, 12),
         /* v1.13.0 — what delivery costs, and WHICH side decided it. On the
@@ -1234,7 +1236,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
 
     /* v1.14.0 — prove the gateway credentials WITHOUT taking a payment.
      *
-     * billplzCheck() already existed but only /admin could reach it, and
+     * the gateway check already existed but only /admin could reach it, and
      * ADMIN_KEY is not set on this shop — so the first person to discover a
      * mistyped API key would have been a customer, halfway through paying.
      * This is the same read-only check behind the bridge key, which IS set.
@@ -1247,8 +1249,8 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
     if (path === "/bridge/payment-check" && method === "GET") {
       const bad = await bridgeAuth(request, env);
       if (bad) return bad;
-      const check = await billplzCheck(env);
-      /* v1.14.1 — the last real failure, in Billplz's own words, plus the
+      const check = await bayarcashCheck(env);
+      /* v1.14.1 — the last real failure, in the gateway's own words, plus the
          sentence that names the fix. "The key works" is not the same claim
          as "the last customer could pay": a bill can be refused for reasons
          a collection read never sees. */
@@ -1257,7 +1259,8 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
         ...check,
         last_gateway_error: st.last_gateway_error ?? null,
         last_gateway_hint: st.last_gateway_hint ?? null,
-        signature_key_set: billplzSignatureConfigured(env),
+        signature_key_set: bayarcashSignatureConfigured(env),
+        gateway: "bayarcash",
         /* v1.42.0 — where the payers are standing. A bank refusing an app's
            embedded browser and a broken gateway look identical from here
            otherwise, and they need completely different responses. */
@@ -1267,9 +1270,9 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
         /* Live money and a sandbox key is the one combination that looks
            fine in testing and fails in front of a customer. */
         warning: check.ok && check.sandbox
-          ? "This shop is pointed at the Billplz SANDBOX. Real customers cannot pay. Remove BILLPLZ_SANDBOX from wrangler.toml and redeploy."
-          : check.ok && !billplzSignatureConfigured(env)
-            ? "Working, but BILLPLZ_XSIGN is not set — callbacks are accepted on the authenticated re-query alone. Set it."
+          ? "This shop is pointed at the Bayarcash SANDBOX. Real customers cannot pay. Remove BAYARCASH_SANDBOX from wrangler.toml and redeploy."
+          : check.ok && !bayarcashSignatureConfigured(env)
+            ? "Working, but BAYARCASH_SECRET is not set — no payment can be raised until it is, because no callback could be verified."
             : null,
       });
     }
@@ -1629,7 +1632,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
     /* ---- Stage B: pay online (inert until secrets exist) ---- */
     const payMatch = path.match(/^\/orders\/([a-f0-9]{32})\/pay$/);
     if (payMatch && method === "POST") {
-      if (!billplzReady(env)) return err("not_configured", "Online payment is not enabled yet", 501);
+      if (!bayarcashReady(env)) return err("not_configured", "Online payment is not enabled yet", 501);
       const o = await env.DB.prepare(`SELECT * FROM orders WHERE token = ?1`).bind(payMatch[1]).first<OrderRow>();
       if (!o) return err("not_found", "Order not found", 404);
       if (o.status !== "pending_payment" && o.status !== "payment_review") {
@@ -1663,7 +1666,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
         if (inApp) await setState(env, "last_in_app_pay", `${new Date().toISOString()} · ${inApp}`);
       } catch { /* a counter must never stop a payment */ }
 
-      const bill = await billplzCreateBill(env, {
+      const bill = await bayarcashCreateIntent(env, {
         order_number: o.order_number, token: o.token, total_cents: o.total_cents,
         customer_name: o.customer_name, phone: o.phone, email: o.email,
       });
@@ -1677,30 +1680,32 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
          * wrong key, a sandbox key on a live shop, an unactivated account
          * and a rejected phone number all produced the same dead end.
          *
-         * Billplz's own reply is kept in sync_state, where the portal reads
-         * it (ELFIA tab) and /bridge/payment-check reports it. It never
+         * The gateway's own reply is kept in sync_state, where the portal
+         * reads it (ELFIA tab) and /bridge/payment-check reports it. It never
          * reaches the customer: they get a sentence they can act on, and
          * bank transfer, which works. */
         await setState(env, "last_gateway_error",
-          `${new Date().toISOString()} · order ${o.order_number} · Billplz ${bill.status || "unreachable"}: ${bill.detail}`);
-        await setState(env, "last_gateway_hint", billplzFailureHint(bill.status, env.BILLPLZ_SANDBOX === "1"));
+          `${new Date().toISOString()} · order ${o.order_number} · Bayarcash ${bill.status || "unreachable"}: ${bill.detail}`);
+        await setState(env, "last_gateway_hint", bayarcashFailureHint(bill.status, env.BAYARCASH_SANDBOX === "1"));
         return err("gateway_error",
           "Online banking isn't going through at the moment — please pay by bank transfer below. Your order and its prices are unchanged.",
           502);
       }
-      /* Remember which bill belongs to this order, so the callback can flip
-         the order by BILL id (which we verify) rather than by an order
-         number the caller typed. */
+      /* Remember which payment intent belongs to this order. The column is
+         still called bill_id (its Billplz name; a rename is a migration for
+         no gain) and now holds the Bayarcash intent id "pi_...". The
+         callback and the verify route settle the order by re-reading THAT
+         intent, never by anything the caller sent. */
       await env.DB.prepare(`UPDATE orders SET bill_id = ?1, updated_at = datetime('now') WHERE id = ?2`)
-        .bind(bill.id, o.id).run().catch(() => null); // pre-0003: still payable, callback falls back to reference
+        .bind(bill.id, o.id).run().catch(() => null);
       return json({ url: bill.url });
     }
 
     /* v0.7.0 — the customer's own "did my payment land?" check.
-       Billplz redirects the payer back to /order?t=… immediately, but the
+       The gateway sends the payer back to /order?t=… immediately, but the
        server-to-server callback can arrive a moment later (or get lost). The
        order page calls this a few times after a redirect; it re-queries
-       Billplz with our secret — the same authenticated read the callback
+       Bayarcash with our token — the same authenticated read the callback
        uses — so the answer is never taken from the browser's URL. Safe to
        call at any time: it can only move an unpaid order to paid. */
     const verifyMatch = path.match(/^\/orders\/([a-f0-9]{32})\/verify-payment$/);
@@ -1714,12 +1719,12 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
          FOR. No bill was ever created for this order, so no payment can be
          in flight, and polling for thirty seconds would only delay telling
          the customer the truth. */
-      if (!billplzConfigured(env) || !o.bill_id) return json({ status: o.status, paid: false, bill: false });
+      if (!bayarcashConfigured(env) || !o.bill_id) return json({ status: o.status, paid: false, bill: false });
       /* v1.39.0 — the same three questions the callback asks: paid, for THIS
-         order's exact amount, into our own collection. The bill id comes
+         order's exact amount, for THIS order's number. The intent id comes
          from the order row here, so it is already bound to the order; the
-         amount check is what stops a bill that was edited or reused. */
-      const settledNow = await billplzPaidFor(env, o.bill_id, o.total_cents);
+         amount check is what stops an intent that was edited or reused. */
+      const settledNow = await bayarcashPaidFor(env, o.bill_id, o.total_cents, o.order_number);
       if (settledNow.ok) {
         const upd = await env.DB.prepare(
           `UPDATE orders SET status = 'paid', payment_method = 'fpx', updated_at = datetime('now')
@@ -1730,91 +1735,76 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
         }
         return json({ status: "paid", paid: true });
       }
-      if (settledNow.why !== "not paid") console.error(`verify-payment refused bill ${o.bill_id}: ${settledNow.why}`);
-      /* A bill exists and Billplz has not (yet) said it is paid. The page
+      if (settledNow.why !== "not paid") console.error(`verify-payment refused intent ${o.bill_id}: ${settledNow.why}`);
+      /* An intent exists and Bayarcash has not (yet) said it is paid. The page
          keeps polling on this answer, because this is the one case where
          waiting is the right thing to do. */
       return json({ status: o.status, paid: false, bill: true });
     }
 
-    if (path === "/payments/billplz/callback" && (method === "POST" || method === "GET")) {
-      if (!billplzReady(env)) return err("not_configured", "Not enabled", 501);
-      /* NEVER trust callback parameters. Billplz POSTs billplz[id],
-         billplz[paid], billplz[x_signature] — we take only the bill ID and
-         then ask Billplz's authenticated API whether that bill is truly
-         paid (billplz.ts). Anyone can POST here; only Billplz can make
-         GET /bills/{id} answer paid:true. */
-      const params = method === "GET" ? url.searchParams : new URLSearchParams(await request.text());
+    if (path === "/payments/bayarcash/callback" && method === "POST") {
+      if (!bayarcashReady(env)) return err("not_configured", "Not enabled", 501);
+      /* NEVER trust callback parameters. Bayarcash POSTs transaction_id,
+         order_number, status, amount, checksum … — we verify the checksum,
+         take the order_number ONLY to find the row, and then ask Bayarcash's
+         authenticated API whether the payment intent WE created for that
+         order is truly paid (bayarcash.ts). Anyone can POST here; only
+         Bayarcash can make GET /payment-intents/{id} answer paid. */
+      const fields = await readCallbackFields(request);
 
-      /* LOCK 1 — X-Signature. A GET here is the browser redirect (parameters
-         arrive as billplz[id]); a POST is Billplz's server callback (flat
-         parameters).
+      /* LOCK 1 — checksum, over the nine v3 fields with the API Secret Key.
+         Required, not preferred: bayarcashReady() includes the key, so a
+         shop without it never raised an intent and this line can be
+         absolute. */
+      const sig = await bayarcashCallbackOk(env, fields);
+      if (sig !== true) return err("forbidden", "Bad checksum", 403);
 
-         v1.39.0 (SECURITY) — a signature is now REQUIRED, not preferred.
-         This used to reject only `sig === false`, so an unset key answered
-         "unconfigured" and every forged callback walked straight through to
-         the requery. billplzConfigured() now includes the key, so an
-         unsigned shop never creates a bill in the first place and this line
-         can be absolute. */
-      const sig = await billplzSignatureOk(env, params, method === "GET");
-      if (sig !== true) return err("forbidden", "Bad signature", 403);
+      const orderNumber = (fields.order_number ?? "").trim();
+      const trx = (fields.transaction_id ?? "").trim();
+      if (!orderNumber) return json({ ok: true });
 
-      const billId = params.get("billplz[id]") ?? params.get("id") ?? "";
-      if (!billId) return json({ ok: true });
-
-      /* LOCK 2 — BILLPLZ decides which order, and one authenticated read
-         answers every remaining question at once.
-
-         v1.39.0 found the hole: when the bill id matched no waiting order,
-         the code fell back to the order number echoed in `reference_1` —
-         which arrives in the REQUEST. The paid fact came from Billplz; the
-         order it was applied to came from the caller; the two were never
-         tied together, so anyone holding one genuinely paid bill id could
-         mark any other order paid, and order numbers are sequential by
-         design.
-
-         v1.40.0 closes it without losing the fallback's only real virtue.
-         `reference_1` is still what names the order — but the copy we read
-         is the one Billplz itself returns from GET /bills/{id}, over our
-         secret key, and we set it ourselves when the bill was created. The
-         caller's parameters are never consulted for it. A forged callback
-         can therefore name any bill id it likes and still only ever move
-         the order that bill was raised for.
-
-         Matching on bill_id OR the bill's own reference_1 also repairs the
-         pre-0003 case, where the bill id could not be written back to the
-         order row (see /pay). */
-      const bill = await billplzFetchBill(env, billId);
-      if (!bill) {
-        await logPaymentRefusal(env, billId, "billplz gave no answer for this bill");
-        return json({ ok: true });
-      }
+      /* LOCK 2 — BAYARCASH decides which order. The callback's order_number
+         locates the row and nothing more; what settles it is the payment
+         intent the shop itself created for that row (bill_id), re-read over
+         our token, whose own order_number and amount are then compared.
+         A forged callback can therefore name any order it likes and still
+         only ever move an order whose own intent Bayarcash says is paid. */
       const o = await env.DB.prepare(
-        `SELECT id, order_number, total_cents, status FROM orders
-          WHERE bill_id = ?1 OR (?2 IS NOT NULL AND order_number = ?2)`,
-      ).bind(billId, bill.reference_1)
-        .first<{ id: number; order_number: string; total_cents: number; status: string }>()
+        `SELECT id, order_number, total_cents, status, bill_id FROM orders WHERE order_number = ?1`,
+      ).bind(orderNumber)
+        .first<{ id: number; order_number: string; total_cents: number; status: string; bill_id: string | null }>()
         .catch(() => null);
       if (!o) {
-        await logPaymentRefusal(env, billId, `no order for reference_1 ${bill.reference_1 ?? "(none)"}`);
+        await logPaymentRefusal(env, `trx ${trx || "?"}`, `no order numbered ${orderNumber}`);
         return json({ ok: true });
       }
       if (o.status !== "pending_payment" && o.status !== "payment_review") return json({ ok: true });
-
-      /* LOCK 3 — the money. Paid, in full, into our own collection. Read off
-         the SAME bill record LOCK 2 used, so no second fetch can disagree
-         with the one that chose the order. */
-      if (!bill.paid) return json({ ok: true });
-      if (!billplzCollectionOk(env, bill)) {
-        await logPaymentRefusal(env, billId, `bill belongs to another collection (order ${o.order_number})`);
+      if (!o.bill_id) {
+        await logPaymentRefusal(env, `trx ${trx || "?"}`, `order ${o.order_number} has no payment intent of ours`);
         return json({ ok: true });
       }
-      if (bill.paid_amount === null || bill.paid_amount < o.total_cents) {
-        /* Not an error to Billplz — it retries on non-2xx, and a retry
+      const intent = await bayarcashFetchIntent(env, o.bill_id);
+      if (!intent) {
+        await logPaymentRefusal(env, `intent ${o.bill_id}`, "bayarcash gave no answer for this payment intent");
+        return json({ ok: true });
+      }
+
+      /* LOCK 3 — the money. Paid, in full, for this order's number. Read off
+         the SAME intent record LOCK 2 used, so no second fetch can disagree
+         with the one that chose the order. Bayarcash also calls back for
+         failed and pending attempts (status 1, 2, 4); those simply leave the
+         order waiting. */
+      if (!intent.paid) return json({ ok: true });
+      if (intent.order_number !== null && intent.order_number !== o.order_number) {
+        await logPaymentRefusal(env, `intent ${o.bill_id}`, `intent is for order ${intent.order_number}, callback named ${o.order_number}`);
+        return json({ ok: true });
+      }
+      if (intent.amount_cents === null || intent.amount_cents < o.total_cents) {
+        /* Not an error to Bayarcash — it retries on non-2xx, and a retry
            cannot change any of these answers. Written down, because an order
            that was paid and NOT accepted is a customer on the phone. */
-        await logPaymentRefusal(env, billId,
-          `settled ${bill.paid_amount ?? "?"} < order ${o.order_number} total ${o.total_cents}`);
+        await logPaymentRefusal(env, `intent ${o.bill_id}`,
+          `settled ${intent.amount_cents ?? "?"} < order ${o.order_number} total ${o.total_cents}`);
         return json({ ok: true });
       }
 
@@ -1935,9 +1925,9 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
       }
 
       /* v0.7.0 — prove the gateway credentials without spending money.
-         Read-only: reads the collection, creates no bill. */
-      if (path === "/admin/billplz-test" && method === "POST") {
-        return json(await billplzCheck(env));
+         Read-only: lists one transaction, creates no payment. */
+      if (path === "/admin/gateway-test" && method === "POST") {
+        return json(await bayarcashCheck(env));
       }
 
       if (path === "/admin/orders" && method === "GET") {

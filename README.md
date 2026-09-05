@@ -22,9 +22,9 @@ Set each from your own machine; the value is never written to a file:
 ```
 cd worker
 npx wrangler secret put ADMIN_KEY            # the /admin passcode
-npx wrangler secret put BILLPLZ_SECRET       # Billplz API Secret Key
-npx wrangler secret put BILLPLZ_COLLECTION   # Billplz Collection ID
-npx wrangler secret put BILLPLZ_XSIGN        # Billplz X Signature Key
+npx wrangler secret put BAYARCASH_PAT        # Bayarcash Personal Access Token
+npx wrangler secret put BAYARCASH_PORTAL     # Bayarcash Portal Key
+npx wrangler secret put BAYARCASH_SECRET     # Bayarcash API Secret Key (checksum)
 npx wrangler secret put BRIDGE_KEY           # shared with the portal
 npx wrangler secret put BRIDGE_URL           # portal inventory+price feed
 npx wrangler secret put BRIDGE_PUSH_URL      # portal movements endpoint
@@ -32,7 +32,7 @@ npx wrangler secret put BRIDGE_PUSH_URL      # portal movements endpoint
 
 `node tests/no-secrets.mjs` fails the build if a credential is ever committed —
 DEPLOY.bat runs it before anything is uploaded. If a key has ever been pasted
-into a chat, an email or a screenshot, rotate it in the Billplz dashboard and
+into a chat, an email or a screenshot, regenerate it in the Bayarcash console and
 set the new one here.
 
 ## Before you announce the shop
@@ -45,7 +45,7 @@ customers see:
 | `BANK_LINE` | The order page shows "REPLACE — …" instead of your account |
 | `WHATSAPP_DIGITS` | The floating chat button stays hidden |
 | `SHIPPING_CENTS` / `FREE_ABOVE_CENTS` | Delivery charge and the free-delivery bar |
-| `STORE_URL` | Billplz callback/redirect URLs and the allowed origins |
+| `STORE_URL` | gateway callback/return URLs and the allowed origins |
 | `ORDER_HOLD_HOURS` / `MAX_OPEN_ORDERS` | How long an unpaid order holds stock, and how many one phone may hold |
 
 ## Availability — why nothing says "Sold out"
@@ -100,23 +100,21 @@ To switch it on, both sides must hold the same secret:
 Until then the store records its sales but cannot deliver them, and /admin
 says so in red rather than pretending everything is fine.
 
-## Turning on online payment (Billplz FPX)
+## Turning on online payment (Bayarcash FPX)
 
-1. In the Billplz dashboard, create a Collection and copy its **Collection ID**;
-   from Settings copy the **API Secret Key**.
-2. To rehearse first, use a separate **billplz-sandbox.com** account's
-   credentials and add `BILLPLZ_SANDBOX = "1"` under `[vars]`.
-3. `cd worker`, then:
-   `npx wrangler secret put BILLPLZ_SECRET` and
-   `npx wrangler secret put BILLPLZ_COLLECTION`.
-4. Redeploy, open **/admin → Orders → Test online payment (Billplz)**. It reads
-   your collection and names the exact problem if there is one. No bill is
-   created and no money moves.
-5. When it says connected, place one real RM 1 order and pay it. Then remove
-   `BILLPLZ_SANDBOX` (if set) and repeat step 4 against the live account.
-
-The customer's order page shows "Pay online now — RM xx.xx (FPX / online
-banking)" the moment both secrets exist; bank transfer stays underneath.
+1. In the Bayarcash console, create (or open) the **Portal** that will take
+   the shop's money and copy its **Portal Key**; on your profile page create a
+   **Personal Access Token** and copy the **API Secret Key**.
+2. To rehearse first, use a separate **console.bayarcash-sandbox.com**
+   account's three values and add `BAYARCASH_SANDBOX = "1"` under `[vars]`.
+3. Run `DEPLOY.bat gateway` — it asks for the three values one at a time
+   (nothing is written to a file) and removes any old Billplz secrets.
+4. Run `DEPLOY.bat`, open **/admin → Orders → Test online payment
+   (Bayarcash)**. It proves the token with one read-only call; the Portal Key
+   and API Secret Key are proved by the first real payment (a wrong one is
+   refused by Bayarcash at `/pay` and the reason is written to the ELFIA tab).
+5. When the sandbox run is clean, set the LIVE account's three values, remove
+   `BAYARCASH_SANDBOX` (if set) and repeat step 4 against the live account.
 
 ## Accounts, and unpaid orders
 
@@ -133,10 +131,10 @@ banking)" the moment both secrets exist; bank transfer stays underneath.
   A tampered cart cannot buy below list.
 - Receipts live under R2 `receipts/` and are only readable with the admin key.
 - A payment is only ever marked paid from an authenticated read of the bill
-  against Billplz's own API — never from a callback's parameters, and never
+  against Bayarcash's own API — never from a callback's parameters, and never
   from the URL the customer came back with.
 - Paid orders cannot be silently cancelled; a refund is a human decision.
-- A Billplz callback must carry a valid X-Signature *and* survive an
+- A Bayarcash callback must carry a valid checksum *and* survive an
   authenticated re-query before an order is marked paid.
 - Passwords are never stored, only PBKDF2 hashes; session cookies are stored
   as hashes too, so reading the database grants nobody a login.
