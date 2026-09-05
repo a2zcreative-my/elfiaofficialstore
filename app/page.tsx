@@ -220,8 +220,17 @@ function ProductRail({ items }: { items: Product[] }) {
           </div>
         ))}
       </div>
-      <div className="hidden gap-5 lg:grid lg:grid-cols-4">
-        {items.slice(0, 4).map((p) => <ProductCard key={p.id} p={p} />)}
+      {/* v1.45.0 — the shop is 96rem wide on a desktop now, so the rail
+          shows a fifth tile from xl and a sixth from 2xl instead of four
+          cards stretched across the width. The extra tiles are in the
+          markup and hidden below their breakpoint, which keeps this one
+          list rather than three. */}
+      <div className="hidden gap-5 lg:grid lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
+        {items.slice(0, 6).map((p, i) => (
+          <div key={p.id} className={i >= 5 ? "hidden 2xl:block" : i >= 4 ? "hidden xl:block" : undefined}>
+            <ProductCard p={p} />
+          </div>
+        ))}
       </div>
     </>
   );
@@ -309,19 +318,19 @@ export default function Home() {
   const counts = (key: string) => all.filter((p) => key === "all" || collectionKey(collectionOf(p)) === key).length;
 
   return (
-    <main className="px-4 pt-4 pb-10 sm:px-6 sm:pt-8">
-      <div className="mx-auto w-full max-w-6xl">
+    <main className="px-4 pt-4 pb-10 sm:px-6 sm:pt-8 lg:px-10">
+      <div className="mx-auto w-full max-w-shop">
         <Carousel slides={slides} headroom={cutoutHeadroom(portalSlides)} />
 
         {/* trust strip */}
         <div className="mt-5 grid grid-cols-3 gap-2.5 sm:gap-4">
           {TRUST.map((t) => (
-            <div key={t.title} className="flex flex-col items-center gap-1.5 rounded-2xl bg-white px-2 py-3.5 text-center ring-1 ring-elfia-line sm:flex-row sm:gap-3 sm:px-4 sm:text-left">
+            <div key={t.title} className="flex flex-col items-center gap-1.5 rounded-2xl bg-white px-2 py-3.5 text-center ring-1 ring-elfia-line sm:flex-row sm:gap-3 sm:px-4 sm:text-left lg:px-6 lg:py-4">
               <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-elfia-veil text-elfia-deep">
                 <Icon name={t.icon} size={18} />
               </span>
               <span>
-                <span className="block text-[11px] leading-tight font-semibold text-elfia-ink sm:text-[13px]">{t.title}</span>
+                <span className="block text-[11px] leading-tight font-semibold text-elfia-ink sm:text-[13px] lg:text-sm">{t.title}</span>
                 <span className="mt-0.5 block text-[10px] leading-tight text-elfia-muted sm:text-[11px]">{t.note}</span>
               </span>
             </div>
@@ -332,7 +341,7 @@ export default function Home() {
         {groups.length > 0 && (
           <section className="mt-9">
             <SectionHeader title="Shop by collection" href="/categories" />
-            <div className="rail -mx-4 px-4 sm:mx-0 sm:grid sm:grid-cols-4 sm:gap-4 sm:px-0">
+            <div className="rail -mx-4 px-4 sm:mx-0 sm:grid sm:grid-cols-4 sm:gap-4 sm:px-0 xl:grid-cols-6">
               {groups.map(({ g, items }) => (
                 <Link key={g.key} href={`/shop?c=${g.key}`}
                   className="rail-item group flex w-48 items-center gap-3 rounded-2xl bg-white p-2.5 ring-1 ring-elfia-line transition-colors hover:ring-elfia-rose sm:w-auto">
@@ -418,7 +427,7 @@ export default function Home() {
             ))}
           </div>
 
-          <div className="mt-8 grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-3 lg:grid-cols-4" data-testid="product-grid">
+          <div className="mt-8 grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6" data-testid="product-grid">
             {products === null
               ? <CardSkeleton n={8} />
               : shown.slice(0, 8).map((p) => <ProductCard key={p.id} p={p} />)}

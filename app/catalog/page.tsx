@@ -144,8 +144,8 @@ export default function Catalog() {
     .filter((x) => x.items.length > 0);
 
   return (
-    <main className="bg-elfia-cream px-4 pt-6 pb-12 sm:px-6">
-      <div className="mx-auto w-full max-w-4xl">
+    <main className="bg-elfia-cream px-4 pt-6 pb-12 sm:px-6 lg:px-10">
+      <div className="mx-auto w-full max-w-shop">
         {/* ---- cover ---- */}
         {/* Capped on a phone. The cover is a portrait page: at full height it
             is a whole screen of scrolling before a customer reaches a single
@@ -221,7 +221,7 @@ export default function Catalog() {
               <span className="h-px flex-1 border-t border-dashed border-elfia-rose/60" />
               <Skel className="h-3 w-14" />
             </div>
-            <div className="mt-6 grid grid-cols-2 gap-x-4 gap-y-7 sm:grid-cols-3 lg:grid-cols-4">
+            <div className="mt-6 grid grid-cols-2 gap-x-4 gap-y-7 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
               {Array.from({ length: 8 }).map((_, i) => (
                 <div key={i} className="flex flex-col items-center">
                   <Skel className="aspect-square w-full rounded-full" />
@@ -253,7 +253,7 @@ export default function Catalog() {
               </span>
             </div>
 
-            <div className="mt-6 grid grid-cols-2 gap-x-4 gap-y-7 sm:grid-cols-3 lg:grid-cols-4">
+            <div className="mt-6 grid grid-cols-2 gap-x-4 gap-y-7 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
               {items.map((p) => <Tile key={p.id} p={p} />)}
             </div>
 

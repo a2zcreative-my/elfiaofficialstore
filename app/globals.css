@@ -37,6 +37,17 @@
      apart the first time either one changes. 2.75rem = 44px, the smallest
      comfortable tap target. */
   --elfia-fab: 2.75rem;
+
+  /* v1.45.0 — the width of the shop on a desktop, ONE number. The CEO, 05-09,
+     with the home page open on a 1920px monitor: "I want full view which is
+     make it looks nice on webpage view!" Every shopping surface (header,
+     home, shop, wishlist, catalogue, footer) was boxed at 72rem (1152px), a
+     laptop measure that left a third of a wide screen empty on each side.
+     96rem = 1536px fills a 1920 monitor to comfortable margins, and product
+     grids grow to 5 and 6 columns at xl / 2xl rather than stretching four
+     cards to fill it. Reading pages (a policy, an order, a receipt) keep
+     their narrow measure: width is for browsing, not for reading. */
+  --container-shop: 96rem;
 }
 
 /* The app shell sits on cream; the desktop shop keeps the same ground so the

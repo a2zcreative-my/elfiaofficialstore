@@ -1,3 +1,41 @@
+# ELFIA OFFICIAL STORE — v1.45.0 (05-09-2026) — THE SHOP FILLS THE SCREEN
+
+## What the CEO asked for
+
+With the home page open on a 1920px monitor: *"for ELFIA webpage, I want full
+view which is make it looks nice on webpage view!"* The screenshot showed the
+shop as a 1152px column down the middle of the screen with a third of the
+width empty on each side — a laptop measure on a desktop monitor.
+
+## What changed
+
+**One width, one token.** `--container-shop: 96rem` (1536px) in globals.css,
+used as `max-w-shop` by every browsing surface: the desktop header, the home
+page, Shop, Wishlist, the Catalog, and the footer. It was `max-w-6xl` (72rem)
+written six times; now it is one number, and the gutter grows to `px-10` from
+`lg` so the wider page still has a margin.
+
+**Grids grow instead of stretching.** Every product grid gains
+`xl:grid-cols-5 2xl:grid-cols-6`, so a 1536px page shows five or six cards of
+the size a card was designed at, rather than four cards inflated to fill it.
+The New Arrivals / Best Sellers rail renders six tiles and hides the fifth and
+sixth below their breakpoint, keeping one list in the markup. The collections
+strip goes to six columns from `xl`; the trust strip gets a little more
+padding and a 14px title at desktop width.
+
+**What did not change.** Reading pages keep their narrow measure — a policy,
+an order, a receipt, the account, checkout, tracking. Width is for browsing;
+a receipt at 1536px is worse, not better. The phone layout is untouched: every
+change sits behind `lg`, `xl` or `2xl`.
+
+## Verified
+
+Changed files typecheck; no `max-w-6xl` remains in app/. `no-secrets` passes.
+Files touched: app/globals.css, app/page.tsx, app/chrome.tsx, app/shop/page.tsx,
+app/wishlist/page.tsx, app/catalog/page.tsx, package.json.
+
+---
+
 # ELFIA OFFICIAL STORE — v1.44.2 (04-09-2026) — THE COUNTER THAT NEVER COUNTED
 
 ## What happened

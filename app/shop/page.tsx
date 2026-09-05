@@ -77,8 +77,8 @@ function ShopInner() {
   const counts = (key: string | null) => inGroup(products ?? [], key).length;
 
   return (
-    <main className="px-4 py-4 sm:px-6 sm:py-8">
-      <div className="mx-auto w-full max-w-6xl">
+    <main className="px-4 py-4 sm:px-6 sm:py-8 lg:px-10">
+      <div className="mx-auto w-full max-w-shop">
         {/* title row */}
         <div className="flex items-center gap-3">
           <Link href="/" aria-label="Back to home"
@@ -164,7 +164,7 @@ function ShopInner() {
         )}
 
         {/* the grid */}
-        <div className="mt-6 grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-3 lg:grid-cols-4" data-testid="product-grid">
+        <div className="mt-6 grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6" data-testid="product-grid">
           {products === null ? <CardSkeleton n={6} /> : shown.map((p) => <ProductCard key={p.id} p={p} />)}
         </div>
 
@@ -188,7 +188,7 @@ function ShopInner() {
 
 export default function ShopPage() {
   return (
-    <Suspense fallback={<PageSkeleton width="max-w-6xl" />}>
+    <Suspense fallback={<PageSkeleton width="max-w-shop" />}>
       <ShopInner />
     </Suspense>
   );

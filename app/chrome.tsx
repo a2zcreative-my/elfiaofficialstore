@@ -158,7 +158,7 @@ export function SiteHeader() {
             below that the phone chrome (app bar + bottom tabs) serves, which
             is what a tablet wants anyway. Gaps shrink at the low end so
             1024px itself is comfortable rather than exact. */}
-        <div className="mx-auto hidden h-16 w-full max-w-6xl items-center gap-4 px-6 lg:flex xl:gap-8">
+        <div className="mx-auto hidden h-16 w-full max-w-shop items-center gap-4 px-6 lg:flex lg:px-10 xl:gap-8">
           {/* v1.5.2 (CEO): "official store should be below of the ELFIA logo
               and centralized" — the lock-up is now stacked, on every desktop
               width, not an afterthought that only appeared from lg up. */}
@@ -420,8 +420,8 @@ export function SiteFooter() {
 
 function DesktopFooter({ year }: { year: number }) {
   return (
-    <footer className="mt-20 hidden border-t border-elfia-line bg-white px-6 py-12 lg:block">
-      <div className="mx-auto w-full max-w-6xl">
+    <footer className="mt-20 hidden border-t border-elfia-line bg-white px-6 py-12 lg:block lg:px-10">
+      <div className="mx-auto w-full max-w-shop">
         <div className="grid gap-8 sm:grid-cols-3">
           <div>
             {/* eslint-disable-next-line @next/next/no-img-element */}

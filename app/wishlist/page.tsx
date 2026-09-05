@@ -40,8 +40,8 @@ export default function WishlistPage() {
   const buyable = saved.filter((p) => !isSoldOut(p));
 
   return (
-    <main className="px-4 py-4 sm:px-6 sm:py-8">
-      <div className="mx-auto w-full max-w-6xl">
+    <main className="px-4 py-4 sm:px-6 sm:py-8 lg:px-10">
+      <div className="mx-auto w-full max-w-shop">
         <h1 className="text-xl font-bold text-elfia-ink sm:text-2xl">Wishlist</h1>
         {/* v1.44.0 — skeleton until the first fetch lands: the count is a
             small block, not a word, until the products are in. */}
@@ -53,7 +53,7 @@ export default function WishlistPage() {
             </p>}
 
         {products === null && (
-          <div className="mt-6 grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-3 lg:grid-cols-4"><CardSkeleton n={4} /></div>
+          <div className="mt-6 grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6"><CardSkeleton n={4} /></div>
         )}
 
         {products !== null && ids.length === 0 && (
@@ -66,7 +66,7 @@ export default function WishlistPage() {
 
         {saved.length > 0 && (
           <>
-            <div className="mt-6 grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-3 lg:grid-cols-4">
+            <div className="mt-6 grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
               {saved.map((p) => <ProductCard key={p.id} p={p} />)}
             </div>
 
