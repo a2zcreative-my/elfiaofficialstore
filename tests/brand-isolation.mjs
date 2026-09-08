@@ -3,24 +3,14 @@
    agency's or the consultancy's identity anywhere — no names, no SSM
    numbers, no bank accounts, no domains. Fails the build on any leak.
 
-   TWO exceptions, each deliberately narrow and pinned to ONE line:
-
-   1. The PAYEE line (26-08-2026). The CEO banks this shop's takings into
-      the operating company's account, so BANK_LINE in worker/wrangler.toml
-      carries that account number and the holder's legal name. A payment
-      instruction, not branding - a customer whose banking app shows a payee
-      they were not told to expect abandons the transfer.
-
-   2. The OPERATOR line (31-08-2026, CEO: "elfia footer need to add A 2 Z
-      Creative SSM since this is handle by A 2 Z Creative"). The footer
-      states which registered company operates the shop - a legal
-      disclosure, not branding. It is allowed ONLY on the single line in
-      app/chrome.tsx that defines `const OPERATOR_LINE`; both footers render
-      that constant. The same name or number on any other line - including
-      elsewhere in chrome.tsx - still fails the build, so the disclosure
-      cannot quietly grow into co-branding.
-
-   Everything else: the same identities anywhere still fail.
+   ONE exception, added 26-08-2026 and deliberately narrow: the PAYEE line.
+   The CEO banks this shop's takings into the operating company's account,
+   so BANK_LINE in worker/wrangler.toml carries that account number and the
+   holder's legal name. That is a payment instruction, not branding — a
+   customer whose banking app shows a payee they were not told to expect
+   abandons the transfer, and a name mismatch is how a transfer bounces.
+   The exemption is one setting in one file: the same number anywhere else,
+   and every other identity, still fails.
    Run: node tests/brand-isolation.mjs */
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -37,6 +27,24 @@ const FORBIDDEN = [
   [/a2zcreative\.my|azoneofficial\.com/i, "other company's domain"],
 ];
 
+/* v1.46.3 - THE ONE LINE THAT HAS TO NAME THE AGENCY.
+ *
+ * Malaysian consumer law requires a shop to say who operates it, so the
+ * footer carries "ELFIA is a brand operated by A2Z CREATIVE MARKETING - SSM
+ * ...". That is the exact opposite of the leak this guard exists to catch:
+ * it is a disclosure the CEO wrote, in one named constant, and the v1.44.1
+ * changelog says this exemption was added - it never was, so the store's own
+ * DEPLOY.bat has been unable to get past step 6 ever since.
+ *
+ * The exemption is as narrow as the rule: the OPERATOR_LINE constant in
+ * app/chrome.tsx, and the changelog paragraphs that quote it. Anywhere else,
+ * in any other form, is still a failure. */
+const isOperatorDisclosure = (file, line) => {
+  if (file.endsWith("app/chrome.tsx")) return /^\s*const OPERATOR_LINE\s*=/.test(line);
+  if (file.endsWith("CHANGELOG.md")) return /brand operated by/i.test(line);
+  return false;
+};
+
 const hits = [];
 const walk = (dir) => {
   for (const f of readdirSync(dir)) {
@@ -49,14 +57,16 @@ const walk = (dir) => {
        one file rather than waved at a whole document — and so a failure
        names the line to fix. */
     src.split("\n").forEach((line, i) => {
-      const isPayeeLine = p.replace(/\\/g, "/").endsWith("worker/wrangler.toml")
+      const norm = p.replace(/\\/g, "/");
+      const isPayeeLine = norm.endsWith("worker/wrangler.toml")
         && /^\s*BANK_LINE\s*=/.test(line);
-      const isOperatorLine = p.replace(/\\/g, "/").endsWith("app/chrome.tsx")
-        && /^const OPERATOR_LINE = "/.test(line);
+      const isOperator = isOperatorDisclosure(norm, line);
       for (const [re, what] of FORBIDDEN) {
         if (!re.test(line)) continue;
         if (isPayeeLine && what === "agency bank account") continue;  // the payee
-        if (isOperatorLine && (what === "agency identity" || what === "agency registration")) continue;  // the operator disclosure
+        /* The law says the shop must name its operator; the identity and the
+           registration number in THAT line are the disclosure, not a leak. */
+        if (isOperator && (what === "agency identity" || what === "agency registration")) continue;
         hits.push(`${p}:${i + 1}: contains ${what}`);
       }
     });

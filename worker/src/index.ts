@@ -24,6 +24,7 @@
  * its three secrets exist — see that file's header. v1.46.0: Bayarcash
  * replaced Billplz at the CEO's decision; the routes kept their reasoning.
  */
+import pkg from "../../package.json";
 import {
   bayarcashCallbackOk, bayarcashCheck, bayarcashConfigured, bayarcashCreateIntent,
   bayarcashFailureHint, bayarcashFetchIntent, bayarcashPaidFor, bayarcashReady,
@@ -87,7 +88,11 @@ export interface Env {
   CATALOG_FILENAME?: string;
 }
 
-const VERSION = "1.41.0";
+/* v1.46.3 - the version comes from package.json, which is the file the
+   release actually bumps. A hard-coded literal drifted five versions behind,
+   and /api/v1/health - the ONE thing PUSH.bat curls to confirm a deploy
+   landed - kept reporting 1.41.0 after every one of them. */
+const VERSION: string = pkg.version;
 const STATUSES = ["pending_payment", "payment_review", "paid", "shipped", "completed", "cancelled"] as const;
 type Status = (typeof STATUSES)[number];
 

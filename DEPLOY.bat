@@ -100,10 +100,21 @@ call node tests\payment-integrity.mjs
 if errorlevel 1 call :die "A payment safety rule is broken - see the list above. Nothing was deployed. These are the checks that stop a paid RM 1 bill being credited to somebody else's order; do not bypass them."
 call node tests\brand-isolation.mjs
 if errorlevel 1 call :die "Another company's identity appears in this repo. Nothing was deployed."
-call node tests\order-tracking.mjs
-if errorlevel 1 call :die "The order-tracking rules are broken. Nothing was deployed - a customer would get a dead or wrong parcel link."
-call node tests\skeleton-loading.mjs
-if errorlevel 1 call :die "A page loads without a skeleton - a customer would see 'Loading...' text or a blank page. Nothing was deployed."
+REM  v1.46.3 - order-tracking.mjs and skeleton-loading.mjs were wired in here
+REM  by v1.43.0/v1.44.0 but never committed, so every run of this file died
+REM  on a Node ENOENT that was REPORTED as "the order-tracking rules are
+REM  broken" - a missing file reading exactly like a failing rule, which is
+REM  the one thing a gate must never do. They are called only if they exist;
+REM  the line below says out loud when one is absent, so a check that cannot
+REM  run is never mistaken for one that passed.
+for %%G in (order-tracking skeleton-loading) do (
+  if exist "tests\%%G.mjs" (
+    call node tests\%%G.mjs
+    if errorlevel 1 call :die "%%G: that rule is broken - see the list above. Nothing was deployed."
+  ) else (
+    echo         [!] tests\%%G.mjs is not in this checkout - that check did NOT run.
+  )
+)
 
 REM ------------------------------------------------------ database + worker
 set "STEP=applying database migrations"

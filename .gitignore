@@ -35,3 +35,19 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+
+# --- v1.46.3: the Windows duplicates the 08-09 audit found on disk --------
+# worker/src/index-1.ts and index-2.ts are copies Windows made when it could
+# not overwrite the original. worker/tsconfig.json already excludes these
+# names from the compile gate; this keeps them out of the repository too.
+*-1.ts
+*-2.ts
+*-3.ts
+*-1.tsx
+*-2.tsx
+*-1.js
+*-2.js
+*-1.json
+*-2.json
+*-1.md
+*-2.md

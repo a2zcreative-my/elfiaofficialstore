@@ -1,22 +1,28 @@
 -- elfia-store 0018 - the flash-sale deadline (store v1.41.0).
 --
--- The CEO, 28-08-2026: "ELFIA should have a pill of Flash Sales to make the
--- customer attracted."
+-- The CEO, 28-08-2026: ELFIA should have a pill of Flash Sales to make the
+-- customer attracted.
 --
 -- flash_until is the moment the sale ends, mirrored from the portal by the
--- product sync. NULL means no flash sale, which is every existing row: this
+-- product sync. NULL = no flash sale, which is every existing row: this
 -- migration changes no price and starts no sale.
 --
 -- WHAT THIS COLUMN IS NOT: it is not what decides the price. The portal owns
 -- the price and stops applying the discount itself once the deadline passes,
--- so the next scheduled pull simply carries the old price back. This column
+-- so the next 5-minute pull simply carries the old price back. This column
 -- exists so the SHOPFRONT can show the pill and count down to the deadline
--- between pulls. A customer watching the last two minutes of a sale sees the
--- clock move, and the price behind it was never the store to decide.
+-- between pulls - a customer watching the last two minutes of a sale sees
+-- the clock move, and the price behind it was never the store to decide.
 --
 -- That division matters: with one clock, the portal one, the shop can never
 -- be selling at a price the office believes has expired.
 --
 -- Single ALTER, nothing else in this file.
+--
+-- v1.46.3: rewritten to plain ASCII with no apostrophes inside the comments.
+-- The em dashes and the two possessives here are the exact shapes that made
+-- the remote D1 parser answer 7500 (SQL code did not contain a statement) on
+-- 25-08, and the store guard that catches them was added afterwards - so
+-- this file has been failing its own gate since the day it was written.
 
 ALTER TABLE products ADD COLUMN flash_until TEXT;
