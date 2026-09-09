@@ -1,3 +1,51 @@
+# ELFIA OFFICIAL STORE — v1.47.0 (09-09-2026) — HER PRICE IS REMOVED, NOT PAINTED OVER
+
+The CEO, on the two Product Detail pages of the live-priced catalog: *"Still can
+see there is a color attached on the prices!! This one you hardcoded!!"*
+
+He was right, and the colour was not the fault — the SHAPE was. To show a live
+price we covered her printed one with a rectangle in her pill's colour. A
+rectangle has square corners and was sized from the width of the NEW text; her
+price sits in a rounded pill with a drop shadow. Measured against her own file:
+
+| | her pill | the rectangle we painted | overshoot |
+| --- | --- | --- | --- |
+| page 2 · Mahogany | x 22.5–174.5 | x 11.3–149.0 | **11.2 pt past her left cap** |
+| page 4 · Soft Pink | x 23.0–152.0 | x 22.8–160.4 | **8.4 pt past her right cap** |
+
+That overshoot is mauve on her cream. No colour constant could have hidden it.
+
+**So nothing is painted there any more.** On both detail pages her price is one
+plain text operator — `23.3566 0 0 23.3566 29.5381 197.0059 Tm (RM 36.00) Tj` —
+so it is deleted from the page's content stream and the live price is set at
+the matrix she used: her x, her baseline, her size. Her pill, its rounded ends
+and its shadow are untouched ink, because nothing touches them.
+
+It is anchored by the text matrix's x against the site's own x0 — the same
+number to four decimals, both taken from her file — never by the price text, so
+a repriced catalog cannot make it strike the wrong operator. If a future file
+hides its price somewhere this cannot find, the old cover still runs, but it is
+now **clamped inside her pill** and can never reach her cream again.
+
+Two things fall out of it:
+
+- **The old number is genuinely gone on those pages.** Covering ink left the
+  text object underneath, so select-all-and-copy in a PDF viewer still surfaced
+  the printed price. That known limit now applies to the grid pages only.
+- **The struck-out sale price was never meant to be there.** Her pill was drawn
+  for one number; two need a wider slab, which is how the overshoot got as far
+  as it did. The sale pair belongs on the 3×3 grid, where there is room, and
+  that is where it stays.
+
+The grid pages are untouched by this change: their nine prices share one text
+matrix and are placed by relative offsets, so there is no per-price anchor to
+match on — and cream on cream was never the complaint.
+
+Verified by rendering her actual 5.2 MB file at 144 dpi, before and after, on
+both pages.
+
+`worker/src/catalog-pdf.ts`. All 7 store gates pass.
+
 # ELFIA OFFICIAL STORE — v1.46.2 (05-09-2026) — A STRAY COPY STOPPED THE DEPLOY
 
 The store half of DEPLOY.bat failed at the compile gate:

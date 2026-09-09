@@ -34,12 +34,23 @@
  * match = the printed price stands — a wrong price in her catalog is worse
  * than an old one, so the matcher never guesses.
  *
- * KNOWN LIMIT, stated rather than hidden: covering ink does not delete the
- * text object underneath, so select-all-and-copy in a PDF viewer can still
- * surface the printed number. What every reader SEES is the live price; the
- * date stamp on each patched page says when it was true.
+ * v1.47.0 — THE TWO PRODUCT DETAIL PAGES NO LONGER COVER ANYTHING. Her price
+ * there is a single text operator, so it is removed from the page and the live
+ * one is set at her own matrix. See stripPrintedPrice below for why: a cover
+ * is a square rectangle sized from the new text, and her price sits in a
+ * rounded pill — the two shapes cannot agree, and the CEO could see the
+ * difference. The grid pages still use a cover, cream on cream.
+ *
+ * KNOWN LIMIT on the GRID pages only: covering ink does not delete the text
+ * object underneath, so select-all-and-copy in a PDF viewer can still surface
+ * a printed grid number. What every reader SEES is the live price; the date
+ * stamp on each patched page says when it was true. On the detail pages the
+ * old number is now genuinely gone.
  */
-import { PDFArray, PDFDocument, PDFFont, PDFName, PDFPage, PDFString, StandardFonts, rgb } from "pdf-lib";
+import {
+  PDFArray, PDFDocument, PDFFont, PDFName, PDFPage, PDFRawStream, PDFString, StandardFonts,
+  decodePDFRawStream, rgb,
+} from "pdf-lib";
 
 export interface CatalogProduct {
   id: number;
@@ -58,11 +69,16 @@ interface PriceSite {
   label: string;
   x0: number; y0: number; x1: number; y1: number;
   style: "grid" | "pill";
+  /** v1.47.0 - the pill she drew, measured off a 144dpi render of her own
+      page. Only the fallback cover uses it, and only to make sure a
+      rectangle can never reach past her rounded ends again. */
+  pill?: { x0: number; y0: number; x1: number; y1: number };
 }
 
 export const PRICE_SITES: PriceSite[] = [
   /* page 2 — Product Detail: Bawal lumi Mahogany, the rose pill */
-  { page: 1, label: "Bawal lumi Mahogany", x0: 29.5, y0: 621.4, x1: 130.8, y1: 652.5, style: "pill" },
+  { page: 1, label: "Bawal lumi Mahogany", x0: 29.5, y0: 621.4, x1: 130.8, y1: 652.5, style: "pill",
+    pill: { x0: 22.5, y0: 622.8, x1: 174.5, y1: 660.1 } },
   /* page 3 — the bawal grid */
   { page: 2, label: "Bawal lumi Mahogany", x0: 286.9, y0: 238.4, x1: 323.2, y1: 246.5, style: "grid" },
   { page: 2, label: "Bawal lumi Sky", x0: 94.0, y0: 430.2, x1: 130.3, y1: 438.3, style: "grid" },
@@ -75,7 +91,8 @@ export const PRICE_SITES: PriceSite[] = [
   { page: 2, label: "Bawal lumi Aurora", x0: 288.0, y0: 824.6, x1: 324.3, y1: 832.7, style: "grid" },
   { page: 2, label: "Bawal lumi Midnight", x0: 485.7, y0: 824.5, x1: 522.0, y1: 832.6, style: "grid" },
   /* page 4 — Product Detail: Shawl Chiffon Soft Pink, the rose pill */
-  { page: 3, label: "Shawl Chiffon Soft Pink", x0: 41.0, y0: 628.7, x1: 142.2, y1: 659.8, style: "pill" },
+  { page: 3, label: "Shawl Chiffon Soft Pink", x0: 41.0, y0: 628.7, x1: 142.2, y1: 659.8, style: "pill",
+    pill: { x0: 23.0, y0: 626.0, x1: 152.0, y1: 662.3 } },
   /* page 5 — the shawl grid */
   { page: 4, label: "Shawl Chiffon Soft Pink", x0: 83.1, y0: 242.1, x1: 118.3, y1: 250.2, style: "grid" },
   { page: 4, label: "Shawl Chiffon Emerald Green", x0: 291.6, y0: 242.1, x1: 326.8, y1: 250.2, style: "grid" },
@@ -100,6 +117,73 @@ const WHITE = rgb(1, 1, 1);
 const MUTED = rgb(150 / 255, 128 / 255, 134 / 255);
 
 const rm = (cents: number) => `RM ${(cents / 100).toFixed(2)}`;
+
+/**
+ * TAKE HER PRINTED PRICE OUT OF THE PAGE, RATHER THAN PAINT OVER IT (v1.47.0).
+ *
+ * The CEO, 08-09-2026, on the two Product Detail pages: *"Still can see there
+ * is a color attached on the prices!! This one you hardcoded!!"* He was right,
+ * and the fault was not the colour but the SHAPE. Covering the old ink meant
+ * drawing a square-cornered rectangle sized from the new TEXT, over a pill she
+ * drew with rounded caps and a drop shadow. Measured against her own file, the
+ * cover landed 11.2pt past the left end of her pill on page 2 and 8.4pt past
+ * the right end on page 4 - mauve painted onto her cream, which is exactly the
+ * slab he was looking at. No colour constant could have saved that.
+ *
+ * On both detail pages her price is one plain text-showing operator:
+ *
+ *   23.3566 0 0 23.3566 29.5381 197.0059 Tm (RM 36.00) Tj
+ *
+ * So it is DELETED from the content stream, and the live price is set at the
+ * matrix she used - her x, her baseline, her size. Nothing is covered, so
+ * there is nothing to match: her pill, its rounded ends and its shadow are
+ * untouched ink. It also closes the old known limit, that select-all-and-copy
+ * in a PDF viewer still surfaced the printed number.
+ *
+ * Located by the Tm's x against the site's own x0 (they are the same number
+ * to four decimals - both come from her file), never by the price text, so a
+ * repriced catalog cannot make it strike the wrong operator. If the operator
+ * is not found - a new file, a different export - this returns null and the
+ * caller falls back to the cover, which is now clamped inside her pill.
+ *
+ * The grid pages are not touched here: their nine prices share one Tm and are
+ * placed by relative Td, so there is no per-price anchor to match on, and
+ * cream on cream was never the complaint.
+ */
+function stripPrintedPrice(
+  doc: PDFDocument, page: PDFPage, x0: number,
+): { size: number; x: number; y: number } | null {
+  const contents = page.node.Contents();
+  if (!contents) return null;
+  const parts: Uint8Array[] = [];
+  try {
+    if (contents instanceof PDFArray) {
+      for (let i = 0; i < contents.size(); i += 1) {
+        parts.push(decodePDFRawStream(contents.lookup(i, PDFRawStream)).decode());
+      }
+    } else {
+      parts.push(decodePDFRawStream(contents as PDFRawStream).decode());
+    }
+  } catch { return null; }
+
+  /* latin1 keeps every byte a byte: a content stream is binary, and a
+     round trip through any other encoding would corrupt her page. */
+  let src = parts.map((p) => Buffer.from(p).toString("latin1")).join("\n");
+  let hit: { size: number; x: number; y: number } | null = null;
+  src = src.replace(
+    /(?:[-\d.]+\s+){3}([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+Tm\s*\((RM[^)]*)\)\s*Tj/g,
+    (whole, size: string, x: string, y: string) => {
+      if (hit || Math.abs(Number(x) - x0) > 0.6) return whole;
+      hit = { size: Number(size), x: Number(x), y: Number(y) };
+      /* the Tm stays: the text matrix is graphics state the rest of her page
+         may lean on. Only the show operator goes. */
+      return whole.slice(0, whole.lastIndexOf("("));
+    },
+  );
+  if (!hit) return null;
+  page.node.set(PDFName.of("Contents"), doc.context.register(doc.context.flateStream(Buffer.from(src, "latin1"))));
+  return hit;
+}
 
 /* ---- matching a printed label to a live product ----
    Words that appear in nearly every label or product name carry no signal;
@@ -261,17 +345,44 @@ export async function patchCatalogPdf(
       totalW = maxW;
     }
 
+    /* v1.47.0 - ON THE PILL PAGES, HER PRICE IS REMOVED, NOT COVERED.
+       Nothing is painted, so nothing can miss her pill; the live price takes
+       her own matrix, which is why it lands on her baseline at her size
+       without a tuned offset. Only if the operator cannot be found does the
+       cover below run - and then it is clamped inside her pill. */
+    if (site.style === "pill") {
+      const her = stripPrintedPrice(doc, page, site.x0);
+      if (her) {
+        page.drawText(price, { x: her.x, y: her.y, size: her.size, font: sans, color: WHITE });
+        patched.push(site.label);
+        touchedPages.add(site.page);
+        continue;
+      }
+    }
+
     /* Cover the printed price with the surrounding colour, padded past the
-       ink and wide enough for the new text. */
-    const coverW = Math.max(origW, totalW) + 8;
-    const coverH = (site.y1 - site.y0) + 6;
-    page.drawRectangle({
-      x: cx - coverW / 2,
-      y: H - site.y1 - 3,
-      width: coverW,
-      height: coverH,
-      color: site.style === "grid" ? CREAM : site.page === 1 ? PILL_P2 : PILL_P4,
-    });
+       ink and wide enough for the new text - and, on a pill, never past the
+       pill itself. A rectangle that reaches her cream IS the artefact the
+       CEO saw; clamping is what makes the fallback safe to fall back to. */
+    let coverW = Math.max(origW, totalW) + 8;
+    let coverH = (site.y1 - site.y0) + 6;
+    let coverX = cx - coverW / 2;
+    let coverY = H - site.y1 - 3;
+    if (site.pill) {
+      const inset = 1;
+      const left = Math.max(coverX, site.pill.x0 + inset);
+      const right = Math.min(coverX + coverW, site.pill.x1 - inset);
+      const bottom = Math.max(coverY, H - site.pill.y1 + inset);
+      const top = Math.min(coverY + coverH, H - site.pill.y0 - inset);
+      coverX = left; coverW = Math.max(0, right - left);
+      coverY = bottom; coverH = Math.max(0, top - bottom);
+    }
+    if (coverW > 0 && coverH > 0) {
+      page.drawRectangle({
+        x: coverX, y: coverY, width: coverW, height: coverH,
+        color: site.style === "grid" ? CREAM : site.page === 1 ? PILL_P2 : PILL_P4,
+      });
+    }
 
     /* pdftotext's line box bottom sits a whisker under the baseline; the
        offset was tuned against a render of her own page until the new
