@@ -12,13 +12,35 @@
  *
  *   node tests/in-app-browser.mjs
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import path from "node:path";
+import { tmpdir } from "node:os";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { execSync } from "node:child_process";
 
-const root = new URL("..", import.meta.url).pathname;
-execSync(`npx esbuild ${path.join(root, "lib/in-app-browser.ts")} --format=esm --outfile=/tmp/iab.mjs`, { stdio: "pipe" });
-const { detectInAppBrowser, escapeHatch } = await import("/tmp/iab.mjs");
+/* v1.48.3 - THIS GUARD HAD NEVER RUN ON WINDOWS. PUSH.bat only began running
+   the store's guards on 09-09 (v1.48.0); before that, this file had only ever
+   run in a Linux build container, where the three shortcuts below happen to
+   work. On the CEO's PC every one of them broke, in the same ways the portal's
+   guards broke in v1.139.1-v1.139.3:
+
+     1. `new URL("..", import.meta.url).pathname` is "/C:/Users/..." - a URL
+        path with a leading slash, not a file path - so path.join produced
+        "\C:\Users\..." and esbuild could not resolve it. fileURLToPath.
+     2. `--outfile=/tmp/iab.mjs` names a POSIX temp dir. os.tmpdir().
+     3. `await import("/tmp/iab.mjs")` hands Node a bare path where it needs a
+        file:// URL on Windows (ERR_UNSUPPORTED_ESM_URL_SCHEME). pathToFileURL.
+
+   Paths given to esbuild on a shell command line are written with forward
+   slashes and quoted, so a folder with a space in its name cannot split the
+   argument. The bundle is per-process and removed afterwards, so two runs
+   cannot tread on each other's output. */
+const root = fileURLToPath(new URL("..", import.meta.url));
+const forShell = (p) => `"${p.replace(/\\/g, "/")}"`;
+const bundle = path.join(tmpdir(), `elfia-iab-${process.pid}.mjs`);
+execSync(`npx esbuild ${forShell(path.join(root, "lib/in-app-browser.ts"))} --format=esm --outfile=${forShell(bundle)}`, { stdio: "pipe" });
+const { detectInAppBrowser, escapeHatch } = await import(pathToFileURL(bundle).href);
+try { rmSync(bundle); } catch { /* a leftover temp file is not a failed guard */ }
 
 let pass = 0;
 const fails = [];
@@ -70,4 +92,7 @@ ok("bank transfer is still offered in the warning", /bank transfer below/i.test(
 console.log(fails.length === 0
   ? `PASS — in-app browsers are caught, real browsers are left alone (${pass} checks)`
   : `\n${fails.map((f) => `  ✗ ${f}`).join("\n")}\n\n${fails.length} check(s) failed.`);
-process.exit(fails.length === 0 ? 0 : 1);
+/* exitCode, not process.exit(): this guard `await import()`s a bundle, and a
+   forced exit while the loader is still tearing down aborts Node on Windows
+   (the portal's v1.148.1). Let Node drain and exit with the same status. */
+process.exitCode = fails.length === 0 ? 0 : 1;

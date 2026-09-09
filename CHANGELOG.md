@@ -1,3 +1,166 @@
+## v1.48.3 (09-09-2026) — a guard that had never run on Windows
+
+The cleanup in v1.48.2 worked: `brand-isolation` passed for the first time in
+five days. The next guard in line, `in-app-browser`, then failed on its first
+ever run on the CEO's PC:
+
+    npx esbuild \C:\Users\Alif\...\lib\in-app-browser.ts --outfile=/tmp/iab.mjs
+    X [ERROR] Could not resolve "\\C:\\Users\\..."
+
+PUSH.bat only began running the store's guards on 09-09 (v1.48.0). Before that
+this file had only ever run in a Linux build container, where its three
+shortcuts happen to work - the same three the portal's guards were fixed for in
+v1.139.1 to v1.139.3:
+
+1. `new URL(..).pathname` gives `/C:/Users/...` on Windows, a URL path, which
+   `path.join` turns into `\C:\Users\...`. Now `fileURLToPath`.
+2. `--outfile=/tmp/iab.mjs` names a POSIX temp directory. Now `os.tmpdir()`,
+   per-process, removed afterwards.
+3. `await import("/tmp/iab.mjs")` hands Node a bare path where Windows needs a
+   `file://` URL. Now `pathToFileURL`.
+
+Paths on the esbuild command line are quoted with forward slashes, so a folder
+with a space in its name cannot split the argument. The verdict is set with
+`process.exitCode` rather than `process.exit()`, for the loader-teardown abort
+the portal hit in v1.148.1.
+
+`tests/in-app-browser.mjs`, `package.json`.
+
+## v1.48.2 (09-09-2026) — the cleanup runs inside the deploy, not beside it
+
+Third run, same file. `CLEAN-STRAYS.bat` was the right operation in the wrong
+place: a fix that lives in a file nobody runs is not a fix.
+
+`PUSH.bat` (in the portal folder) now does it as step **[1b/6]** of the store
+section, every run: anything git tracks that `.gitignore` says it should not is
+untracked (`git ls-files --cached --ignored --exclude-standard`, then
+`git rm --cached`), the known Windows copy collisions are deleted from disk,
+and the commit step at the end records it. On a clean repository it touches
+nothing. The portal section got the same step as **[3b/7]**.
+
+The guard warning now says so, instead of pointing at a file to run by hand.
+
+`tests/lib/tracked.mjs`, `package.json`; `PUSH.bat` in the portal folder.
+
+## v1.48.1 (09-09-2026) — THE STRAYS WERE NOT IGNORED. THEY WERE TRACKED.
+
+v1.48.0 taught the guards to scan what git would publish, and the very next run
+proved the point by failing on something real:
+
+    FAIL
+     - CHANGELOG-1.md:3063: contains agency identity
+     - CHANGELOG-1.md:3063: contains agency registration
+     - CHANGELOG-1.md:3063: contains agency bank account
+     ...105 lines
+
+`CHANGELOG-1.md` is 895 KB of the A2Z **portal's** changelog sitting in the
+shop's repository, carrying the agency's identity, registration number, bank
+account and internal domains. Keeping the two brands apart is the entire job of
+`brand-isolation`, and it did it. **The guard was not weakened.**
+
+**Why `.gitignore` never stopped any of it.** The rules were all there — `*-1.md`,
+`*-2.ts`, `out/`, the logs — and every one of those files was tracked anyway,
+because they were committed *before* the rules were written. **A `.gitignore`
+rule has no effect on a file git already tracks.** That is also why
+`git check-ignore` reported them as not-ignored — which is correct, and reads
+exactly like a clean bill of health.
+
+Reading the repository's own git index confirms it. Tracked today:
+
+    CHANGELOG-1.md   package-1.json   worker/src/index-1.ts   worker/src/index-2.ts
+    out/ (44 files, including out/lookbook/elfia-catalog.pdf)
+    deploy-log.txt   go-live-log.txt   push-log.txt
+
+## The fix
+
+**`CLEAN-STRAYS.bat`** — a double-click that stops git tracking each stray,
+deletes the copies from disk, and makes one ordinary commit. No history
+rewriting, no push. Verified end to end on a repository built to reproduce the
+exact situation: strays committed first, ignore rules added afterwards. Every
+stray untracked, real files untouched, and a rebuilt `out/` correctly ignored
+from then on.
+
+**`warnTrackedButIgnored()`** in `tests/lib/tracked.mjs` — one command that
+names this class exactly (`git ls-files --cached --ignored --exclude-standard`),
+printed on every `no-secrets` run. It would have caught this four days ago. It
+is a **warning, not a failure**: whether a tracked file should be removed is a
+decision with history attached, not something a build gate should force at 2am.
+
+**What this does not fix.** Those files remain in the repository's past commits.
+The cleanup stops them going forward; it does not erase what is already there.
+If that repository is public or shared outside the company, the bank account and
+registration number in `CHANGELOG-1.md` should be treated as exposed.
+
+`CLEAN-STRAYS.bat`, `tests/lib/tracked.mjs`, `tests/no-secrets.mjs`.
+
+# ELFIA OFFICIAL STORE — v1.48.0 (09-09-2026) — A GUARD THAT STOPS A DEPLOY OVER A FILE THAT CANNOT SHIP
+
+The 09-09 deploy reached the store for the first time in days and stopped here:
+
+    FAIL - something that looks like a credential is committed:
+     - worker/src/index-2.ts:162 - a secret assigned a literal value: pbkdf2$...
+
+Neither half of that sentence was true.
+
+**It is not committed, and it cannot be.** `index-2.ts` was a Windows copy
+collision: 274 KB of the A2Z *portal's* worker entry point, written into this
+folder while the desktop bridge was reconnecting, importing `./staff`,
+`./watchers` and `./enquiries` — none of which exist in this project.
+`.gitignore` has banned `*-2.ts` since v1.46.3 and `worker/tsconfig.json` has
+excluded it from the compile gate since v1.46.2.
+
+**It is not a credential.** The line defines a constant named
+`DUMMY_PASSWORD_HASH`: a stored-format string whose salt and digest are both
+runs of literal zero characters, so that signing in as an account that does not
+exist burns the same CPU time as a real one and cannot be told apart with a
+stopwatch. The opposite of a secret.
+
+(Deliberately described rather than quoted here. Reproducing that line in this
+file would trip the very guard this release is about — `CHANGELOG.md` is
+tracked, and the gate cannot tell a documentation quote from real code. Adding
+the file to the allow-list instead would have blinded the guard to an entire
+tracked file for ever, which is a far worse trade than a paragraph of prose.)
+
+**This is the second time the same stray has stopped a deploy.** `index-1.ts`
+carries a note saying so, dated 05-09-2026, in the same words. That fix taught
+`tsconfig.json` to skip duplicate names — but the guards were never told. They
+walked the whole filesystem while their own headers said *"in any TRACKED
+file"*.
+
+## The fix
+
+`tests/lib/tracked.mjs` asks git, once per run, which of the files a guard is
+about to read it would actually publish. `no-secrets.mjs` and
+`brand-isolation.mjs` — the two that walk the tree — now scan that set.
+
+It does not check less. It checks the right things:
+
+- A file git ignores **cannot reach GitHub**, which is the entire thing these
+  guards protect. A secret in a tracked file still fails, exactly as before.
+- Skipped files are **named, not silently dropped**. The run prints what it
+  skipped and why, so a 274 KB stray in `src/` stays visible without blocking a
+  deploy. A guard that goes red on a file that cannot ship is a guard that gets
+  ignored — and the next red one, the real one, gets waved through with it.
+- **Fail-safe.** No git, not a repository, or any error at all: nothing is
+  treated as ignored and every file is scanned, exactly as before. The only way
+  the scan narrows is positive proof from git itself.
+
+Verified four ways: the stray skipped and named (passes); a real bridge key
+added to a tracked file (still fails); the same key in an ignored file (passes,
+noted); and with `git` replaced by a stub that exits 127 (scans everything and
+fails on the stray).
+
+`worker/src/index-2.ts` is emptied to `export {};` with a note, the way
+`index-1.ts` already was. **Both should be deleted by hand** — nothing here can
+delete a file on the CEO's machine.
+
+Also in this release: `PUSH.bat` (in the portal folder) now runs all seven of
+this project's guards instead of only the compile gate, and a portal guard
+failure no longer ends the script before the store section is reached.
+
+`tests/lib/tracked.mjs`, `tests/no-secrets.mjs`, `tests/brand-isolation.mjs`,
+`worker/src/index-2.ts`, `package.json`.
+
 # ELFIA OFFICIAL STORE — v1.47.0 (09-09-2026) — HER PRICE IS REMOVED, NOT PAINTED OVER
 
 The CEO, on the two Product Detail pages of the live-priced catalog: *"Still can

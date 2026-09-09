@@ -20,6 +20,12 @@
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+/* v1.48.0 - scan what git would actually publish. See tests/lib/tracked.mjs
+   for the 09-09 deploy this comes from: a 274 KB Windows copy of ANOTHER
+   project's worker, ignored by .gitignore since v1.46.3 and excluded from
+   the compile gate since v1.46.2, stopped this guard on a dummy password
+   hash made entirely of zeroes. */
+import { splitIgnored, reportIgnored, warnTrackedButIgnored } from "./lib/tracked.mjs";
 
 const SKIP_DIRS = new Set(["node_modules", ".next", "out", ".git", ".wrangler", "public"]);
 const TEXT = /\.(ts|tsx|js|mjs|cjs|css|sql|toml|json|md|bat|html|txt|yml|yaml)$/;
@@ -59,7 +65,9 @@ const ALLOWED_FILES = new Set(["PORTAL-BRIDGE-SPEC.md", "tests/no-secrets.mjs"])
  * Every path compared or reported below goes through here. A guard that only
  * works on the machine it was written on is not a guard.
  */
-const norm = (p) => p.replace(/\\/g, "/").replace(/^\.\//, "");
+/* v1.48.0 - norm now lives in tests/lib/tracked.mjs, so the guards and the
+   git query cannot disagree about how a path is spelled. */
+import { norm } from "./lib/tracked.mjs";
 
 const RULES = [
   {
@@ -108,6 +116,11 @@ const RULES = [
 const isIdentifier = (v) => /^[A-Z][A-Z0-9_]*$/.test(v);
 
 const hits = [];
+/* v1.48.0 - collect first, then ask git ONCE which of these it would
+   publish. Scanning is unchanged; only the file list is narrowed, and only
+   by positive proof from git. If git cannot be consulted, nothing is
+   narrowed and every file is scanned as before. */
+const candidates = [];
 const walk = (dir) => {
   for (const entry of readdirSync(dir)) {
     if (SKIP_DIRS.has(entry)) continue;
@@ -116,20 +129,29 @@ const walk = (dir) => {
     if (!TEXT.test(entry)) continue;
     const rel = norm(p);
     if (ALLOWED_FILES.has(rel)) continue;
-    const src = readFileSync(p, "utf8");
-    for (const rule of RULES) {
-      rule.re.lastIndex = 0;
-      let m;
-      while ((m = rule.re.exec(src)) !== null) {
-        const value = rule.value(m);
-        if (ALLOWED.has(value) || isIdentifier(value)) continue;
-        const line = src.slice(0, m.index).split("\n").length;
-        hits.push(`${rel}:${line} — ${rule.name}: ${value.slice(0, 12)}…`);
-      }
-    }
+    candidates.push(rel);
   }
 };
 walk(".");
+
+const { scan, ignored, gitAvailable } = splitIgnored(candidates);
+reportIgnored(ignored, gitAvailable);
+/* v1.48.0 - and the class that caused all of this: tracked BUT ignored. */
+warnTrackedButIgnored();
+
+for (const rel of scan) {
+  const src = readFileSync(rel, "utf8");
+  for (const rule of RULES) {
+    rule.re.lastIndex = 0;
+    let m;
+    while ((m = rule.re.exec(src)) !== null) {
+      const value = rule.value(m);
+      if (ALLOWED.has(value) || isIdentifier(value)) continue;
+      const line = src.slice(0, m.index).split("\n").length;
+      hits.push(`${rel}:${line} — ${rule.name}: ${value.slice(0, 12)}…`);
+    }
+  }
+}
 
 /* wrangler.toml [vars] is committed. A secret must never live there. */
 try {

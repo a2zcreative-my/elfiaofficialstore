@@ -13,6 +13,10 @@
    and every other identity, still fails.
    Run: node tests/brand-isolation.mjs */
 import { readdirSync, readFileSync, statSync } from "node:fs";
+/* v1.48.0 - this guard walks the tree too, so it would have tripped on the
+   same Windows copy collision that stopped the 09-09 deploy in no-secrets.
+   Scan what git would actually publish; see tests/lib/tracked.mjs. */
+import { splitIgnored, reportIgnored, norm as normPath } from "./lib/tracked.mjs";
 import { join } from "node:path";
 
 const SKIP = new Set(["node_modules", ".next", "out", ".git", ".wrangler", "tests"]);
@@ -46,12 +50,18 @@ const isOperatorDisclosure = (file, line) => {
 };
 
 const hits = [];
+const candidates = [];
 const walk = (dir) => {
   for (const f of readdirSync(dir)) {
     if (SKIP.has(f)) continue;
     const p = join(dir, f);
     if (statSync(p).isDirectory()) { walk(p); continue; }
     if (!EXT.test(f)) continue;
+    candidates.push(normPath(p));
+  }
+};
+const scanOne = (p) => {
+  {
     const src = readFileSync(p, "utf8");
     /* Line by line, so the payee exemption can be pinned to one setting in
        one file rather than waved at a whole document — and so a failure
@@ -73,6 +83,11 @@ const walk = (dir) => {
   }
 };
 walk(".");
+{
+  const { scan, ignored, gitAvailable } = splitIgnored(candidates);
+  reportIgnored(ignored, gitAvailable);
+  for (const p of scan) scanOne(p);
+}
 
 if (hits.length) { console.log("FAIL\n - " + hits.join("\n - ")); process.exit(1); }
 console.log("PASS — the ELFIA store carries no other company's identity");
